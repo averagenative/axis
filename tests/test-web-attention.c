@@ -207,6 +207,58 @@ fake_page(
 	return axis_web_page_respond(request, "Test things", HTMX_NODE(content));
 }
 
+/* The statements sent while page views are made: a page view must send none
+ * for the board.  The shell's own periodic work (its sessions' flush, the
+ * header's count of jobs) runs on timers whatever is viewed, and one of them
+ * may fall inside the views; it is named in the test's output and allowed,
+ * up to STATEMENTS_SLACK.  A statement that names the board never is. */
+#define STATEMENTS_SLACK 2
+
+static GMutex watch_lock;
+static GPtrArray *watch_seen;
+
+static void
+on_watched_statement(
+	const gchar        *sql,
+	guint               n_params,
+	const gchar *const *params,
+	gpointer            data
+){
+	g_mutex_lock(&watch_lock);
+	if (watch_seen != NULL)
+		g_ptr_array_add(watch_seen, g_strdup(sql));
+	g_mutex_unlock(&watch_lock);
+}
+
+static void
+watch_statements(AxisDbPool *pool)
+{
+	g_mutex_lock(&watch_lock);
+	g_clear_pointer(&watch_seen, g_ptr_array_unref);
+	watch_seen = g_ptr_array_new_with_free_func(g_free);
+	g_mutex_unlock(&watch_lock);
+	axis_db_pool_set_statement_observer(pool, on_watched_statement, NULL);
+}
+
+static void
+assert_no_statement_for_the_board(AxisDbPool *pool)
+{
+	guint i;
+
+	axis_db_pool_set_statement_observer(pool, NULL, NULL);
+	g_mutex_lock(&watch_lock);
+	for (i = 0; i < watch_seen->len; i++) {
+		const gchar *sql = g_ptr_array_index(watch_seen, i);
+
+		g_test_message("a statement sent during the page views: %.200s", sql);
+		if (strstr(sql, "attention") != NULL)
+			g_error("a page view sent a statement for the board: %.300s", sql);
+	}
+	g_assert_cmpuint(watch_seen->len, <=, STATEMENTS_SLACK);
+	g_clear_pointer(&watch_seen, g_ptr_array_unref);
+	g_mutex_unlock(&watch_lock);
+}
+
 static void
 fake_routes(
 	AxisWeb  *web,
@@ -1699,7 +1751,6 @@ static void
 test_page_views_cost_nothing(Fixture *fx, gconstpointer data)
 {
 	AxisTestReply reply;
-	guint statements;
 	guint readings;
 	gint calls;
 	guint i;
@@ -1717,7 +1768,7 @@ test_page_views_cost_nothing(Fixture *fx, gconstpointer data)
 	while (g_main_context_iteration(NULL, FALSE))
 		;
 
-	statements = axis_db_pool_get_statements_sent(fx->t->pool);
+	watch_statements(fx->t->pool);
 	readings = axis_web_attention_get_readings(fx->web);
 	calls = g_atomic_int_get(&fx->fake.calls);
 	for (i = 0; i < 100; i++) {
@@ -1736,7 +1787,7 @@ test_page_views_cost_nothing(Fixture *fx, gconstpointer data)
 		g_assert_cmpuint(reply.status, ==, 200);
 		axis_test_reply_clear(&reply);
 	}
-	g_assert_cmpuint(axis_db_pool_get_statements_sent(fx->t->pool), ==, statements);
+	assert_no_statement_for_the_board(fx->t->pool);
 	g_assert_cmpuint(axis_web_attention_get_readings(fx->web), ==, readings);
 	g_assert_cmpint(g_atomic_int_get(&fx->fake.calls), ==, calls);
 }
@@ -1985,14 +2036,13 @@ static void
 test_not_started(Fixture *fx, gconstpointer data)
 {
 	AxisTestReply reply;
-	guint statements;
 
 	set_fake(fx, 3, AXIS_ATTENTION_BROKEN, 10);
 	axis_web_attention_changed(fx->web);
 	axis_web_attention_job_ended(fx->web, "import.run");
 	while (g_main_context_iteration(NULL, FALSE))
 		;
-	statements = axis_db_pool_get_statements_sent(fx->t->pool);
+	watch_statements(fx->t->pool);
 	reply = get_as(fx, fx->admin, "/test-things");
 	assert_contains(reply.body, "aria-label=\"Nothing needs attention\"");
 	assert_lacks(reply.body, "topic=attention");
@@ -2004,7 +2054,7 @@ test_not_started(Fixture *fx, gconstpointer data)
 	axis_test_reply_clear(&reply);
 	g_assert_cmpuint(axis_web_attention_get_readings(fx->web), ==, 0);
 	g_assert_cmpint(g_atomic_int_get(&fx->fake.calls), ==, 0);
-	g_assert_cmpuint(axis_db_pool_get_statements_sent(fx->t->pool), ==, statements);
+	assert_no_statement_for_the_board(fx->t->pool);
 }
 
 /* ── The review's findings ──────────────────────────────────────── */

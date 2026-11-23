@@ -566,7 +566,8 @@ address_space_limit_is_kept(void)
 	if (pid == 0) {
 		struct rlimit limit = { 1073741824, 1073741824 };
 		char text[4096];
-		const char *line;
+		char *line;
+		char *end;
 		ssize_t n;
 		int fd;
 
@@ -582,8 +583,9 @@ address_space_limit_is_kept(void)
 		line = strstr(text, "Max address space");
 		if (line == NULL)
 			_exit(0);
-		if (strchr(line, '\n') != NULL)
-			*strchr(line, '\n') = '\0';
+		end = strchr(line, '\n');
+		if (end != NULL)
+			*end = '\0';
 		_exit(strstr(line, "1073741824") == NULL ? 1 : 0);
 	}
 	g_assert_cmpint(waitpid(pid, &status, 0), ==, pid);
