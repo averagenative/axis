@@ -1,0 +1,14 @@
+{"queue": {"version": 4, "noofslots": "many", "slots": [
+  {"status": "Downloading", "mb": ["4000"], "mbleft": {"x": 1}, "filename": "Garbage.Sizes.1", "cat": "axis", "timeleft": 123, "percentage": "abc", "nzo_id": "SABnzbd_nzo_ws0001"},
+  {"status": "Downloading", "mb": "1000", "mbleft": "250", "filename": "Number.Id", "cat": "axis", "percentage": "75", "nzo_id": 5},
+  "not an object",
+  null,
+  {"status": "Downloading", "mb": "1000", "mbleft": "250", "cat": "axis", "percentage": "75", "nzo_id": "SABnzbd_nzo_ws0004"},
+  {"status": "Downloading", "mb": "-5", "mbleft": "1e999", "filename": "Out.Of.Range", "cat": "axis", "timeleft": "0:00:10", "percentage": "150", "nzo_id": "SABnzbd_nzo_ws0005"},
+  {"status": ["Downloading"], "mb": "100", "mbleft": "40", "filename": "Status.As.List", "cat": "axis", "nzo_id": "SABnzbd_nzo_ws0006"},
+  {"status": "Downloading", "mb": "100", "mbleft": "40", "filename": "No.Category", "nzo_id": "SABnzbd_nzo_ws0007"},
+  {"status": "Downloading", "mb": "100", "mbleft": "40", "filename": "Bad.Id.With.Space", "cat": "axis", "nzo_id": "SABnzbd nzo 8"},
+  {"status": "Downloading", "mb": "2000", "mbleft": "5000", "filename": "Left.More.Than.All", "cat": "axis", "timeleft": "1:02", "percentage": "10", "nzo_id": "SABnzbd_nzo_ws0009"},
+  {"status": "Downloading", "mb": "2000", "filename": "Percent.Only", "cat": "axis", "timeleft": "2:03:04:05", "percentage": "25", "nzo_id": "SABnzbd_nzo_ws0010"},
+  {"status": "Downloading", "mb": "100", "mbleft": "40", "filename": "Same.Id.Twice", "cat": "axis", "nzo_id": "SABnzbd_nzo_ws0010"}
+]}}

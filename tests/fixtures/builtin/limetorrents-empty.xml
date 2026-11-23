@@ -1,0 +1,10 @@
+<?xml version='1.0' encoding='UTF-8' ?>
+<rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/">
+	<channel>
+		<title>LimeTorrents - Search RSS for nothing made up</title>
+		<link>https://www.limetorrents.fun/</link>
+		<description>The quality torrents website</description>
+		<language>en-us</language>
+		<generator>LimeTorrents RSS Generator 1.1</generator>
+	</channel>
+</rss>

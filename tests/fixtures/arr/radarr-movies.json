@@ -1,0 +1,160 @@
+[
+  {
+    "title": "Paper Lanterns",
+    "originalTitle": "Paper Lanterns",
+    "sortTitle": "paper lanterns",
+    "sizeOnDisk": 1500000000,
+    "status": "released",
+    "overview": "A lamplighter keeps a harbour town awake through the longest night of its year.",
+    "images": [
+      { "coverType": "poster", "url": "/MediaCover/1/poster.jpg", "remoteUrl": "https://images.example/p1.jpg" }
+    ],
+    "year": 2011,
+    "hasFile": true,
+    "path": "/movies/Paper Lanterns (2011)",
+    "qualityProfileId": 4,
+    "monitored": true,
+    "minimumAvailability": "released",
+    "isAvailable": true,
+    "folderName": "/movies/Paper Lanterns (2011)",
+    "runtime": 104,
+    "imdbId": "tt0000601",
+    "tmdbId": 6001,
+    "titleSlug": "6001",
+    "rootFolderPath": "/movies",
+    "genres": ["Drama"],
+    "tags": [],
+    "added": "2023-04-02T10:11:12Z",
+    "ratings": { "tmdb": { "votes": 12, "value": 7.1, "type": "user" } },
+    "movieFile": {
+      "movieId": 1,
+      "relativePath": "Paper Lanterns (2011).mkv",
+      "path": "/movies/Paper Lanterns (2011)/Paper Lanterns (2011).mkv",
+      "size": 1500000000,
+      "dateAdded": "2023-04-02T11:00:00Z",
+      "sceneName": "Paper.Lanterns.2011.1080p.BluRay.x264-MADEUP",
+      "quality": {
+        "quality": { "id": 7, "name": "Bluray-1080p", "source": "bluray", "resolution": 1080, "modifier": "none" },
+        "revision": { "version": 1, "real": 0, "isRepack": false }
+      },
+      "mediaInfo": { "audioChannels": 5.1, "videoCodec": "x264" },
+      "id": 1
+    },
+    "id": 1
+  },
+  {
+    "title": "The Quiet Orchard",
+    "year": 2004,
+    "hasFile": false,
+    "path": "/movies/The Quiet Orchard (2004)",
+    "qualityProfileId": 4,
+    "monitored": false,
+    "minimumAvailability": "inCinemas",
+    "imdbId": "tt0000602",
+    "tmdbId": 6002,
+    "rootFolderPath": "/movies",
+    "id": 2
+  },
+  {
+    "title": "Salt Meridian",
+    "year": 2019,
+    "hasFile": false,
+    "path": "/movies/Salt Meridian (2019)",
+    "qualityProfileId": 6,
+    "monitored": true,
+    "minimumAvailability": "announced",
+    "tmdbId": 0,
+    "rootFolderPath": "/movies",
+    "id": 3
+  },
+  {
+    "title": "Glass Harbour",
+    "year": 1987,
+    "hasFile": false,
+    "path": "/movies/Glass Harbour (1987)",
+    "qualityProfileId": 4,
+    "monitored": true,
+    "tmdbId": 6004,
+    "rootFolderPath": "/movies"
+  },
+  {
+    "title": "Nine Winters",
+    "year": 2022,
+    "hasFile": false,
+    "path": "/movies/Nine Winters (2022)",
+    "qualityProfileId": 4,
+    "monitored": true,
+    "tmdbId": "6005",
+    "rootFolderPath": "/movies",
+    "id": 5
+  },
+  42,
+  null,
+  {
+    "title": "Ash\tand\u0007 Ember",
+    "year": 99999,
+    "hasFile": true,
+    "path": "/movies/Ash and Ember (1996)",
+    "qualityProfileId": 4,
+    "monitored": true,
+    "minimumAvailability": "sometime",
+    "imdbId": "not-an-id",
+    "tmdbId": 6006,
+    "rootFolderPath": "/movies",
+    "movieFile": { "size": "large", "quality": "good" },
+    "id": 6
+  },
+  {
+    "title": "Tin Sparrow",
+    "year": 2001,
+    "hasFile": true,
+    "path": "/movies/../etc/Tin Sparrow (2001)",
+    "qualityProfileId": 4,
+    "monitored": true,
+    "tmdbId": 6007,
+    "rootFolderPath": "/movies",
+    "movieFile": {
+      "path": "/movies/../etc/Tin Sparrow (2001)/Tin Sparrow (2001).mkv",
+      "size": 700000000,
+      "quality": { "quality": { "name": "WEBDL-720p" } }
+    },
+    "id": 7
+  },
+  {
+    "title": "Low Tide Radio",
+    "year": 2015,
+    "hasFile": true,
+    "path": "C:\\Movies\\Low Tide Radio (2015)",
+    "qualityProfileId": 9,
+    "monitored": true,
+    "minimumAvailability": "preDB",
+    "tmdbId": 6008,
+    "rootFolderPath": "C:\\Movies",
+    "movieFile": {
+      "path": "C:\\Movies\\Low Tide Radio (2015)\\Low Tide Radio (2015).mkv",
+      "size": 900000000,
+      "quality": { "quality": { "name": "Some-Custom-Quality" } }
+    },
+    "id": 8
+  },
+  {
+    "title": "",
+    "year": 2010,
+    "path": "/movies/Untitled (2010)",
+    "qualityProfileId": 4,
+    "monitored": true,
+    "tmdbId": 6009,
+    "id": 9
+  },
+  {
+    "title": "Hollow Compass",
+    "year": 1999,
+    "hasFile": false,
+    "path": "/movies/Hollow Compass (1999)",
+    "qualityProfileId": 4,
+    "monitored": "yes",
+    "tmdbId": 6010,
+    "rootFolderPath": "/movies",
+    "id": 10
+  }
+]

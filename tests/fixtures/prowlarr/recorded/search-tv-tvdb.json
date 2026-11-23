@@ -1,0 +1,264 @@
+[
+ {
+  "guid": "https://newsowl.example/details.php?guid=33333333333333333333333333333333",
+  "age": 12,
+  "ageHours": 306.35875116075,
+  "ageMinutes": 18381.52506964667,
+  "size": 2665416000,
+  "files": 0,
+  "grabs": 133,
+  "indexerId": 27,
+  "indexer": "NewsOwl",
+  "title": "Cracking.Slate.S01E01.720p.NF.WEB-DL.DDP5.1.x264-PiA",
+  "sortTitle": "cracking slate s01e01 720p nf web dl ddp5 1 x264 pia",
+  "imdbId": 0,
+  "tmdbId": 0,
+  "tvdbId": 82001,
+  "tvMazeId": 0,
+  "publishDate": "2026-11-03T00:40:32Z",
+  "commentUrl": "https://newsowl.example/details.php?guid=33333333333333333333333333333333",
+  "downloadUrl": "http://prowlarr.test:9696/27/download?apikey=0123456789abcdef0123456789abcdef&link=RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR&file=Cracking.Slate.S01E01.720p.NF.WEB-DL.DDP5.1.x264-PiA",
+  "infoUrl": "https://newsowl.example/details.php?guid=33333333333333333333333333333333",
+  "posterUrl": "https://api.newsowl.example/covers/tv/82001.jpg",
+  "indexerFlags": [],
+  "categories": [
+   {
+    "id": 5000,
+    "name": "TV",
+    "subCategories": [
+     {
+      "id": 5010,
+      "name": "TV/WEB-DL",
+      "subCategories": []
+     },
+     {
+      "id": 5020,
+      "name": "TV/Foreign",
+      "subCategories": []
+     },
+     {
+      "id": 5030,
+      "name": "TV/SD",
+      "subCategories": []
+     },
+     {
+      "id": 5040,
+      "name": "TV/HD",
+      "subCategories": []
+     },
+     {
+      "id": 5045,
+      "name": "TV/UHD",
+      "subCategories": []
+     },
+     {
+      "id": 5050,
+      "name": "TV/Other",
+      "subCategories": []
+     },
+     {
+      "id": 5060,
+      "name": "TV/Sport",
+      "subCategories": []
+     },
+     {
+      "id": 5070,
+      "name": "TV/Anime",
+      "subCategories": []
+     },
+     {
+      "id": 5080,
+      "name": "TV/Documentary",
+      "subCategories": []
+     },
+     {
+      "id": 5090,
+      "name": "TV/x265",
+      "subCategories": []
+     }
+    ]
+   },
+   {
+    "id": 105000,
+    "subCategories": []
+   },
+   {
+    "id": 5040,
+    "name": "TV/HD",
+    "subCategories": []
+   },
+   {
+    "id": 105040,
+    "subCategories": []
+   }
+  ],
+  "protocol": "usenet",
+  "fileName": "Cracking.Slate.S01E01.720p.NF.WEB-DL.DDP5.1.x264-PiA.nzb"
+ },
+ {
+  "guid": "https://newsowl.example/details.php?guid=44444444444444444444444444444444",
+  "age": 13,
+  "ageHours": 313.31375119169445,
+  "ageMinutes": 18798.825071503332,
+  "size": 6244431000,
+  "files": 0,
+  "grabs": 123,
+  "indexerId": 27,
+  "indexer": "NewsOwl",
+  "title": "Cracking.Slate.S01E01.2160p.NF.WEB-DL.DDP5.1.H.265-PiA",
+  "sortTitle": "cracking slate s01e01 2160p nf web dl ddp5 1 h 265 pia",
+  "imdbId": 0,
+  "tmdbId": 0,
+  "tvdbId": 82001,
+  "tvMazeId": 0,
+  "publishDate": "2026-11-02T17:43:14Z",
+  "commentUrl": "https://newsowl.example/details.php?guid=44444444444444444444444444444444",
+  "downloadUrl": "http://prowlarr.test:9696/27/download?apikey=0123456789abcdef0123456789abcdef&link=RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR&file=Cracking.Slate.S01E01.2160p.NF.WEB-DL.DDP5.1.H.265-PiA",
+  "infoUrl": "https://newsowl.example/details.php?guid=44444444444444444444444444444444",
+  "posterUrl": "https://api.newsowl.example/covers/tv/82001.jpg",
+  "indexerFlags": [],
+  "categories": [
+   {
+    "id": 5000,
+    "name": "TV",
+    "subCategories": [
+     {
+      "id": 5010,
+      "name": "TV/WEB-DL",
+      "subCategories": []
+     },
+     {
+      "id": 5020,
+      "name": "TV/Foreign",
+      "subCategories": []
+     },
+     {
+      "id": 5030,
+      "name": "TV/SD",
+      "subCategories": []
+     },
+     {
+      "id": 5040,
+      "name": "TV/HD",
+      "subCategories": []
+     },
+     {
+      "id": 5045,
+      "name": "TV/UHD",
+      "subCategories": []
+     },
+     {
+      "id": 5050,
+      "name": "TV/Other",
+      "subCategories": []
+     },
+     {
+      "id": 5060,
+      "name": "TV/Sport",
+      "subCategories": []
+     },
+     {
+      "id": 5070,
+      "name": "TV/Anime",
+      "subCategories": []
+     },
+     {
+      "id": 5080,
+      "name": "TV/Documentary",
+      "subCategories": []
+     },
+     {
+      "id": 5090,
+      "name": "TV/x265",
+      "subCategories": []
+     }
+    ]
+   },
+   {
+    "id": 105000,
+    "subCategories": []
+   },
+   {
+    "id": 5045,
+    "name": "TV/UHD",
+    "subCategories": []
+   },
+   {
+    "id": 105045,
+    "subCategories": []
+   }
+  ],
+  "protocol": "usenet",
+  "fileName": "Cracking.Slate.S01E01.2160p.NF.WEB-DL.DDP5.1.H.265-PiA.nzb"
+ },
+ {
+  "guid": "https://dozynewt.example/details/d1d2d3d4d1d2d3d4d1d2d3d4d1d2d3d4d1d2d3d4",
+  "age": 12,
+  "ageHours": 306.35930724105555,
+  "ageMinutes": 18381.558434465,
+  "size": 2665416106,
+  "files": 9,
+  "grabs": 11,
+  "indexerId": 29,
+  "indexer": "DozyNewt",
+  "title": "Cracking.Slate.S01E01.720p.NF.WEB-DL.DDP5.1.x264-PiA",
+  "sortTitle": "cracking slate s01e01 720p nf web dl ddp5 1 x264 pia",
+  "imdbId": 700001,
+  "tmdbId": 7101,
+  "tvdbId": 82001,
+  "tvMazeId": 169,
+  "publishDate": "2026-11-03T00:40:30Z",
+  "commentUrl": "https://dozynewt.example/details/d1d2d3d4d1d2d3d4d1d2d3d4d1d2d3d4d1d2d3d4#comments",
+  "downloadUrl": "http://prowlarr.test:9696/29/download?apikey=0123456789abcdef0123456789abcdef&link=RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR&file=Cracking.Slate.S01E01.720p.NF.WEB-DL.DDP5.1.x264-PiA",
+  "infoUrl": "https://dozynewt.example/details/d1d2d3d4d1d2d3d4d1d2d3d4d1d2d3d4d1d2d3d4",
+  "indexerFlags": [],
+  "categories": [
+   {
+    "id": 5040,
+    "name": "TV/HD",
+    "subCategories": []
+   },
+   {
+    "id": 105040,
+    "subCategories": []
+   }
+  ],
+  "protocol": "usenet",
+  "fileName": "Cracking.Slate.S01E01.720p.NF.WEB-DL.DDP5.1.x264-PiA.nzb"
+ },
+ {
+  "guid": "https://dozynewt.example/details/e5e6e7e8e5e6e7e8e5e6e7e8e5e6e7e8e5e6e7e8",
+  "age": 13,
+  "ageHours": 313.3154183593611,
+  "ageMinutes": 18798.92510156167,
+  "size": 6244430884,
+  "files": 10,
+  "grabs": 34,
+  "indexerId": 29,
+  "indexer": "DozyNewt",
+  "title": "Cracking.Slate.S01E01.2160p.NF.WEB-DL.DDP5.1.H.265-PiA",
+  "sortTitle": "cracking slate s01e01 2160p nf web dl ddp5 1 h 265 pia",
+  "imdbId": 700001,
+  "tmdbId": 7101,
+  "tvdbId": 82001,
+  "tvMazeId": 169,
+  "publishDate": "2026-11-02T17:43:08Z",
+  "commentUrl": "https://dozynewt.example/details/e5e6e7e8e5e6e7e8e5e6e7e8e5e6e7e8e5e6e7e8#comments",
+  "downloadUrl": "http://prowlarr.test:9696/29/download?apikey=0123456789abcdef0123456789abcdef&link=RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR&file=Cracking.Slate.S01E01.2160p.NF.WEB-DL.DDP5.1.H.265-PiA",
+  "infoUrl": "https://dozynewt.example/details/e5e6e7e8e5e6e7e8e5e6e7e8e5e6e7e8e5e6e7e8",
+  "indexerFlags": [],
+  "categories": [
+   {
+    "id": 5045,
+    "name": "TV/UHD",
+    "subCategories": []
+   },
+   {
+    "id": 105045,
+    "subCategories": []
+   }
+  ],
+  "protocol": "usenet",
+  "fileName": "Cracking.Slate.S01E01.2160p.NF.WEB-DL.DDP5.1.H.265-PiA.nzb"
+ }
+]

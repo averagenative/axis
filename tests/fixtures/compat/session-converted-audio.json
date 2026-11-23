@@ -1,0 +1,11 @@
+{"MediaContainer":{"size":1,"Metadata":[{
+"ratingKey":"501","key":"/library/metadata/501","librarySectionID":"1","type":"movie","title":"Invented Film","year":2001,"duration":7200000,
+"Media":[{"id":1,"duration":7200000,"bitrate":12000,"width":1920,"height":1080,"audioChannels":6,"audioCodec":"eac3","videoCodec":"h264","container":"mkv","videoProfile":"high","Part":[{"id":1,"key":"/library/parts/1/file.mkv","duration":7200000,"file":"/data/movies/Invented Film (2001)/Invented Film (2001).mkv","size":10800000000,"container":"mkv","decision":"transcode","protocol":"hls","selected":true,"Stream":[
+{"id":1,"streamType":1,"decision":"copy","location":"direct","codec":"h264","profile":"high","bitDepth":8,"width":1920,"height":1080,"colorTrc":"bt709","default":true,"selected":true},
+{"id":2,"streamType":2,"decision":"transcode","location":"segments-audio","codec":"eac3","channels":6,"selected":true,"language":"English"}
+]}]}],
+"Player":{"address":"203.0.113.9","machineIdentifier":"client-android-1","model":"phone","platform":"Android","platformVersion":"14","product":"Plex for Android","profile":"Android","remotePublicAddress":"203.0.113.9","state":"playing","title":"Pixel","version":"9.0","local":false,"relayed":false,"secure":true,"userID":2},
+"Session":{"id":"sess-converted-audio-1","bandwidth":20000,"location":"wan"},
+"TranscodeSession":{"key":"/transcode/sessions/abc","throttled":false,"complete":false,"progress":3.5,"speed":2.1,"size":-22,"error":false,"duration":7200000,"remaining":1000,"context":"streaming","sourceVideoCodec":"h264","sourceAudioCodec":"eac3","videoDecision":"copy","audioDecision":"transcode","subtitleDecision":null,"protocol":"hls","container":"mkv","videoCodec":"h264","audioCodec":"mp3","audioChannels":2,"transcodeHwRequested":false,"transcodeHwFullPipeline":false,"timeStamp":1800000000.5,"maxOffsetAvailable":10.0,"minOffsetAvailable":0.0,"width":1920,"height":1080},
+"User":{"id":"2","thumb":"/users/2/avatar","title":"Bob Example"}
+}]}}

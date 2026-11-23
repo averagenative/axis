@@ -1,0 +1,10 @@
+{"_constructed":"a direct play of HEVC Main 10 HDR 2160p in Matroska on a local device","MediaContainer":{"size":1,"Metadata":[{
+"ratingKey":"601","librarySectionID":"1","type":"movie","title":"Invented HDR Film",
+"Media":[{"id":2,"bitrate":40000,"width":3840,"height":2160,"audioCodec":"eac3","videoCodec":"hevc","container":"mkv","Part":[{"id":2,"file":"/data/movies/Invented HDR (2020)/Invented HDR (2020).mkv","container":"mkv","decision":"directplay","Stream":[
+{"id":10,"streamType":1,"codec":"hevc","profile":"main 10","bitDepth":10,"width":3840,"height":2160,"colorTrc":"smpte2084","default":true},
+{"id":11,"streamType":2,"codec":"eac3","channels":6,"selected":true}
+]}]}],
+"Player":{"machineIdentifier":"client-tizen-1","platform":"Tizen","product":"Plex for Samsung","state":"playing","title":"Living room TV","local":true,"relayed":false},
+"Session":{"id":"sess-direct-1","bandwidth":40000,"location":"lan"},
+"User":{"id":"1","title":"Alice Example"}
+}]}}

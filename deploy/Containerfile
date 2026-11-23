@@ -1,0 +1,256 @@
+# Containerfile - the Axis image: axisd, axis-worker, ffmpeg, ffprobe and yt-dlp
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Build from the repository root, with the submodule checked out:
+#
+#   make container                                    # or
+#   podman build -f deploy/Containerfile --build-arg GIT_SHA=$(git rev-parse --short HEAD) \
+#       -t localhost/axis:latest .
+#
+# Published images are built from this file by .github/workflows/images.yml
+# for linux/amd64 and linux/arm64 (deploy/README.md, "Published images").
+#
+# Stages:
+#   build    compilers and -dev packages; builds the hardened release, runs
+#            the unit tests that need no database, installs into /stage
+#   debug    only axisd.debug and axis-worker.debug, for symbolising crash
+#            reports: `make container-debug` writes them to
+#            build/container-debug/
+#   ytdlp    fetches yt-dlp, the program the YouTube downloader runs, and
+#            checks it; nothing else of this stage reaches the image
+#   runtime  the image: run-time libraries, ffmpeg, axisd and axis-worker,
+#            and yt-dlp with the Python and Node.js it needs; nothing else.
+#            This is the last stage, so it is what a plain build produces.
+#            axisd is the entrypoint; the same image runs a worker with
+#            `--entrypoint /usr/bin/axis-worker` (see deploy/README.md).
+#
+# The network access is to this base image, to Debian's package archive,
+# and, in the ytdlp stage alone, to yt-dlp's own release location on GitHub.
+# That last one is a deliberate exception (openspec/specs/youtube/spec.md,
+# decided 2026-11-20): YouTube changes often enough
+# that a pinned yt-dlp stops working within weeks, so the image takes the
+# newest release when it is built.  That part of the image is therefore not
+# reproducible: two builds of one commit can hold two yt-dlp versions.  The
+# build prints the version it took, and the image records it.  To build with
+# one release, pass --build-arg YTDLP_VERSION=<its tag>.  The stage is made
+# again when YTDLP_REFRESH changes (the build passes today's date), so a
+# layer cache does not keep an old "latest".
+
+# Debian stable (13, "trixie"), slim variant.  Pinned by digest so that the
+# build does not change under us; the tag is only a note of what it was.
+# The digest is the image INDEX's (every architecture of one Debian build),
+# not one architecture's image: each build takes its own architecture from
+# it.  This is the stable-slim index of the 2026-11-04 build (read on
+# 2026-11-12); its linux/amd64 image is sha256:cd9f2189..., which this line
+# named until 2026-11-16, and its linux/arm64 image sha256:04bba436....  To
+# move to a newer base, pull the tag, read the index's digest with
+# `podman image inspect --format '{{.Digest}}' docker.io/library/debian:stable-slim`,
+# check that `podman manifest inspect docker.io/library/debian@sha256:<it>`
+# lists linux/amd64 and linux/arm64 (a single image fails there), paste it
+# here and change the dates: a deliberate change, reviewed like code.
+ARG DEBIAN_IMAGE=docker.io/library/debian:stable-slim@sha256:fbfb4059d2127120aa05b6e6064523d2102552f0cf0026ddf0701c12f1f8f3e0
+
+
+FROM ${DEBIAN_IMAGE} AS build
+
+ENV DEBIAN_FRONTEND=noninteractive
+# ca-certificates and glib-networking: the TLS tests need GIO's TLS backend
+# (glib-networking, which libsoup depends on anyway) and a system trust store
+# for it to load; with none, the backend warns ("System trust contains zero
+# trusted certificates") and a test fails on the warning.
+RUN apt-get update \
+	&& apt-get install -y --no-install-recommends \
+		binutils \
+		ca-certificates \
+		gcc \
+		glib-networking \
+		libc6-dev \
+		libglib2.0-dev \
+		libjson-glib-dev \
+		libpq-dev \
+		libsodium-dev \
+		libsoup-3.0-dev \
+		make \
+		pkg-config \
+	&& rm -rf /var/lib/apt/lists/*
+
+# .git is not in the build context (see .containerignore), so the commit
+# comes in as an argument; `axisd --version` reports it.
+ARG GIT_SHA=unknown
+# Where the source of this build is offered: the web interface's footer
+# links to it, and the image's label names it (below).  Empty leaves
+# config.mk's own address.
+ARG SOURCE_URL=
+# The version the image is named by: a registry tag's (the image workflow),
+# or config.mk's (make container).  config.mk holds the three numbers; what a
+# pre-release adds to them ("-rc1" of "0.1.0-rc1") is taken from here and
+# given to the build as VERSION_SUFFIX.  Any other value ("unknown",
+# "sha-<commit>") adds nothing.
+ARG AXIS_VERSION=unknown
+
+WORKDIR /src
+COPY . .
+
+# The hardened release build, and the tests that need no PostgreSQL, run
+# against that very build; the others skip themselves.  A failing test
+# fails the image build.  So does a version that is not the program's: when
+# AXIS_VERSION is a version (digits.digits.digits, with or without a
+# suffix), `axisd --version` must report exactly it, so a tag that config.mk
+# was not moved to publishes nothing.
+RUN set -e; \
+	suffix=; \
+	case "${AXIS_VERSION}" in \
+	[0-9]*.[0-9]*.[0-9]*-*) suffix="-${AXIS_VERSION#*-}" ;; \
+	esac; \
+	make release GIT_SHA="${GIT_SHA}" VERSION_SUFFIX="${suffix}" ${SOURCE_URL:+SOURCE_URL="${SOURCE_URL}"}; \
+	make test RELEASE=1 GIT_SHA="${GIT_SHA}" VERSION_SUFFIX="${suffix}" ${SOURCE_URL:+SOURCE_URL="${SOURCE_URL}"} AXIS_SKIP_DB_TESTS=1; \
+	make install RELEASE=1 GIT_SHA="${GIT_SHA}" VERSION_SUFFIX="${suffix}" ${SOURCE_URL:+SOURCE_URL="${SOURCE_URL}"} DESTDIR=/stage PREFIX=/usr; \
+	case "${AXIS_VERSION}" in \
+	[0-9]*.[0-9]*.[0-9]*) \
+		said=$(/stage/usr/bin/axisd --version); \
+		case "${said}" in \
+		"axisd ${AXIS_VERSION} ("*) ;; \
+		*) echo "the image is to be version ${AXIS_VERSION}, but the program built says: ${said} (config.mk holds the version)" >&2; exit 1 ;; \
+		esac ;; \
+	esac
+
+
+FROM scratch AS debug
+COPY --from=build /stage/usr/lib/debug/usr/bin/axisd.debug /axisd.debug
+COPY --from=build /stage/usr/lib/debug/usr/bin/axis-worker.debug /axis-worker.debug
+
+
+FROM ${DEBIAN_IMAGE} AS ytdlp
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+	&& apt-get install -y --no-install-recommends \
+		ca-certificates \
+		curl \
+		python3 \
+	&& rm -rf /var/lib/apt/lists/*
+
+# "latest" is the newest release at the time of the build; a tag (a date,
+# as yt-dlp names its releases) is that release.
+ARG YTDLP_VERSION=latest
+# What makes "latest" the newest: a builder keeps the layer below for as long
+# as its command and its arguments stay the same, and "latest" is always the
+# same word.  The build passes today's date here (make container,
+# deploy/images.sh, the image workflow), and the command names it, so the
+# layer is made again on a new day.  Left as it is (a plain build by hand),
+# a cached layer is used: pass --build-arg YTDLP_REFRESH=$(date -u +%F), or
+# --no-cache.
+ARG YTDLP_REFRESH=unset
+
+# The file and the release's own checksum list, over https only (redirects
+# too), from the project's release location.  The file must be the one the
+# list names: that catches a download cut short or mixed up, not a release
+# that was tampered with at its source (the list comes from the same place;
+# yt-dlp also signs it, and checking that signature against a key kept here
+# is the stronger check, left for the change that adds "Update yt-dlp").
+# Then it is run once, for its version: what the image records and the
+# YouTube downloader's page shows while YouTube is switched off.
+RUN set -eu; \
+	echo "yt-dlp ${YTDLP_VERSION}, asked for on ${YTDLP_REFRESH}"; \
+	if [ "${YTDLP_VERSION}" = latest ]; then \
+		base=https://github.com/yt-dlp/yt-dlp/releases/latest/download; \
+	else \
+		base="https://github.com/yt-dlp/yt-dlp/releases/download/${YTDLP_VERSION}"; \
+	fi; \
+	mkdir /out; \
+	cd /out; \
+	curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --tlsv1.2 \
+		--output yt-dlp "${base}/yt-dlp"; \
+	curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --tlsv1.2 \
+		--output SHA2-256SUMS "${base}/SHA2-256SUMS"; \
+	grep -E '^[0-9a-f]{64}  yt-dlp$' SHA2-256SUMS > yt-dlp.sum; \
+	test "$(wc -l < yt-dlp.sum)" = 1; \
+	sha256sum --check --strict yt-dlp.sum; \
+	chmod 0755 yt-dlp; \
+	python3 ./yt-dlp --version > yt-dlp.version; \
+	grep -E -x '[0-9]+(\.[0-9]+){2,3}' yt-dlp.version; \
+	echo "yt-dlp $(cat yt-dlp.version), sha256 $(cut -d ' ' -f 1 yt-dlp.sum)"
+
+
+FROM ${DEBIAN_IMAGE} AS runtime
+
+ENV DEBIAN_FRONTEND=noninteractive
+# Run-time libraries only; no -dev package and no compiler.  ffmpeg brings
+# ffprobe with it.  python3 runs yt-dlp, and nodejs is the JavaScript
+# runtime yt-dlp solves YouTube's player checks with: both from Debian's
+# archive, and neither serves anything (the interface stays server-rendered
+# C).  Recommended packages are left out.  TLS: glib-networking
+# is GIO's TLS backend (named here although libsoup depends on it, so that
+# it cannot drop out unnoticed), and ca-certificates the system trust store
+# that axis-worker (https to a reverse proxy) and the media-server clients
+# verify certificates against by default; `make check-container` makes a
+# real handshake with both.
+RUN apt-get update \
+	&& apt-get install -y --no-install-recommends \
+		ca-certificates \
+		ffmpeg \
+		glib-networking \
+		libglib2.0-0t64 \
+		libjson-glib-1.0-0 \
+		libpq5 \
+		libsodium23 \
+		libsoup-3.0-0 \
+		nodejs \
+		python3 \
+	&& rm -rf /var/lib/apt/lists/* \
+	&& groupadd --gid 1000 axis \
+	&& useradd --uid 1000 --gid 1000 --no-create-home --home-dir /tmp \
+		--shell /usr/sbin/nologin axis \
+	&& install -d -m 0770 -o 1000 -g 0 /var/lib/axis
+
+COPY --from=build /stage/usr/bin/axisd /usr/bin/axisd
+COPY --from=build /stage/usr/bin/axis-worker /usr/bin/axis-worker
+COPY --from=build /stage/usr/share/axis/axis.conf.example /usr/share/axis/axis.conf.example
+COPY --from=build /stage/usr/share/axis/axis-worker.conf.example /usr/share/axis/axis-worker.conf.example
+# yt-dlp, on the PATH Axis gives its tools, and the version the build took
+# (src/youtube/axis-youtube.h: AXIS_YOUTUBE_VERSION_FILE).  Owned by root and
+# not writable by the daemon: Axis never updates it.
+COPY --from=ytdlp --chmod=0755 /out/yt-dlp /usr/local/bin/yt-dlp
+COPY --from=ytdlp --chmod=0644 /out/yt-dlp.version /usr/share/axis/yt-dlp.version
+
+# The labels the OCI image spec defines.  The revision is the commit the
+# image was built from (the pipeline passes the full one); the version and
+# the source address come in as arguments too, so a local build says
+# "unknown" rather than guessing.
+ARG GIT_SHA=unknown
+ARG AXIS_VERSION=unknown
+ARG SOURCE_URL=https://github.com/averagenative/axis
+LABEL org.opencontainers.image.title="Axis" \
+      org.opencontainers.image.description="Axis media engine daemon and worker, with ffmpeg and ffprobe" \
+      org.opencontainers.image.licenses="AGPL-3.0-or-later" \
+      org.opencontainers.image.revision="${GIT_SHA}" \
+      org.opencontainers.image.version="${AXIS_VERSION}" \
+      org.opencontainers.image.source="${SOURCE_URL}"
+
+# The daemon writes files in one place only, its data directory
+# (/var/lib/axis: artwork, which can always be fetched again).  It is a
+# volume in the examples; the directory here belongs to uid 1000 and to
+# group 0, mode 0770, so that a new named volume starts out usable both by
+# the default user and by any user id whose group is 0 (OpenShift's
+# arbitrary ids): Docker and Podman copy the owner and mode into it.  The
+# daemon accepts a data directory of its own user, or of one of its groups
+# that may write it, and never chowns anything.  Another user id with
+# another group needs the volume given to it once (deploy/README.md, "User
+# and group").  Nothing else in the image is writable or depends on the user
+# id, and HOME points at /tmp, which a read-only container mounts as a
+# tmpfs.  Listening on every interface is right inside a container; what is
+# published, and where, is the runtime's call.
+ENV HOME=/tmp \
+    AXIS_LISTEN_HOST=0.0.0.0 \
+    AXIS_LISTEN_PORT=7800 \
+    AXIS_DATA_DIR=/var/lib/axis
+
+USER 1000:1000
+EXPOSE 7800
+STOPSIGNAL SIGTERM
+
+# Exec form, no wrapper script: axisd is process 1 and gets the stop signal
+# itself.  The health check is `axisd --healthcheck`; compose and the check
+# script declare it, so that it works whatever image format is built.
+# Kubernetes probes /livez and /readyz instead.
+ENTRYPOINT ["/usr/bin/axisd"]

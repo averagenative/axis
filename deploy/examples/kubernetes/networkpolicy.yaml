@@ -1,0 +1,67 @@
+# networkpolicy.yaml - who may reach what in Axis's namespace
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Nothing comes in unless a policy below allows it: the database only from
+# the daemon, and the daemon's web port only from the ingress controller's
+# namespace (which also keeps other pods from sending it forwarded headers
+# from a trusted address).  Egress is left open: Axis talks to indexers,
+# download clients, metadata providers and media servers wherever they are.
+# Kubelet probes come from the node and are not subject to these on most
+# network plugins.  Needs a network plugin that enforces NetworkPolicy.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  labels:
+    app.kubernetes.io/name: axis
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: postgres-from-axisd
+  labels:
+    app.kubernetes.io/name: axis
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: axis
+      app.kubernetes.io/component: database
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: axis
+              app.kubernetes.io/component: daemon
+      ports:
+        - protocol: TCP
+          port: 5432
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: axisd-from-ingress
+  labels:
+    app.kubernetes.io/name: axis
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: axis
+      app.kubernetes.io/component: daemon
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        # EDIT: the namespace your ingress controller runs in (kube-system
+        # for k3s's Traefik, ingress-nginx for ingress-nginx, ...).
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: TCP
+          port: 7800

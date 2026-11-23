@@ -1,0 +1,33 @@
+# ingress.yaml - Axis reached through the cluster's ingress controller
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# A plain Ingress; for Traefik's own resource see
+# ../traefik/ingressroute.yaml.  The controller must send X-Forwarded-For,
+# X-Forwarded-Proto and X-Forwarded-Host (ingress-nginx and Traefik do), and
+# AXIS_TRUSTED_PROXIES in axisd.yaml must name its pods' addresses.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: axisd
+  labels:
+    app.kubernetes.io/name: axis
+spec:
+  # EDIT: your controller's class (traefik, nginx, ...).
+  ingressClassName: traefik
+  tls:
+    - hosts:
+        # EDIT: the name Axis is reached by.
+        - axis.example.com
+      # EDIT: a TLS secret in this namespace (cert-manager can make it).
+      secretName: axis-tls
+  rules:
+    - host: axis.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: axisd
+                port:
+                  name: http

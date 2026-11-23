@@ -1,0 +1,4 @@
+{"MediaContainer":{"size":2,"identifier":"com.plexapp.plugins.accounts","Account":[
+{"id":1,"key":"/accounts/1","name":"Alice Example","defaultAudioLanguage":"en"},
+{"id":2,"key":"/accounts/2","name":"Bob Example","defaultAudioLanguage":"en"}
+]}}

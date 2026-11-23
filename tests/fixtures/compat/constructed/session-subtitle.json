@@ -1,0 +1,12 @@
+{"_constructed":"video and audio passed through, a subtitle converted","MediaContainer":{"size":1,"Metadata":[{
+"ratingKey":"603","librarySectionID":"1","type":"movie","title":"Invented Subtitled Film",
+"Media":[{"id":4,"bitrate":6000,"width":1920,"height":1080,"audioCodec":"aac","videoCodec":"h264","container":"mkv","Part":[{"id":4,"file":"/data/movies/Invented Subs (2018)/Invented Subs (2018).mkv","container":"mkv","decision":"transcode","protocol":"hls","Stream":[
+{"id":30,"streamType":1,"decision":"copy","codec":"h264","profile":"high","bitDepth":8,"width":1920,"height":1080,"colorTrc":"bt709"},
+{"id":31,"streamType":2,"decision":"copy","codec":"aac","channels":2,"selected":true},
+{"id":32,"streamType":3,"decision":"burn","codec":"pgs","selected":true}
+]}]}],
+"Player":{"machineIdentifier":"client-roku-1","platform":"Roku","product":"Plex for Roku","state":"playing","title":"Bedroom box","local":true,"relayed":false},
+"Session":{"id":"sess-subtitle-1","bandwidth":6000,"location":"lan"},
+"TranscodeSession":{"sourceVideoCodec":"h264","sourceAudioCodec":"aac","videoDecision":"copy","audioDecision":"copy","subtitleDecision":"burn","protocol":"hls","container":"mkv","videoCodec":"h264","audioCodec":"aac","width":1920,"height":1080},
+"User":{"id":"1","title":"Alice Example"}
+}]}}

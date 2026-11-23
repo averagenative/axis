@@ -1,0 +1,53 @@
+{
+  "page": 1,
+  "results": [
+    {
+      "adult": false,
+      "backdrop_path": "/c9601.jpg",
+      "genre_ids": [18, 9648],
+      "id": 9601,
+      "origin_country": ["GB"],
+      "original_language": "en",
+      "original_name": "The Tidewater Archive",
+      "overview": "Archivists in a flooded city keep the records dry, and the secrets wet.",
+      "popularity": 512.6,
+      "poster_path": "/s9601.jpg",
+      "first_air_date": "2024-09-12",
+      "name": "The Tidewater Archive",
+      "vote_average": 8.24,
+      "vote_count": 420
+    },
+    {
+      "adult": false,
+      "genre_ids": [80, 18],
+      "id": 9501,
+      "origin_country": ["US"],
+      "original_language": "en",
+      "original_name": "Harbour Lights Precinct",
+      "overview": "The night desk of a harbour police station.",
+      "popularity": 401.2,
+      "poster_path": "/s9501.jpg",
+      "first_air_date": "2021-04-05",
+      "name": "Harbour Lights Precinct",
+      "vote_average": 8.1,
+      "vote_count": 900
+    },
+    {
+      "adult": false,
+      "genre_ids": [35],
+      "id": 9502,
+      "origin_country": ["CA"],
+      "original_language": "en",
+      "original_name": "The Orrery Club",
+      "overview": "Retired astronomers rebuild the solar system in a church hall.",
+      "popularity": 220.0,
+      "poster_path": "/s9502.jpg",
+      "first_air_date": "2024-02-01",
+      "name": "The Orrery Club",
+      "vote_average": 7.5,
+      "vote_count": 66
+    }
+  ],
+  "total_pages": 1,
+  "total_results": 3
+}

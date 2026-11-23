@@ -1,0 +1,7 @@
+# axis-data.volume - the daemon's data directory (artwork it can fetch again)
+# SPDX-License-Identifier: AGPL-3.0-or-later
+[Unit]
+Description=Axis's data volume
+
+[Volume]
+VolumeName=axis-data

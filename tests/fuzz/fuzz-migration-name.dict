@@ -1,0 +1,9 @@
+# fuzz-migration-name.dict - tokens for fuzz-migration-name
+# SPDX-License-Identifier: AGPL-3.0-or-later
+"-- axis:no-transaction"
+".sql"
+"_"
+"0001"
+"9999"
+"\x0d"
+"\x0a"

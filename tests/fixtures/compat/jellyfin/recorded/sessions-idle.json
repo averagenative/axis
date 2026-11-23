@@ -1,0 +1,37 @@
+[
+  {
+    "PlayState": {
+      "CanSeek": false,
+      "IsPaused": false,
+      "IsMuted": false,
+      "RepeatMode": "RepeatNone",
+      "PlaybackOrder": "Default"
+    },
+    "AdditionalUsers": [],
+    "Capabilities": {
+      "PlayableMediaTypes": [],
+      "SupportedCommands": [],
+      "SupportsMediaControl": false,
+      "SupportsPersistentIdentifier": true
+    },
+    "RemoteEndPoint": "10.89.1.2",
+    "PlayableMediaTypes": [],
+    "Id": "27eb1e11b15853809bc600fe3a0d12b6",
+    "UserId": "00a92bb1464e4f77bd70b5f880fdd6ef",
+    "UserName": "axis-test",
+    "Client": "axis-test-setup",
+    "LastActivityDate": "2026-11-13T06:24:10.5987761Z",
+    "LastPlaybackCheckIn": "0001-01-01T00:00:00.0000000Z",
+    "DeviceName": "axis-test-setup",
+    "DeviceId": "axis-test-setup",
+    "ApplicationVersion": "1.0",
+    "IsActive": true,
+    "SupportsMediaControl": false,
+    "SupportsRemoteControl": false,
+    "NowPlayingQueue": [],
+    "NowPlayingQueueFullItems": [],
+    "HasCustomDeviceName": false,
+    "ServerId": "df1a584d4cef4af88f0d75e7a582ff28",
+    "SupportedCommands": []
+  }
+]

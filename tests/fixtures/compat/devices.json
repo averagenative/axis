@@ -1,0 +1,6 @@
+{"MediaContainer":{"size":4,"identifier":"com.plexapp.system.devices","Device":[
+{"id":11,"name":"Living room TV","platform":"Tizen","clientIdentifier":"client-tizen-1","createdAt":1700000000},
+{"id":12,"name":"Pixel","platform":"Android","clientIdentifier":"client-android-1","createdAt":1700000100},
+{"id":13,"name":"Old tablet","platform":"iOS","clientIdentifier":"client-ios-1","createdAt":1600000000},
+{"id":14,"name":"Bedroom box","platform":"Roku","clientIdentifier":"client-roku-1","createdAt":1650000000}
+]}}

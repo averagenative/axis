@@ -1,0 +1,38 @@
+[
+  {
+    "id": 501,
+    "seriesId": 1,
+    "seasonNumber": 1,
+    "relativePath": "Season 1/Gullwing Ferry - S01E01 - Low Water.mkv",
+    "path": "/tv/Gullwing Ferry/Season 1/Gullwing Ferry - S01E01 - Low Water.mkv",
+    "size": 900000000,
+    "dateAdded": "2025-01-07T03:00:00Z",
+    "sceneName": "Gullwing.Ferry.S01E01.1080p.WEB-DL.H.264-MADEUP",
+    "releaseGroup": "MADEUP",
+    "languages": [{"id": 1, "name": "English"}],
+    "quality": {"quality": {"id": 3, "name": "WEBDL-1080p", "source": "web", "resolution": 1080}, "revision": {"version": 1, "real": 0, "isRepack": false}},
+    "mediaInfo": {"audioChannels": 5.1, "audioCodec": "EAC3", "videoCodec": "h264", "resolution": "1920x1080", "runTime": "24:01"},
+    "qualityCutoffNotMet": false
+  },
+  {
+    "id": 502,
+    "seriesId": 1,
+    "seasonNumber": 1,
+    "path": "/tv/Gullwing Ferry/Season 1/Gullwing Ferry - S01E02-E03 - The Ropes.mkv",
+    "size": 1800000000,
+    "quality": {"quality": {"id": 3, "name": "WEBDL-1080p"}}
+  },
+  {
+    "id": 503,
+    "seriesId": 1,
+    "seasonNumber": 1,
+    "size": "large",
+    "quality": {"quality": {"name": "Made-Up-Quality"}}
+  },
+  {
+    "seriesId": 1,
+    "path": "/tv/Gullwing Ferry/Season 1/no number.mkv",
+    "size": 10
+  },
+  null
+]

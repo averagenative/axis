@@ -1,0 +1,1 @@
+{"allow_lossy_source":true,"bitrate":48000,"codec":"opus","efficient_percent":125,"format":1,"kind":"audio","libraries":["audiobooks"],"min_saving_bytes":0,"min_saving_percent":10,"mono_bitrate":32000}

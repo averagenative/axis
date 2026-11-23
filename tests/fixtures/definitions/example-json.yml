@@ -1,0 +1,65 @@
+---
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# A hand-written definition of a made-up public site with a JSON API, for
+# Axis's tests (see README.md).  Not a real site.
+id: example-json
+name: Example JSON
+description: "A made-up public site whose API answers with JSON"
+language: en-US
+type: public
+encoding: UTF-8
+links:
+  - https://api.example-json.invalid/
+
+caps:
+  categories:
+    movies: Movies
+    shows: TV
+    music: Audio
+  modes:
+    search: [q]
+    movie-search: [q, imdbid]
+    tv-search: [q, season, ep]
+
+search:
+  paths:
+    - path: /api/v1/search
+      response:
+        type: json
+  inputs:
+    query: "{{ if .Query.IMDBID }}{{ .Query.IMDBID }}{{ else }}{{ .Keywords }}{{ end }}"
+    type: "{{ if eq .Query.Type \"movie\" }}movies{{ else }}shows{{ end }}"
+    limit: 50
+  rows:
+    selector: data.results
+    count:
+      selector: data.total
+  fields:
+    category:
+      selector: kind
+    title:
+      selector: name
+    _id:
+      selector: id
+    details:
+      text: "/item/{{ .Result._id }}"
+    infohash:
+      selector: hash
+    size:
+      selector: bytes
+    seeders:
+      selector: stats.seeders
+    leechers:
+      selector: stats.leechers
+    date:
+      selector: added_unix
+    imdbid:
+      optional: true
+      selector: imdb
+    files:
+      optional: true
+      selector: files[0].count
+    downloadvolumefactor:
+      text: 0
+    uploadvolumefactor:
+      text: 1

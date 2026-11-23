@@ -1,0 +1,8 @@
+{
+  "status": "success",
+  "data": [
+    {"series": {"id": 81001, "name": "Wobbly Lighthouse", "year": "2023", "firstAired": "2023-09-01",
+                "image": "https://artworks.thetvdb.com/banners/posters/81001-1.jpg"}},
+    {"people": {"id": 5, "name": "Not A Series"}}
+  ]
+}

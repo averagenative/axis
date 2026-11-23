@@ -1,0 +1,70 @@
+# axis-worker.container - axis-worker on a desktop with an NVIDIA GPU, as a
+# systemd user service
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# The same container as ./run, for Quadlet (Podman 5): copy it to
+# ~/.config/containers/systemd/, change the lines marked EDIT, then
+#
+#   systemctl --user daemon-reload
+#   systemctl --user start axis-worker
+#
+# and `loginctl enable-linger` once, so that it runs while you are logged
+# out.  README.md says what every line is for.
+[Unit]
+Description=Axis conversion worker
+Wants=network-online.target
+After=network-online.target
+# Quadlet adds RequiresMountsFor= for each Volume= below, so a disk mounted
+# by /etc/fstab (NFS, SMB) is mounted before the worker starts.  An sshfs
+# mount you make by hand is not a unit: start the worker after it, or make
+# it one (a user service running sshfs -f) and name it here:
+# After=sshfs-disk1.service
+# Requires=sshfs-disk1.service
+
+[Container]
+ContainerName=axis-worker
+# EDIT: the same version as Axis on the server.
+Image=ghcr.io/averagenative/axis:0.1.0-rc1
+Entrypoint=/usr/bin/axis-worker
+# Your own user inside the container: it can read your token file, and
+# what it writes through the mounts is written as you.
+UserNS=keep-id
+ReadOnly=true
+Tmpfs=/tmp:rw,noexec,nosuid,size=256m,mode=1777
+DropCapability=all
+NoNewPrivileges=true
+# SELinux enforcing (Fedora): a FUSE or NFS mount is refused to the
+# container otherwise.
+SecurityLabelDisable=true
+# The GPU, by its CDI name (README.md, "The GPU").
+AddDevice=nvidia.com/gpu=all
+# EDIT: the token file, only yours to read.
+Volume=%h/.config/axis-worker/token:/run/secrets/axis_worker_token:ro
+# EDIT: each of the server's disks as mounted here, at the path the worker
+# is told below.
+Volume=/mnt/server/disk1:/media/disk1
+Volume=/mnt/server/disk2:/media/disk2
+# EDIT: Axis through its reverse proxy.
+Environment=AXIS_WORKER_URL=https://axis.example.org
+Environment=AXIS_WORKER_TOKEN_FILE=/run/secrets/axis_worker_token
+Environment=AXIS_WORKER_VOLUMES=/media/disk1,/media/disk2
+# EDIT: the disks mounted with sshfs or SMB; remove the line for NFS.
+Environment=AXIS_WORKER_VOLUMES_WITHOUT_FILE_IDENTITY=/media/disk1,/media/disk2
+# The GPU only: the CPU encoder would be chosen first if it were offered.
+Environment=AXIS_WORKER_ENCODER_FAMILIES=nvenc
+Environment=AXIS_WORKER_LOG_LEVEL=info
+# At most four cores, and at most 512 processes.
+PodmanArgs=--pids-limit=512 --cpus=4
+HealthCmd=/usr/bin/axis-worker --healthcheck
+HealthInterval=30s
+HealthTimeout=5s
+HealthRetries=3
+HealthStartPeriod=120s
+# A worker gives its jobs back (at most a minute), then exits.
+StopTimeout=75
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

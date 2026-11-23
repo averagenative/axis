@@ -1,0 +1,199 @@
+# axis.conf - bootstrap settings for axisd.
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Only what the daemon needs before it can reach its database lives here.
+# Unknown groups and keys are errors, so a typo cannot silently fall back
+# to a default.  Each setting can also be given in the environment, which
+# wins over this file:
+#   AXIS_LISTEN_HOST  AXIS_LISTEN_PORT  AXIS_TRUSTED_PROXIES
+#   AXIS_SECURE_COOKIES  AXIS_DATABASE_URL  AXIS_DATABASE_POOL_SIZE
+#   AXIS_DATABASE_WAIT  AXIS_LOG_LEVEL  AXIS_LOG_FORMAT  AXIS_DATA_DIR
+#   AXIS_JOBS_CONCURRENCY  AXIS_JOBS_GRACE_PERIOD  AXIS_WORKER_LEASE
+#   AXIS_ADMIN_USERNAME  AXIS_ADMIN_PASSWORD  AXIS_METRICS_TOKEN
+#   AXIS_OUTBOUND_BIND  AXIS_OUTBOUND_BIND_SCOPE  AXIS_HEAD_TIMEOUT
+#   AXIS_BODY_TIMEOUT  AXIS_IDLE_TIMEOUT  AXIS_MAX_CONNECTIONS
+#   AXIS_MAX_CONNECTIONS_PER_ADDRESS
+# The three secrets (database URL, administrator's password, metrics token)
+# can each come from a file instead: AXIS_DATABASE_URL_FILE,
+# AXIS_ADMIN_PASSWORD_FILE and AXIS_METRICS_TOKEN_FILE name it (a container
+# secret, so the value is not in the environment); setting a secret and its
+# _FILE form together is an error.
+#
+# `axisd --healthcheck` asks a running daemon, found by this same
+# configuration, whether it is healthy and exits 0 if it is.
+
+[server]
+# Every page needs a login except the probes (/livez, /readyz, /healthz),
+# /login, /setup and the static assets.  When no account exists yet, axisd
+# prints a one-time setup token in its log (at warning level, so keep
+# log.level at warning or below the first time): open /setup and enter it
+# to create the first administrator.  Restarting prints a new token while no
+# account exists.  Or give the first administrator in [setup] below.
+host = 127.0.0.1
+port = 7800
+
+# Reverse proxies (Traefik, nginx) whose X-Forwarded-For,
+# X-Forwarded-Proto and X-Forwarded-Host headers are believed:
+# comma-separated IP addresses, CIDR ranges and host names.  Empty (the
+# default) believes nobody, which is right when clients connect directly.
+# From any address not listed the headers are ignored.  Only list the
+# proxy itself: anyone in this list can claim to be any client, which
+# defeats login throttling.  axisd logs the list in effect when it starts.
+#
+# A host name (the proxy's container or service name, such as traefik) is
+# looked up through the system's resolver at start, every 30 seconds and
+# when a request arrives from an address that is not trusted, and every
+# address it has (at most 16) is trusted.  Use one when the proxy's address
+# changes each time it is recreated.  A name that does not resolve trusts
+# nothing; its last addresses are kept for 30 seconds after a lookup fails,
+# then dropped.  A name is only as trustworthy as the resolver: use an
+# address or a range when the proxy's address is fixed.  The Reverse
+# proxies page shows what each name stands for now.
+# trusted_proxies = traefik
+# trusted_proxies = 172.18.0.2, 192.0.2.0/24, proxy.example.net
+
+# Session cookies are marked Secure when the request arrived over HTTPS
+# (directly or as a trusted proxy reports it): "auto".  "always" marks them
+# Secure regardless, for an HTTPS-only deployment behind a proxy that is
+# not in trusted_proxies.  Browsers do not send Secure cookies over plain
+# HTTP, so "always" makes logging in over plain HTTP impossible.
+# secure_cookies = auto
+
+# What one request and one client may cost.  These hold from the moment
+# the port is open, also while axisd waits for its database (and until it
+# serves, it answers a request with a body 503 without reading the body).
+# A client has head_timeout seconds to send a request's whole head, then
+# body_timeout for its body; a kept-alive connection is closed after
+# idle_timeout seconds without a new request.  Event streams (live pages)
+# are not cut by these.  At most max_connections are open at once, and at
+# most max_connections_per_address from one public address (an IPv6
+# address counts by its /64); a loopback, private or link-local address is
+# held to the total only.  A connection over a cap is answered 503 with
+# Retry-After (32 at most at once; more are closed), except a health probe
+# from a loopback or private address, which is served.  A trusted proxy is
+# not held to the per-address cap: each client it forwards may have that
+# many requests in flight, event streams and workers not counted.
+# head_timeout = 30
+# body_timeout = 60
+# idle_timeout = 60
+# max_connections = 512
+# max_connections_per_address = 64
+
+[database]
+# Required: axisd will not start without a database.  PostgreSQL 15 or
+# newer.  A libpq URL or "key=value" connection string; the password is
+# never logged.  axisd applies its schema migrations at start-up, before it
+# serves any page (until then it answers only /livez, /readyz and /healthz).
+# url = postgres://axis:secret@localhost:5432/axis
+
+# How many connections to keep open, 1 to 64.  Leave it unset and Axis
+# chooses: what its job queue needs (the [jobs] concurrency added up, plus
+# 2) and 4 more for the pages, the health checks and the worker API, never
+# fewer than 10 (15 with the default concurrency).  If you set it, it must be
+# at least the concurrency added up plus 2, and 4 more is recommended; a
+# smaller one stops axisd at start, before it changes anything in the
+# database, with the number it needs.
+# pool_size = 15
+
+# How long start-up keeps trying to reach the database, trying again after
+# 1, 2, 4 ... up to 30 seconds: "forever" (the default, so the order things
+# start in does not matter), or a number of seconds; 0 tries once and exits
+# if that fails.
+# wait = forever
+
+[log]
+# debug, info, warning or error
+level = info
+
+# text (the default), or json: one JSON object per line, with the members
+# time, level, domain and message.
+# format = text
+
+[setup]
+# The first administrator, created when the daemon starts and no account
+# exists, instead of the setup token: the same rules as the setup page (a
+# username of letters, digits, '.', '_' and '-'; a password of at least 10
+# characters).  Once an account exists these are not used.  Prefer
+# AXIS_ADMIN_PASSWORD_FILE to writing the password here.
+# admin_username = admin
+# admin_password =
+
+[metrics]
+# A token of at least 24 printable characters turns on /metrics (Prometheus
+# text format), answered only to "Authorization: Bearer <token>".  Without
+# one there is no /metrics.  Prefer AXIS_METRICS_TOKEN_FILE.
+# token =
+
+[jobs]
+# How many jobs of each queue run in the daemon at once, as queue:count
+# pairs; a queue not listed gets 1.  Library scans run on the "scan" queue,
+# one job per volume (a volume's roots are scanned one after another), so
+# scan:2 scans two disks at the same time.  Media probes (ffprobe on each
+# new or changed video and audio file) run on the "probe" queue, one job per
+# file; probes of one disk run one at a time, so probe:2 probes two disks at
+# the same time.  The Savings pages' optional sample measurement (ffmpeg
+# encoding short excerpts, for minutes or hours) runs on the "sample" queue:
+# keep it at 1 (one measurement at a time), or 0 to never run one.  The
+# Analysis and Savings refreshes run on "maintenance", one after the other.
+# Looking at the media server (the Compatibility pages: sessions in progress
+# every 30 seconds or so, the play history daily) runs on "compat", one at a
+# time, so that a slow or unreachable media server never holds up the
+# maintenance refreshes; keep it at 1.  Keeping movie and series records
+# current (and cleaning up their artwork) runs on "metadata"; it waits for
+# the providers' request limits, so it has a queue of its own; keep it at 1.
+# Following the download clients (one job that looks at each client every
+# few seconds while something downloads) and importing finished downloads
+# run on "downloads", so that a client that does not answer delays nothing
+# else; keep it at 1.  Searching the indexers for movies and episodes runs on
+# "searches", so that noticing a finished download and importing it never
+# waits behind searches (adding a series can queue dozens, and a slow
+# indexer can take a minute over one); searches:2 runs two at once, which
+# also asks the indexers twice as often.
+# A converted file is checked and put in place on "convert": a check decodes
+# both files and can take as long as the film runs, so it has a queue of its
+# own; keep it at 1.
+# The database pool needs at least the total plus 2 connections: with the
+# defaults (maintenance:1, scan:1, probe:1, sample:1, compat:1, metadata:1,
+# downloads:1, searches:1, convert:1, youtube:1) that is 10 plus 2, and with
+# scan:2 and probe:2 as below, 12 plus 2.  Without a pool_size Axis makes the pool that
+# and 4 more by itself.  With one, set it to at least the total plus 2 (plus
+# 4 is recommended): a pool_size chosen for an earlier version, whose
+# queues were fewer, can be too small now, and axisd then says so at start
+# and changes nothing.
+# concurrency = scan:2,probe:2
+
+# How long running jobs get to finish when the daemon stops, in seconds.
+# A scan stops within about a second; one whose disk has stopped answering
+# is handed back and left behind.  A probe stops within about a second too
+# (ffprobe is killed with its whole process group).
+# grace_period = 30
+
+[outbound]
+# The network interface Axis's own outbound connections are tied to, such
+# as a VPN's: its name (tun0, wg0) or an address it holds (10.8.0.2).  Each
+# connection the binding covers is tied to that interface and its address
+# as it is made (SO_BINDTODEVICE: it leaves by that interface only, whatever
+# the routes say); while the interface is missing, down or has no address,
+# those connections are refused at once and nothing is sent another way.
+# Start-up does not wait for it.  Needs Linux 5.7 or later (or CAP_NET_RAW).
+# Name lookups (DNS) and the database are never covered.  System, Outbound
+# network shows the state; deploy/README.md has the details and the other
+# way, running Axis in a VPN container's network.  Empty (the default) ties
+# nothing.
+# bind = tun0
+
+# What the binding covers: "internet" (the default), the indexers' and the
+# metadata providers' connections to public addresses (an indexer on a local
+# network, such as a Prowlarr beside Axis, is reached directly); or "all",
+# every connection to an indexer, metadata provider, download client or
+# media server except on this machine.
+# bind_scope = internet
+
+[data]
+# The one directory axisd keeps files of its own in: for now, the artwork
+# of movies and series, which can always be fetched again.  It is created if
+# it does not exist (its parent must); it must belong to the user axisd
+# runs as, or to one of its groups that may write it (an arbitrary user id
+# with group 0, a Kubernetes fsGroup), and not be writable by everyone; and
+# axisd does not start when it cannot write there.
+# dir = /var/lib/axis

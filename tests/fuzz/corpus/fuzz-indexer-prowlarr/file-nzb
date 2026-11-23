@@ -1,0 +1,3 @@
+5<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE nzb PUBLIC "-//newzBin//DTD NZB 1.1//EN" "http://www.newzbin.com/DTD/nzb/nzb-1.1.dtd">
+<nzb xmlns="http://www.newzbin.com/DTD/2003/nzb"><file poster="a@b.test" date="1" subject="x"><groups><group>alt.binaries.test</group></groups><segments><segment bytes="100" number="1">id1@x.test</segment></segments></file></nzb>

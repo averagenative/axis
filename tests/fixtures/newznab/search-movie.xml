@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:newznab="http://www.newznab.com/DTD/2010/feeds/attributes/">
+<channel>
+<atom:link href="@ORIGIN@@BASE@/api" rel="self" type="application/rss+xml"/>
+<title>Stand-in Newznab</title>
+<description>Stand-in Newznab API results</description>
+<link>@ORIGIN@/</link>
+<language>en-gb</language>
+<webMaster>admin@indexer.test (Stand-in Newznab)</webMaster>
+<category/>
+<image>
+  <url>@ORIGIN@/themes/shared/img/banner.jpg</url>
+  <title>Stand-in Newznab</title>
+  <link>@ORIGIN@/</link>
+  <description>Visit Stand-in Newznab</description>
+</image>
+<newznab:response offset="0" total="10"/>
+<newznab:apilimits apicurrent="12" apimax="5000" grabcurrent="3" grabmax="100" apioldesttime="Sat, 02 Mar 2024 08:00:00 +0000" graboldesttime="Sat, 02 Mar 2024 08:05:00 +0000"/>
+<!-- 1. Every field: the file by t=get on the indexer's own address. -->
+<item>
+  <title>Hearth.1995.1080p.BluRay.x264-GRP</title>
+  <guid isPermaLink="true">@ORIGIN@/details/aaaa1111</guid>
+  <link>@FILES@@BASE@/api?t=get&amp;id=nzb-aaaa1111&amp;apikey=@KEY@</link>
+  <comments>@ORIGIN@/details/aaaa1111#comments</comments>
+  <pubDate>Sat, 02 Mar 2024 10:11:12 +0000</pubDate>
+  <category>Movies &gt; HD</category>
+  <description>Hearth.1995.1080p.BluRay.x264-GRP</description>
+  <enclosure url="@FILES@@BASE@/api?t=get&amp;id=nzb-aaaa1111&amp;apikey=@KEY@" length="8923441152" type="application/x-nzb"/>
+  <newznab:attr name="category" value="2000"/>
+  <newznab:attr name="category" value="2040"/>
+  <newznab:attr name="size" value="8923441152"/>
+  <newznab:attr name="files" value="96"/>
+  <newznab:attr name="poster" value="poster@example.test"/>
+  <newznab:attr name="grabs" value="412"/>
+  <newznab:attr name="comments" value="2"/>
+  <newznab:attr name="password" value="0"/>
+  <newznab:attr name="usenetdate" value="Sat, 02 Mar 2024 09:58:00 +0000"/>
+  <newznab:attr name="imdb" value="0600001"/>
+  <newznab:attr name="imdbtitle" value="Hearth"/>
+  <newznab:attr name="imdbyear" value="1995"/>
+</item>
+<!-- 2. The other address form (getnzb), a date with another zone, a
+     size from the enclosure only, an IMDb identifier with "tt". -->
+<item>
+  <title>Hearth.1995.2160p.UHD.BluRay.x265-TRK</title>
+  <guid isPermaLink="false">bbbb2222</guid>
+  <link>@FILES@/getnzb/nzb-bbbb2222.nzb&amp;i=1&amp;r=@KEY@</link>
+  <pubDate>Fri, 01 Mar 2024 21:30:00 -0500</pubDate>
+  <enclosure url="@FILES@/getnzb/nzb-bbbb2222.nzb&amp;i=1&amp;r=@KEY@" length="61203456789" type="application/x-nzb"/>
+  <newznab:attr name="category" value="2045"/>
+  <newznab:attr name="imdbid" value="tt0600001"/>
+</item>
+<!-- 3. The same guid as 2: one result of this indexer, given twice. -->
+<item>
+  <title>Hearth.1995.2160p.UHD.BluRay.x265-TRK</title>
+  <guid isPermaLink="false">bbbb2222</guid>
+  <enclosure url="@FILES@/getnzb/nzb-bbbb2222.nzb&amp;i=1&amp;r=@KEY@" length="61203456789" type="application/x-nzb"/>
+</item>
+<!-- 4. Its file is somewhere else: left out, and counted. -->
+<item>
+  <title>Hearth.1995.720p.WEB-DL-ELSE</title>
+  <guid>cccc3333</guid>
+  <enclosure url="https://files.elsewhere.test/get/cccc3333?key=@KEY@" length="3200000000" type="application/x-nzb"/>
+  <newznab:attr name="size" value="3200000000"/>
+</item>
+<!-- 5. No title: skipped. -->
+<item>
+  <guid>dddd4444</guid>
+  <enclosure url="@FILES@@BASE@/api?t=get&amp;id=nzb-dddd4444&amp;apikey=@KEY@" length="1" type="application/x-nzb"/>
+</item>
+<!-- 6. No way to fetch it: left out, and counted. -->
+<item>
+  <title>Hearth.1995.DVDRip.XviD-NOFILE</title>
+  <guid>eeee5555</guid>
+  <newznab:attr name="size" value="700000000"/>
+</item>
+<!-- 7. A name with markup, written as entities, and a CDATA section in its
+     description. -->
+<item>
+  <title>Hearth.1995.&lt;b&gt;bold&lt;/b&gt;.1080p-MARK</title>
+  <guid>ffff6666</guid>
+  <description><![CDATA[<p>Hearth & more</p>]]></description>
+  <enclosure url="@FILES@@BASE@/api?t=get&amp;id=nzb-ffff6666&amp;apikey=@KEY@" length="5000000000" type="application/x-nzb"/>
+  <newznab:attr name="size" value="5000000000"/>
+</item>
+<!-- 8. Passworded, by the attribute. -->
+<item>
+  <title>Hearth.1995.1080p.BluRay.DTS-PWD</title>
+  <guid>gggg7777</guid>
+  <enclosure url="@FILES@@BASE@/api?t=get&amp;id=nzb-gggg7777&amp;apikey=@KEY@" length="9100000000" type="application/x-nzb"/>
+  <newznab:attr name="size" value="9100000000"/>
+  <newznab:attr name="password" value="1"/>
+</item>
+<!-- 9. Every optional field out of range or of the wrong form. -->
+<item>
+  <title>Hearth.1995.1080p.WRONG-FIELDS</title>
+  <guid>hhhh8888</guid>
+  <pubDate>yesterday</pubDate>
+  <enclosure url="@FILES@@BASE@/api?t=get&amp;id=nzb-hhhh8888&amp;apikey=@KEY@" length="lots" type="application/x-nzb"/>
+  <newznab:attr name="size" value="-5"/>
+  <newznab:attr name="grabs" value="many"/>
+  <newznab:attr name="category" value="0"/>
+  <newznab:attr name="imdb" value="abc"/>
+  <newznab:attr name="tvdbid" value="9999999999999"/>
+</item>
+<!-- 10. A numeric character reference and an apostrophe entity. -->
+<item>
+  <title>Hearth&#46;1995&#x2E;Director&apos;s&#46;Cut-NUM</title>
+  <guid>iiii9999</guid>
+  <pubDate>Sat, 2 Mar 2024 10:11 GMT</pubDate>
+  <enclosure url="@FILES@@BASE@/api?t=get&amp;id=nzb-iiii9999&amp;apikey=@KEY@" length="7000000000" type="application/x-nzb"/>
+</item>
+</channel>
+</rss>

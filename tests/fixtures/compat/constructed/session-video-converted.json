@@ -1,0 +1,11 @@
+{"_constructed":"a local conversion of HEVC to H.264: the device did not take HEVC","MediaContainer":{"size":1,"Metadata":[{
+"ratingKey":"602","librarySectionID":"1","type":"movie","title":"Invented HEVC Film",
+"Media":[{"id":3,"bitrate":9000,"width":1920,"height":1080,"audioCodec":"aac","videoCodec":"hevc","container":"mkv","Part":[{"id":3,"file":"/data/movies/Invented HEVC (2019)/Invented HEVC (2019).mkv","container":"mkv","decision":"transcode","protocol":"hls","Stream":[
+{"id":20,"streamType":1,"decision":"transcode","codec":"hevc","profile":"main 10","bitDepth":10,"width":1920,"height":1080,"colorTrc":"bt709"},
+{"id":21,"streamType":2,"decision":"copy","codec":"aac","channels":2,"selected":true}
+]}]}],
+"Player":{"machineIdentifier":"client-ios-1","platform":"iOS","product":"Plex for iOS","state":"playing","title":"Old tablet","local":true,"relayed":false},
+"Session":{"id":"sess-video-1","bandwidth":9000,"location":"lan"},
+"TranscodeSession":{"sourceVideoCodec":"hevc","sourceAudioCodec":"aac","videoDecision":"transcode","audioDecision":"copy","protocol":"hls","container":"mkv","videoCodec":"h264","audioCodec":"aac","width":1920,"height":1080},
+"User":{"id":"2","title":"Bob Example"}
+}]}}

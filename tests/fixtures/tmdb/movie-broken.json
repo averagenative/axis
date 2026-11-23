@@ -1,0 +1,17 @@
+{
+  "id": 6003,
+  "title": "The Mazework",
+  "original_title": 42,
+  "overview": ["not", "text"],
+  "runtime": "136 minutes",
+  "status": "Wibble",
+  "release_date": "1999-13-45",
+  "poster_path": "https://evil.example/t/p/original/madeUpPoster000000000006003.jpg",
+  "backdrop_path": "/../../etc/passwd.jpg",
+  "genres": "Action",
+  "original_language": "English",
+  "alternative_titles": { "titles": "none" },
+  "external_ids": { "imdb_id": 12345, "tvdb_id": "abc" },
+  "release_dates": { "results": [ { "iso_3166_1": "US", "release_dates": "soon" } ] },
+  "images": { "secure_base_url": "https://evil.example/" }
+}

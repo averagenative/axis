@@ -1,0 +1,30 @@
+[
+  {
+    "Name": "Mixed",
+    "Locations": ["/media/mixed", "/media/mixed-extra"],
+    "ItemId": "aa000000000000000000000000000001"
+  },
+  {
+    "Name": "Shows",
+    "Locations": ["/media/shows"],
+    "CollectionType": "tvshows",
+    "ItemId": "aa000000000000000000000000000002"
+  },
+  {
+    "Name": "Shows again",
+    "Locations": ["/media/shows"],
+    "CollectionType": "tvshows",
+    "ItemId": "aa000000000000000000000000000003"
+  },
+  {
+    "Name": "Nothing to tell it by",
+    "Locations": ["/media/x"],
+    "CollectionType": "movies"
+  },
+  {
+    "Name": "Music",
+    "Locations": ["/media/music", 7, null],
+    "CollectionType": "music",
+    "ItemId": "aa000000000000000000000000000004"
+  }
+]

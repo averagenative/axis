@@ -1,0 +1,214 @@
+# compose.yaml - Axis with its database, Prowlarr, SABnzbd and Deluge
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# The whole acquisition stack on one host.  The rule this file is built
+# around: downloads and library are on ONE disk and reached through ONE
+# mount (/data), at the same path in every container that touches them, so
+# that an import is a rename (or, for a torrent left seeding, a hardlink:
+# instant, no extra space) rather than a copy.
+# README.md shows the layout and the common wrong one.
+#
+# Copy this directory, change the lines marked EDIT, make the secret files
+# (README.md), then:   docker compose up -d   (or: podman compose up -d)
+
+x-axis-user: &axis-user "${PUID:-1000}:${PGID:-1000}"
+
+services:
+  axis:
+    # EDIT: the published image, or AXIS_IMAGE=localhost/axis:latest for one
+    # built with `make container`.
+    image: ${AXIS_IMAGE:-ghcr.io/averagenative/axis:0.1.0-rc1}
+    restart: unless-stopped
+    # The same user and group as the download clients below, so that the
+    # files each one writes the others can read, link and rename.
+    user: *axis-user
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 512
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,mode=1777
+    environment:
+      AXIS_DATABASE_URL_FILE: /run/secrets/axis_database_url
+      AXIS_LOG_LEVEL: info
+      # The first administrator from a secret file instead of the setup
+      # token in the log (remove both lines once it exists, if you like).
+      AXIS_ADMIN_USERNAME: admin
+      AXIS_ADMIN_PASSWORD_FILE: /run/secrets/axis_admin_password
+    secrets:
+      - axis_database_url
+      - axis_admin_password
+    ports:
+      - "127.0.0.1:${AXIS_PORT:-7800}:7800"
+    volumes:
+      # EDIT: the one disk that holds downloads/ and media/ (see README.md).
+      # Writable: imports write into media/.  Axis itself still writes
+      # nothing until the Storage settings allow it (storage.read_only).
+      - /path/to/data:/data
+      - axis-data:/var/lib/axis
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/usr/bin/axisd", "--healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    stop_grace_period: 45s
+    networks:
+      - private
+      - apps
+    # Through a VPN (deploy/README.md, "Sending Axis's traffic through a
+    # VPN"), one of two ways.  1: in the VPN container's network (the
+    # commented "vpn" service below): delete "ports:" and "networks:" above
+    # and uncomment this; everything Axis sends, name lookups included, then
+    # goes where that container sends it.
+    # network_mode: "service:vpn"
+    # 2: where Axis sees the VPN's interface itself (on the host, or inside
+    # the VPN container's network as in 1), tie its indexer and metadata
+    # connections to it; while it is down they are refused, never sent
+    # another way.  Add to "environment:" above:
+    #   AXIS_OUTBOUND_BIND: tun0
+    #   AXIS_OUTBOUND_BIND_SCOPE: internet    # or all
+
+  # The VPN container for way 1 above (gluetun; EDIT its provider settings
+  # from its own documentation, and pin a version).  Axis's port is
+  # published here, and the subnets of the networks it joins are let
+  # through its firewall, so that Axis still reaches PostgreSQL, Prowlarr and
+  # the download clients.  If "postgres" does not resolve through its DNS,
+  # give the database URL the address instead.
+  # vpn:
+  #   image: docker.io/qmcgaw/gluetun:latest
+  #   restart: unless-stopped
+  #   cap_add:
+  #     - NET_ADMIN
+  #   devices:
+  #     - /dev/net/tun:/dev/net/tun
+  #   environment:
+  #     VPN_SERVICE_PROVIDER: EDIT
+  #     FIREWALL_OUTBOUND_SUBNETS: 172.16.0.0/12
+  #   ports:
+  #     - "127.0.0.1:${AXIS_PORT:-7800}:7800"
+  #   networks:
+  #     - private
+  #     - apps
+
+  postgres:
+    image: docker.io/library/postgres:17
+    restart: unless-stopped
+    user: "999:999"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 512
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,mode=1777
+      - /var/run/postgresql:rw,noexec,nosuid,size=1m,mode=1777
+    environment:
+      POSTGRES_USER: axis
+      POSTGRES_DB: axis
+      POSTGRES_PASSWORD_FILE: /run/secrets/axis_db_password
+      # Page checksums; applies only when the database is first created.
+      POSTGRES_INITDB_ARGS: --data-checksums
+    secrets:
+      - axis_db_password
+    volumes:
+      - axis-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "--username=axis", "--dbname=axis"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - private
+
+  # The indexer manager.  Axis asks it at http://prowlarr:9696 (Indexers
+  # page); it needs no data mount.  The linuxserver.io images start as root
+  # and drop to PUID/PGID themselves, so they keep their capabilities and a
+  # writable root filesystem: the hardening above is Axis's and PostgreSQL's.
+  prowlarr:
+    # EDIT: pin a version you have tested.
+    image: lscr.io/linuxserver/prowlarr:latest
+    restart: unless-stopped
+    environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      TZ: ${TZ:-Etc/UTC}
+    volumes:
+      - prowlarr-config:/config
+    ports:
+      - "127.0.0.1:${PROWLARR_PORT:-9696}:9696"
+    networks:
+      - apps
+
+  # Usenet.  In SABnzbd's Folders settings: temporary /data/downloads/usenet/incomplete,
+  # completed /data/downloads/usenet/complete.  Axis reaches it at
+  # http://sabnzbd:8080.
+  sabnzbd:
+    # EDIT: pin a version you have tested.
+    image: lscr.io/linuxserver/sabnzbd:latest
+    restart: unless-stopped
+    environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      TZ: ${TZ:-Etc/UTC}
+    volumes:
+      - sabnzbd-config:/config
+      # EDIT: the same disk, at the same path, as in axis.
+      - /path/to/data:/data
+    ports:
+      - "127.0.0.1:${SABNZBD_PORT:-8080}:8080"
+    networks:
+      - apps
+
+  # Torrents.  In Deluge's Downloads preferences: download to
+  # /data/downloads/torrents.  Axis reaches its web interface at
+  # http://deluge:8112 and removes a torrent once it is imported (Axis is
+  # not a seedbox; see Settings, Imports).
+  deluge:
+    # EDIT: pin a version you have tested.
+    image: lscr.io/linuxserver/deluge:latest
+    restart: unless-stopped
+    environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      TZ: ${TZ:-Etc/UTC}
+    volumes:
+      - deluge-config:/config
+      # EDIT: the same disk, at the same path, as in axis.
+      - /path/to/data:/data
+    ports:
+      - "127.0.0.1:${DELUGE_PORT:-8112}:8112"
+      # The torrent port, offered to the network (forward it on your router).
+      - "${TORRENT_PORT:-6881}:6881"
+      - "${TORRENT_PORT:-6881}:6881/udp"
+    networks:
+      - apps
+
+networks:
+  # Axis and PostgreSQL only: nothing else reaches the database.
+  private: {}
+  # Axis and the services it drives.
+  apps: {}
+
+volumes:
+  axis-db:
+  axis-data:
+  prowlarr-config:
+  sabnzbd-config:
+  deluge-config:
+
+# ./secrets, made as README.md says.
+secrets:
+  axis_db_password:
+    file: ./secrets/axis_db_password
+  axis_database_url:
+    file: ./secrets/axis_database_url
+  axis_admin_password:
+    file: ./secrets/axis_admin_password

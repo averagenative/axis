@@ -1,0 +1,39 @@
+{
+  "_id": "000000000000000000007100",
+  "air_date": "2009-02-17",
+  "episodes": [
+    {
+      "air_date": "2009-02-17",
+      "episode_number": 1,
+      "episode_type": "standard",
+      "id": 970102,
+      "name": "Good Seam Bad Seam",
+      "overview": "A short from the series' web content.",
+      "production_code": "",
+      "runtime": 3,
+      "season_number": 0,
+      "show_id": 7101,
+      "still_path": null,
+      "vote_average": 6.5,
+      "vote_count": 3
+    },
+    {
+      "air_date": "2009-03-01",
+      "episode_number": 2,
+      "episode_type": "standard",
+      "id": 970103,
+      "name": "Season 2 Preview",
+      "overview": "",
+      "production_code": "",
+      "runtime": 2,
+      "season_number": 0,
+      "show_id": 7101
+    }
+  ],
+  "name": "Specials",
+  "overview": "",
+  "id": 71000,
+  "poster_path": "/madeUpPoster000000000007100.jpg",
+  "season_number": 0,
+  "vote_average": 0.0
+}

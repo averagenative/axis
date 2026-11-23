@@ -1,0 +1,105 @@
+{
+  "_id": "000000000000000000007111",
+  "air_date": "2008-01-20",
+  "episodes": [
+    {
+      "air_date": "2008-01-20",
+      "episode_number": 1,
+      "episode_type": "standard",
+      "id": 970005,
+      "name": "Pilot",
+      "overview": "Walden Grey takes a hammer to the cellar floor and finds the first seam, and his neighbour Jesse Pickard sees the light from the street.",
+      "production_code": "",
+      "runtime": 58,
+      "season_number": 1,
+      "show_id": 7101,
+      "still_path": "/madeUpStill0000000000970001.jpg",
+      "vote_average": 8.1,
+      "vote_count": 300
+    },
+    {
+      "air_date": "2008-01-27",
+      "episode_number": 2,
+      "episode_type": "standard",
+      "id": 970006,
+      "name": "Fox in the Box...",
+      "overview": "Walden and Jesse try to hide the spoil heap.",
+      "production_code": "",
+      "runtime": 48,
+      "season_number": 1,
+      "show_id": 7101,
+      "still_path": "/madeUpStill0000000000970002.jpg",
+      "vote_average": 8.0,
+      "vote_count": 250
+    },
+    {
+      "air_date": "2008-02-10",
+      "episode_number": 3,
+      "episode_type": "standard",
+      "id": 970007,
+      "name": "...And the Box's in the Lake",
+      "overview": "Walden has to choose between the seam and the house.",
+      "production_code": "",
+      "runtime": null,
+      "season_number": 1,
+      "show_id": 7101,
+      "still_path": null,
+      "vote_average": 8.1,
+      "vote_count": 240
+    },
+    {
+      "air_date": null,
+      "episode_number": 4,
+      "episode_type": "standard",
+      "id": 970008,
+      "name": "Lantern Man",
+      "overview": "",
+      "production_code": "",
+      "runtime": 47,
+      "season_number": 1,
+      "show_id": 7101
+    },
+    {
+      "air_date": "2008-02-24",
+      "episode_number": 5,
+      "id": 970009,
+      "name": 12345,
+      "runtime": 47,
+      "season_number": 1
+    },
+    {
+      "air_date": "2008-03-02",
+      "episode_number": "6",
+      "id": 970010,
+      "name": "A number given as text is skipped",
+      "runtime": 47
+    },
+    {
+      "air_date": "2008-03-09",
+      "id": 970011,
+      "name": "No number: skipped"
+    },
+    {
+      "air_date": "2008-03-09",
+      "episode_number": 2,
+      "id": 970012,
+      "name": "Number two again: skipped",
+      "runtime": 47
+    },
+    {
+      "air_date": "2008-03-09",
+      "episode_number": 7,
+      "id": 970013,
+      "name": "A No-Loose-Ends-Type Deal",
+      "overview": "Walden accepts the money for the first cart of slate.",
+      "runtime": 47,
+      "season_number": 1
+    }
+  ],
+  "name": "Season 1",
+  "overview": "The first season of Cracking Slate.",
+  "id": 71002,
+  "poster_path": "/madeUpPoster000000000007111.jpg",
+  "season_number": 1,
+  "vote_average": 8.3
+}

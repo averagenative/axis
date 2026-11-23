@@ -1,0 +1,6 @@
+=nameless
+bad name=x
+a=b;c=d
+a=has space
+a=b; max-age=-5
+SID=x; Max-Age=0x10

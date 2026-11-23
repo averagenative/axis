@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Axis tab icon: the mark on a near-black rounded tile, with fixed
+     colours, because a tab icon cannot see the page's theme.  The line is
+     thicker and the hub larger than in the mark so the shape holds at 16
+     pixels.
+     SPDX-License-Identifier: AGPL-3.0-or-later -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+	<rect width="64" height="64" rx="14" fill="#170000"/>
+	<g transform="translate(4.8 4.8) scale(0.85)">
+		<path d="M32 32 L32 3.3 A28.7 28.7 0 0 1 40.87 4.7 Z" fill="#640000"/>
+		<path d="M32 32 L40.87 4.7 A28.7 28.7 0 0 1 48.87 8.78 Z" fill="#8f0000"/>
+		<path d="M32 32 L48.87 8.78 A28.7 28.7 0 0 1 55.5 15.54 Z" fill="#b00000"/>
+		<path d="M32 32 L32 60.7 A28.7 28.7 0 0 1 23.13 59.3 Z" fill="#640000"/>
+		<path d="M32 32 L23.13 59.3 A28.7 28.7 0 0 1 15.13 55.22 Z" fill="#8f0000"/>
+		<path d="M32 32 L15.13 55.22 A28.7 28.7 0 0 1 8.5 48.46 Z" fill="#b00000"/>
+		<path d="M6.6 49.8 L57.4 14.2" fill="none" stroke="#e30000" stroke-width="5"/>
+		<circle cx="32" cy="32" r="4.6" fill="#170000"/>
+	</g>
+</svg>

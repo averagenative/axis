@@ -1,0 +1,38 @@
+{
+  "results": [
+    {
+      "id": "101",
+      "kind": "film",
+      "title": "The Mazework",
+      "year": 1999,
+      "overview": "A cartographer learns that the maze she maps redraws itself, and follows the newest corridor.",
+      "poster": "/p101.png",
+      "ids": { "imdb": "tt0600003" }
+    },
+    {
+      "id": "102",
+      "kind": "film",
+      "title": "The Mazework Reloaded",
+      "year": 2003,
+      "overview": "The cartographer and her apprentice race to map the maze before it reaches the town.",
+      "poster": "/p102.png",
+      "ids": { "imdb": "tt0680000" }
+    },
+    {
+      "id": 103,
+      "title": "The Mazework Revolutions",
+      "year": 2003,
+      "overview": "The maze and the town come to terms."
+    },
+    {
+      "id": "104",
+      "overview": "An entry without a title is left out."
+    },
+    {
+      "id": "301",
+      "kind": "series",
+      "title": "A series among films is left out"
+    },
+    "not an object"
+  ]
+}

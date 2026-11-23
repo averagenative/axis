@@ -1,0 +1,147 @@
+# images.yml - build, sign and publish the Axis container images
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# The only workflow this repository has, and the only one it may have: it
+# builds images.  Tests and the other gates are run locally (make check, make
+# fuzz, make check-container); nothing here runs on a pull request or a
+# branch push.
+#
+# On a version tag (v1.2.3, or a pre-release such as v1.2.3-rc1), or when
+# started by hand from the Actions tab, it builds deploy/Containerfile for
+# linux/amd64 and linux/arm64 (arm64 under QEMU emulation, so slowly: the
+# build stage compiles and runs the unit tests that need no database), pushes
+# the image to the GitHub Container Registry, and signs it with cosign,
+# keyless (GitHub's OIDC identity, recorded in the public Sigstore
+# transparency log).
+#
+# Tag policy (deploy/README.md, "Published images"):
+#   v1.2.3-rc1 pushed  ->  1.2.3-rc1 and rc (a pre-release: any version tag
+#                          with a hyphen suffix; never latest, never 1.2)
+#   v1.2.3 pushed      ->  1.2.3, 1.2 and latest
+#   started by hand    ->  on a version tag, what a push of that tag gives;
+#                          anywhere else sha-<commit> only, the only name
+#                          such a build can have
+#
+# The version in the tag must be config.mk's: the image build stops when the
+# program it built reports another version (deploy/Containerfile).
+#
+# The actions are referred to by major version tag.  They should be pinned to
+# full commit SHAs (with the version in a comment) before the first release:
+# the SHAs were not known for certain when this file was written.
+
+name: images
+
+on:
+  push:
+    # A filter pattern matches the whole tag name, so the pre-releases need
+    # a pattern of their own.
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-*"
+  workflow_dispatch:
+
+# Nothing by default; each job asks for what it needs.
+permissions: {}
+
+concurrency:
+  group: images-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/averagenative/axis
+
+jobs:
+  image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    permissions:
+      contents: read      # check out the source
+      packages: write     # push to ghcr.io
+      id-token: write     # cosign keyless: the workflow's OIDC token
+    steps:
+      # TODO: pin to a commit SHA.
+      - name: Check out (with the htmx-glib submodule)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      # TODO: pin to a commit SHA.
+      - name: QEMU, for arm64
+        uses: docker/setup-qemu-action@v3
+
+      # TODO: pin to a commit SHA.
+      - name: Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # TODO: pin to a commit SHA.
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # The tag policy in the header.  type=semver gives nothing off a tag,
+      # and leaves {{major}}.{{minor}} out for a pre-release by itself; rc
+      # and latest are told apart by the hyphen in the tag's name; the commit
+      # names a build only where no version tag does.  The first line is
+      # also the `version` output, which the build below is given: 1.2.3-rc1
+      # or 1.2.3 on a tag, sha-<commit> anywhere else.
+      # TODO: pin to a commit SHA.
+      - name: Tags and labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          flavor: |
+            latest=false
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=rc,enable=${{ startsWith(github.ref, 'refs/tags/v') && contains(github.ref_name, '-') }}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
+            type=sha,format=short,enable=${{ !startsWith(github.ref, 'refs/tags/v') }}
+          labels: |
+            org.opencontainers.image.title=Axis
+            org.opencontainers.image.licenses=AGPL-3.0-or-later
+
+      # yt-dlp is the newest release of the day of the build: the date as a
+      # build argument makes its stage run again whatever layers are cached
+      # (deploy/Containerfile, the ytdlp stage).
+      - name: The day of the build
+        id: day
+        run: echo "day=$(date -u +%F)" >> "$GITHUB_OUTPUT"
+
+      # TODO: pin to a commit SHA.
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Containerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+            AXIS_VERSION=${{ steps.meta.outputs.version }}
+            SOURCE_URL=${{ github.server_url }}/${{ github.repository }}
+            YTDLP_REFRESH=${{ steps.day.outputs.day }}
+          provenance: true
+          sbom: true
+
+      # TODO: pin to a commit SHA.
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      # Signs the digest, not a tag, so every tag of this build is covered.
+      # Verify with:
+      #   cosign verify ghcr.io/averagenative/axis:0.1.0-rc1 \
+      #     --certificate-identity-regexp '^https://github.com/averagenative/axis/' \
+      #     --certificate-oidc-issuer https://token.actions.githubusercontent.com
+      - name: Sign
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: cosign sign --yes "${IMAGE}@${DIGEST}"

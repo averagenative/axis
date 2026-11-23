@@ -1,0 +1,20 @@
+3{
+  "id": "201",
+  "kind": "series",
+  "title": "Fixture Street",
+  "year": 2021,
+  "overview": "A street of houses, each with a story that runs for a season.",
+  "runtime": 45,
+  "status": "continuing",
+  "genres": ["Drama"],
+  "language": "en",
+  "first_air_date": "2021-09-01",
+  "last_air_date": "2026-10-30",
+  "poster": "/p201.png",
+  "ids": { "imdb": "tt1234567", "tvdb": "350001" },
+  "seasons": [
+    { "number": 1, "name": "Season 1", "air_date": "2021-09-01", "episodes": 3 },
+    { "number": 2, "name": "Season 2", "air_date": "2026-09-04", "episodes": 2 },
+    { "number": 2, "name": "A season listed twice is left out" }
+  ]
+}

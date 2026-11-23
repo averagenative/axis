@@ -1,0 +1,22 @@
+[
+  {"hash": "2020202020202020202020202020202020202020", "name": "Strings.As.Numbers", "category": "axis", "state": "downloading",
+   "size": "2000", "progress": "0.5", "dlspeed": "300", "eta": "60", "save_path": "/downloads"},
+  {"hash": "2121212121212121212121212121212121212121", "name": "Garbage.Sizes", "category": "axis", "state": "downloading",
+   "size": "N/A", "total_size": null, "progress": "abc", "dlspeed": -5, "eta": "soon", "save_path": "/downloads"},
+  {"hash": "2222222222222222222222222222222222222222", "name": "Out.Of.Range", "category": "axis", "state": "downloading",
+   "size": 99999999999999999, "total_size": 99999999999999999, "progress": 7, "dlspeed": 99999999999999, "eta": 99999999999},
+  {"hash": "2323232323232323232323232323232323232323", "name": "No.Progress", "category": "axis", "state": "downloading",
+   "size": 1000, "dlspeed": 0, "eta": 0},
+  {"hash": "2424242424242424242424242424242424242424", "name": "Same.Hash.Once", "category": "axis", "state": "queuedDL", "size": 10},
+  {"hash": "2424242424242424242424242424242424242424", "name": "Same.Hash.Again", "category": "axis", "state": "queuedDL", "size": 10},
+  {"hash": "2525252525252525252525252525252525252525", "name": "State.Not.A.Word", "category": "axis", "state": 5, "size": 10},
+  {"hash": "2626262626262626262626262626262626262626", "name": "Error.With.Nothing", "category": "axis", "state": "error"},
+  {"hash": "2727272727272727272727272727272727272727", "category": "axis", "state": "downloading", "size": 10},
+  {"hash": "2828282828282828282828282828282828282828", "name": 12345, "category": "axis", "state": "downloading", "size": 10},
+  {"hash": "292929292929292929292929292929292929292", "name": "Short.Hash", "category": "axis", "state": "downloading", "size": 10},
+  {"hash": 3030303030303030303030303030303030303030, "name": "Number.Hash", "category": "axis", "state": "downloading", "size": 10},
+  {"hash": "zz31313131313131313131313131313131313131", "name": "Not.Hex.Hash", "category": "axis", "state": "downloading", "size": 10},
+  {"hash": "3232323232323232323232323232323232323232", "name": "Number.Category", "category": 7, "state": "downloading", "size": 10},
+  {"hash": "3333333333333333333333333333333333333333", "name": "Null.Category", "category": null, "state": "downloading", "size": 10},
+  "a string", 17, null, [], true
+]

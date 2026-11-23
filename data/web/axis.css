@@ -1,0 +1,5980 @@
+/*
+ * axis.css - the Axis web interface stylesheet
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ *
+ * Hand-written, no framework.  This file holds no colour value at all:
+ * every colour is a custom property, and the themes that set them are in
+ * themes.css (the tests scan this file for a colour literal).  The
+ * content security policy forbids inline styles, so pages use these
+ * classes and nothing else.
+ *
+ * Restraint is the style: thin lines, tonal fills, small corners, no
+ * gradients and no shadows.  Three rules carry most of the layout:
+ *
+ *  - the header is two rows: the brand, a few primary tabs and the
+ *    user's corner on one line that does not wrap; the open tab's pages
+ *    beneath;
+ *  - a data table lays its columns out from their roles (col.col-*), never
+ *    from what is in them, so tables of one kind line up;
+ *  - every field, drop-down and button has one height and one box, and a
+ *    row of them shares a bottom edge.
+ */
+
+:root {
+	--font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+	--mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+	--gutter: 1rem;
+	--radius: 0.25rem;
+	--max-width: 80rem;
+	/* One height for fields, drop-downs and buttons; a smaller one for
+	 * dense places (filter bars, table rows). */
+	--control-height: 2.25rem;
+	--control-height-small: 1.875rem;
+	/* The one spacing step between controls, and between a label and its
+	 * control. */
+	--space: 0.75rem;
+	--label-gap: 0.375rem;
+}
+
+*,
+*::before,
+*::after {
+	box-sizing: border-box;
+}
+
+html {
+	-webkit-text-size-adjust: 100%;
+	text-size-adjust: 100%;
+	background: var(--bg);
+	color: var(--text);
+}
+
+body {
+	margin: 0;
+	min-height: 100vh;
+	display: flex;
+	flex-direction: column;
+	background: var(--bg);
+	color: var(--text);
+	font-family: var(--font);
+	font-size: 1rem;
+	line-height: 1.5;
+}
+
+a {
+	color: var(--link);
+	text-underline-offset: 0.15em;
+}
+
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+summary:focus-visible {
+	outline: 2px solid var(--focus);
+	outline-offset: 2px;
+}
+
+h1,
+h2,
+h3 {
+	line-height: 1.25;
+	margin: 0 0 0.75rem;
+}
+
+h1 {
+	font-size: 1.625rem;
+	font-weight: 600;
+}
+
+h2 {
+	font-size: 1.125rem;
+	font-weight: 600;
+}
+
+h3 {
+	font-size: 1rem;
+	font-weight: 600;
+	margin-top: 1.25rem;
+}
+
+p {
+	margin: 0 0 0.75rem;
+}
+
+code {
+	font-family: var(--mono);
+	font-size: 0.875em;
+	background: var(--code-bg);
+	padding: 0.1em 0.35em;
+	border-radius: 0.125rem;
+}
+
+/* ── The mark ───────────────────────────────────────────────── */
+
+/*
+ * The mark is drawn inline in the page (see src/web/axis-web-logo.c) so
+ * that the theme can colour it: its geometry is in attributes and these
+ * four classes carry the colours.
+ */
+.logo {
+	display: block;
+	flex: none;
+	width: 1.75rem;
+	height: 1.75rem;
+}
+
+.logo-step-1 {
+	fill: var(--logo-step-1);
+}
+
+.logo-step-2 {
+	fill: var(--logo-step-2);
+}
+
+.logo-step-3 {
+	fill: var(--logo-step-3);
+}
+
+.logo-line {
+	fill: none;
+	stroke: var(--logo-line);
+}
+
+.lockup {
+	display: flex;
+	align-items: center;
+	gap: 1rem;
+	margin: 0 0 1.5rem;
+}
+
+.lockup .logo {
+	width: 4.5rem;
+	height: 4.5rem;
+}
+
+.lockup-name {
+	font-size: 2.25rem;
+	font-weight: 700;
+	letter-spacing: 0.04em;
+	line-height: 1;
+}
+
+/* ── Page frame ─────────────────────────────────────────────── */
+
+.skip-link {
+	position: absolute;
+	left: -999px;
+	top: 0;
+	background: var(--accent);
+	color: var(--accent-text);
+	padding: 0.5rem 1rem;
+	z-index: 10;
+}
+
+.skip-link:focus {
+	left: 0;
+}
+
+.bar {
+	max-width: var(--max-width);
+	margin: 0 auto;
+	padding: 0 var(--gutter);
+}
+
+.site-header {
+	background: var(--surface);
+	border-bottom: 1px solid var(--logo-step-2);
+}
+
+/*
+ * The top row: the brand, the primary tabs, the place kept for the title
+ * search, the running-jobs indicator and the user's corner.  Its height is
+ * the brand's; everything in it is centred on one line, and nothing in it
+ * wraps.  The tabs fill the row's height so the open one's rule sits on
+ * the row's lower edge, above its pages.
+ */
+.top-bar {
+	display: flex;
+	flex-wrap: nowrap;
+	align-items: center;
+	gap: 0 1.5rem;
+	min-height: 4rem;
+	white-space: nowrap;
+}
+
+.brand {
+	display: inline-flex;
+	align-items: center;
+	flex: none;
+	gap: 0.625rem;
+	color: var(--text);
+	text-decoration: none;
+	line-height: 1;
+}
+
+.brand .logo {
+	width: 2.75rem;
+	height: 2.75rem;
+}
+
+.brand-name {
+	font-size: 1.5rem;
+	font-weight: 700;
+	letter-spacing: 0.04em;
+}
+
+.nav-list {
+	display: flex;
+	flex-wrap: nowrap;
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+
+.nav-list li {
+	display: flex;
+}
+
+.nav-list a {
+	display: flex;
+	align-items: center;
+	border-top: 2px solid transparent;
+	border-bottom: 2px solid transparent;
+	color: var(--text-muted);
+	text-decoration: none;
+	white-space: nowrap;
+}
+
+.nav-list a:hover {
+	color: var(--text);
+	background: var(--surface-alt);
+}
+
+.nav-list a.current {
+	color: var(--text);
+	border-bottom-color: var(--link);
+}
+
+.primary-nav {
+	align-self: stretch;
+	display: flex;
+	flex: none;
+}
+
+.tab-list a {
+	padding: 0 0.875rem;
+	font-size: 0.9375rem;
+	font-weight: 500;
+}
+
+/* The box takes the room the row leaves it, never less than its kind and a
+ * text field of 9rem (min-content: the select's width is the face's). */
+.search-slot {
+	flex: 1 1 0;
+	min-width: min-content;
+	max-width: 24rem;
+	margin-left: auto;
+}
+
+/* No box (its module is off): the place is not kept; the corner stays right. */
+.search-slot:empty {
+	display: none;
+}
+
+.search-slot:empty ~ .user-menu {
+	margin-left: auto;
+}
+
+/* The second row: the open tab's pages, quieter than the tabs. */
+.page-nav {
+	border-top: 1px solid var(--border);
+}
+
+.page-list {
+	min-height: 2.5rem;
+	margin-left: -0.75rem;
+}
+
+.page-list a {
+	padding: 0 0.75rem;
+	font-size: 0.875rem;
+}
+
+/* Where a row's pages change from one run to the next (in Media
+ * management: looking after what is there, then converting it), a thin
+ * line between them. */
+.page-list li.nav-run-start::before {
+	content: "";
+	align-self: center;
+	flex: none;
+	width: 1px;
+	height: 1rem;
+	margin: 0 0.5rem;
+	background: var(--control-border);
+}
+
+/* Inside Media, the open type's pages: a third row as thin as the second. */
+.type-nav .page-list {
+	min-height: 2.25rem;
+}
+
+.content {
+	flex: 1 0 auto;
+	width: 100%;
+	max-width: var(--max-width);
+	margin: 0 auto;
+	padding: 1.5rem var(--gutter) 2rem;
+}
+
+.site-footer {
+	border-top: 1px solid var(--border);
+	color: var(--text-muted);
+	font-size: 0.8125rem;
+	padding: 0.75rem 0;
+	font-variant-numeric: tabular-nums;
+}
+
+/* ── Components ─────────────────────────────────────────────── */
+
+/*
+ * Every card has the same inner edge: its heading, its state line and its
+ * table start at the same place in every card of a page.  A wide table
+ * scrolls sideways inside its card.
+ */
+.card {
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	padding: 1rem 1.25rem;
+	margin: 0 0 1rem;
+	overflow-x: auto;
+	/* What is positioned inside (a hidden label) scrolls and is clipped
+	 * with the card, and does not widen the page. */
+	position: relative;
+}
+
+.card > h2:first-child,
+.card > .card-head:first-child {
+	margin-top: 0;
+}
+
+/* The card's padding is its only space below. */
+.card > :last-child {
+	margin-bottom: 0;
+}
+
+/* A line after a table stands apart from its last row. */
+.card > div + p,
+.card > table + p {
+	margin-top: 0.75rem;
+}
+
+/* A card's heading with what belongs beside it (a badge, a time). */
+.card-head {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 0.25rem 1rem;
+	margin: 0 0 0.75rem;
+}
+
+.card-head h2 {
+	margin: 0;
+}
+
+.card-head .as-of {
+	margin-left: auto;
+}
+
+/* One line under a heading: a badge and figures, on one baseline. */
+.state-line {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 0.25rem 0.75rem;
+	margin: 0 0 0.75rem;
+}
+
+.state-line > * {
+	margin: 0;
+}
+
+/* The state block's badge and reason join the line (the block keeps its
+ * id, which live updates replace). */
+.state-line > .volume-state {
+	display: contents;
+}
+
+.state-line .volume-reason {
+	margin: 0;
+	flex-basis: 100%;
+	order: 5;
+}
+
+.as-of {
+	color: var(--text-muted);
+	font-size: 0.8125rem;
+	font-variant-numeric: tabular-nums;
+}
+
+.facts {
+	display: grid;
+	grid-template-columns: max-content 1fr;
+	gap: 0.25rem 1rem;
+	margin: 0 0 0.75rem;
+}
+
+.facts dt {
+	color: var(--text-muted);
+}
+
+.facts dd {
+	margin: 0;
+	font-variant-numeric: tabular-nums;
+	overflow-wrap: anywhere;
+}
+
+.facts dd code {
+	font-size: 0.875em;
+}
+
+/* ── Data tables ────────────────────────────────────────────── */
+
+/*
+ * A table's columns come from its <colgroup>: each <col> has a role, and
+ * each role a fixed width (the name and wide columns share what is left).
+ * The layout is fixed, so the browser never sizes a column from its
+ * contents, and two tables of one kind put each column at the same place.
+ * The widths here are the ones src/web/axis-web-table.c counts with; a
+ * test compares them.
+ */
+.data-table {
+	width: 100%;
+	table-layout: fixed;
+	border-collapse: collapse;
+	font-size: 0.9375rem;
+}
+
+col.col-text {
+	width: 8rem;
+}
+
+col.col-code {
+	width: 12rem;
+}
+
+/* A fixed width holds its role's longest value in the widest face measured
+ * (Adwaita Sans, Montserrat) with the padding: see axis-web-table.c. */
+col.col-count {
+	width: 6.25rem;
+}
+
+col.col-number {
+	width: 7.75rem;
+}
+
+col.col-size {
+	width: 7.25rem;
+}
+
+col.col-range {
+	width: 12rem;
+}
+
+col.col-date {
+	width: 14.25rem;
+}
+
+col.col-state {
+	width: 8.5rem;
+}
+
+col.col-links {
+	width: 10.5rem;
+}
+
+col.col-actions {
+	width: 7.5rem;
+}
+
+/* The least width of a table: its fixed columns and room for its names.
+ * A table that needs more than its card has scrolls inside the card. */
+.data-table.min-24 { min-width: 24rem; }
+.data-table.min-25 { min-width: 25rem; }
+.data-table.min-26 { min-width: 26rem; }
+.data-table.min-27 { min-width: 27rem; }
+.data-table.min-28 { min-width: 28rem; }
+.data-table.min-29 { min-width: 29rem; }
+.data-table.min-30 { min-width: 30rem; }
+.data-table.min-31 { min-width: 31rem; }
+.data-table.min-32 { min-width: 32rem; }
+.data-table.min-33 { min-width: 33rem; }
+.data-table.min-34 { min-width: 34rem; }
+.data-table.min-35 { min-width: 35rem; }
+.data-table.min-36 { min-width: 36rem; }
+.data-table.min-37 { min-width: 37rem; }
+.data-table.min-38 { min-width: 38rem; }
+.data-table.min-39 { min-width: 39rem; }
+.data-table.min-40 { min-width: 40rem; }
+.data-table.min-41 { min-width: 41rem; }
+.data-table.min-42 { min-width: 42rem; }
+.data-table.min-43 { min-width: 43rem; }
+.data-table.min-44 { min-width: 44rem; }
+.data-table.min-45 { min-width: 45rem; }
+.data-table.min-46 { min-width: 46rem; }
+.data-table.min-47 { min-width: 47rem; }
+.data-table.min-48 { min-width: 48rem; }
+.data-table.min-49 { min-width: 49rem; }
+.data-table.min-50 { min-width: 50rem; }
+.data-table.min-51 { min-width: 51rem; }
+.data-table.min-52 { min-width: 52rem; }
+.data-table.min-53 { min-width: 53rem; }
+.data-table.min-54 { min-width: 54rem; }
+.data-table.min-55 { min-width: 55rem; }
+.data-table.min-56 { min-width: 56rem; }
+.data-table.min-57 { min-width: 57rem; }
+.data-table.min-58 { min-width: 58rem; }
+.data-table.min-59 { min-width: 59rem; }
+.data-table.min-60 { min-width: 60rem; }
+.data-table.min-61 { min-width: 61rem; }
+.data-table.min-62 { min-width: 62rem; }
+.data-table.min-63 { min-width: 63rem; }
+.data-table.min-64 { min-width: 64rem; }
+.data-table.min-65 { min-width: 65rem; }
+.data-table.min-66 { min-width: 66rem; }
+.data-table.min-67 { min-width: 67rem; }
+.data-table.min-68 { min-width: 68rem; }
+.data-table.min-69 { min-width: 69rem; }
+.data-table.min-70 { min-width: 70rem; }
+.data-table.min-71 { min-width: 71rem; }
+.data-table.min-72 { min-width: 72rem; }
+.data-table.min-73 { min-width: 73rem; }
+.data-table.min-74 { min-width: 74rem; }
+.data-table.min-75 { min-width: 75rem; }
+.data-table.min-76 { min-width: 76rem; }
+.data-table.min-77 { min-width: 77rem; }
+.data-table.min-78 { min-width: 78rem; }
+.data-table.min-79 { min-width: 79rem; }
+.data-table.min-80 { min-width: 80rem; }
+.data-table.min-81 { min-width: 81rem; }
+.data-table.min-82 { min-width: 82rem; }
+.data-table.min-83 { min-width: 83rem; }
+.data-table.min-84 { min-width: 84rem; }
+.data-table.min-85 { min-width: 85rem; }
+.data-table.min-86 { min-width: 86rem; }
+.data-table.min-87 { min-width: 87rem; }
+.data-table.min-88 { min-width: 88rem; }
+.data-table.min-89 { min-width: 89rem; }
+.data-table.min-90 { min-width: 90rem; }
+.data-table.min-91 { min-width: 91rem; }
+.data-table.min-92 { min-width: 92rem; }
+.data-table.min-93 { min-width: 93rem; }
+.data-table.min-94 { min-width: 94rem; }
+.data-table.min-95 { min-width: 95rem; }
+.data-table.min-96 { min-width: 96rem; }
+
+/* On a phone a table is as wide as its least width, and its names and
+ * details need more room than the least width gives them on a screen that
+ * can spare it: these are the least widths for a phone, the same steps.
+ * Wider than a phone, they do not apply. */
+@media (max-width: 40rem) {
+	.data-table.least-25 { min-width: 25rem; }
+	.data-table.least-26 { min-width: 26rem; }
+	.data-table.least-27 { min-width: 27rem; }
+	.data-table.least-28 { min-width: 28rem; }
+	.data-table.least-29 { min-width: 29rem; }
+	.data-table.least-30 { min-width: 30rem; }
+	.data-table.least-31 { min-width: 31rem; }
+	.data-table.least-32 { min-width: 32rem; }
+	.data-table.least-33 { min-width: 33rem; }
+	.data-table.least-34 { min-width: 34rem; }
+	.data-table.least-35 { min-width: 35rem; }
+	.data-table.least-36 { min-width: 36rem; }
+	.data-table.least-37 { min-width: 37rem; }
+	.data-table.least-38 { min-width: 38rem; }
+	.data-table.least-39 { min-width: 39rem; }
+	.data-table.least-40 { min-width: 40rem; }
+	.data-table.least-41 { min-width: 41rem; }
+	.data-table.least-42 { min-width: 42rem; }
+	.data-table.least-43 { min-width: 43rem; }
+	.data-table.least-44 { min-width: 44rem; }
+	.data-table.least-45 { min-width: 45rem; }
+	.data-table.least-46 { min-width: 46rem; }
+	.data-table.least-47 { min-width: 47rem; }
+	.data-table.least-48 { min-width: 48rem; }
+	.data-table.least-49 { min-width: 49rem; }
+	.data-table.least-50 { min-width: 50rem; }
+	.data-table.least-51 { min-width: 51rem; }
+	.data-table.least-52 { min-width: 52rem; }
+	.data-table.least-53 { min-width: 53rem; }
+	.data-table.least-54 { min-width: 54rem; }
+	.data-table.least-55 { min-width: 55rem; }
+	.data-table.least-56 { min-width: 56rem; }
+	.data-table.least-57 { min-width: 57rem; }
+	.data-table.least-58 { min-width: 58rem; }
+	.data-table.least-59 { min-width: 59rem; }
+	.data-table.least-60 { min-width: 60rem; }
+	.data-table.least-61 { min-width: 61rem; }
+	.data-table.least-62 { min-width: 62rem; }
+	.data-table.least-63 { min-width: 63rem; }
+	.data-table.least-64 { min-width: 64rem; }
+	.data-table.least-65 { min-width: 65rem; }
+	.data-table.least-66 { min-width: 66rem; }
+	.data-table.least-67 { min-width: 67rem; }
+	.data-table.least-68 { min-width: 68rem; }
+	.data-table.least-69 { min-width: 69rem; }
+	.data-table.least-70 { min-width: 70rem; }
+	.data-table.least-71 { min-width: 71rem; }
+	.data-table.least-72 { min-width: 72rem; }
+	.data-table.least-73 { min-width: 73rem; }
+	.data-table.least-74 { min-width: 74rem; }
+	.data-table.least-75 { min-width: 75rem; }
+	.data-table.least-76 { min-width: 76rem; }
+	.data-table.least-77 { min-width: 77rem; }
+	.data-table.least-78 { min-width: 78rem; }
+	.data-table.least-79 { min-width: 79rem; }
+	.data-table.least-80 { min-width: 80rem; }
+	.data-table.least-81 { min-width: 81rem; }
+	.data-table.least-82 { min-width: 82rem; }
+	.data-table.least-83 { min-width: 83rem; }
+	.data-table.least-84 { min-width: 84rem; }
+	.data-table.least-85 { min-width: 85rem; }
+	.data-table.least-86 { min-width: 86rem; }
+	.data-table.least-87 { min-width: 87rem; }
+	.data-table.least-88 { min-width: 88rem; }
+	.data-table.least-89 { min-width: 89rem; }
+	.data-table.least-90 { min-width: 90rem; }
+	.data-table.least-91 { min-width: 91rem; }
+	.data-table.least-92 { min-width: 92rem; }
+	.data-table.least-93 { min-width: 93rem; }
+	.data-table.least-94 { min-width: 94rem; }
+	.data-table.least-95 { min-width: 95rem; }
+	.data-table.least-96 { min-width: 96rem; }
+}
+
+/*
+ * Every row of a table has one height, the height of a small button and
+ * its padding, and its text, badges and buttons share a baseline.
+ */
+.data-table th,
+.data-table td {
+	height: 2.75rem;
+	padding: 0.375rem 0.75rem;
+	text-align: left;
+	vertical-align: baseline;
+	border-bottom: 1px solid var(--border);
+	overflow-wrap: anywhere;
+}
+
+/* A heading sits on the row's lower edge; one that is longer than its
+ * column takes a second line (a word longer than the column is cut). */
+.data-table th {
+	height: auto;
+	padding-top: 0.5rem;
+	padding-bottom: 0.5rem;
+	vertical-align: bottom;
+	color: var(--text-muted);
+	font-weight: 600;
+	font-size: 0.8125rem;
+	line-height: 1.3;
+	overflow: hidden;
+	overflow-wrap: normal;
+	text-overflow: ellipsis;
+}
+
+/* An identifier (a job's kind, an encoder) breaks only where it may; a
+ * path (in a name column) wraps anywhere, whole. */
+.data-table code {
+	overflow-wrap: normal;
+	white-space: nowrap;
+}
+
+.data-table td.col-name code,
+.data-table td.col-wide code {
+	white-space: normal;
+	overflow-wrap: anywhere;
+}
+
+/* A job's number and kind: the kind goes under the number when the two do
+ * not fit, and breaks inside only if it is longer than the column. */
+.data-table td.col-code code {
+	white-space: normal;
+	overflow-wrap: anywhere;
+}
+
+/* A bar in a cell, beside its figure. */
+.data-table progress {
+	width: 4rem;
+	height: 0.5rem;
+	margin-right: 0.375rem;
+	vertical-align: middle;
+}
+
+/* An estimate's range under the estimate. */
+.range-detail {
+	display: block;
+	color: var(--text-muted);
+	font-size: 0.8125rem;
+}
+
+.data-table tbody tr:last-child td {
+	border-bottom: 0;
+}
+
+/* Counts and sizes read down the column: right-aligned, every digit the
+ * same width, the heading over them. */
+.data-table .col-count,
+.data-table .col-number,
+.data-table .col-size,
+.data-table .col-range {
+	text-align: right;
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+
+/* An estimate and its range may take two lines, and so may any heading
+ * (over a figure too, still at the right). */
+.data-table td.col-range,
+.data-table th.col-count,
+.data-table th.col-number,
+.data-table th.col-size,
+.data-table th.col-range,
+.data-table th.col-date {
+	white-space: normal;
+}
+
+.data-table .col-date {
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+
+/*
+ * A cell of fixed width never paints over its neighbour, whatever face the
+ * browser draws it in: a value longer than its column is cut with an
+ * ellipsis inside the cell (the cell's title holds it whole).  A state's
+ * badge wraps instead, and is clipped only if one word of it is longer than
+ * the column.
+ */
+.data-table td.col-date,
+.data-table td.col-count,
+.data-table td.col-number,
+.data-table td.col-size {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.data-table td.col-state {
+	overflow: hidden;
+}
+
+.data-table td.col-text {
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+/* Actions form a straight column down the right edge. */
+.data-table .col-actions,
+.data-table .col-controls {
+	text-align: right;
+	white-space: nowrap;
+}
+
+.data-table .col-actions .actions,
+.data-table .col-controls .actions {
+	justify-content: flex-end;
+}
+
+.data-table td.col-controls,
+.data-table td.col-controls .actions {
+	white-space: normal;
+}
+
+/* Several controls in a cell wrap as whole controls, to the right. */
+.data-table td.col-controls .inline-form {
+	display: inline-flex;
+	flex-wrap: wrap;
+	justify-content: flex-end;
+	align-items: center;
+	gap: 0.375rem 0.5rem;
+}
+
+.data-table td.col-controls .inline-form select {
+	width: auto;
+	max-width: 14rem;
+	height: var(--control-height-small);
+	font-size: 0.875rem;
+}
+
+.data-table td.col-controls .inline-form > .visually-hidden + input {
+	width: 11rem;
+}
+
+.data-table td.col-name,
+.data-table td.col-wide {
+	white-space: normal;
+}
+
+/* A badge in a narrow cell takes two lines rather than spill over. */
+.data-table td.col-name .badge,
+.data-table td.col-wide .badge,
+.data-table td.col-state .badge {
+	white-space: normal;
+}
+
+/* A badge on a line of detail ("Not encrypted" after an address) stays on
+ * one line; the address before it wraps instead. */
+.data-table td .range-detail > .badge {
+	white-space: nowrap;
+}
+
+.data-table td > .inline-form,
+.data-table td > .actions {
+	vertical-align: baseline;
+}
+
+/* ── Notices and errors ─────────────────────────────────────── */
+
+.error-page {
+	max-width: 36rem;
+}
+
+.error-page h1 {
+	color: var(--danger);
+}
+
+.notice {
+	border: 1px solid var(--border);
+	border-left-width: 3px;
+	border-radius: var(--radius);
+	background: var(--surface);
+	padding: 0.6rem 0.8rem;
+	margin: 0 0 1rem;
+}
+
+.notice-error {
+	border-left-color: var(--danger);
+}
+
+.notice-ok {
+	border-left-color: var(--ok);
+}
+
+.notice-warning {
+	border-left-color: var(--warn);
+}
+
+/* ── Accounts ───────────────────────────────────────────────── */
+
+/* When the row is tight, a long name gives way first (cut, its whole on the
+ * account page); the button never does.  The tabs' breakpoint is measured
+ * with a long name cut to 4rem, so above it a name keeps at least that. */
+.user-menu {
+	display: flex;
+	align-items: center;
+	flex: 0 1 auto;
+	min-width: 0;
+	gap: 0.5rem;
+}
+
+.user-menu > form {
+	flex: none;
+}
+
+.user-name {
+	flex: 0 1 auto;
+	min-width: 0;
+	max-width: 10rem;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	color: var(--text-muted);
+	font-size: 0.9375rem;
+	text-decoration: none;
+}
+
+.user-name:hover,
+.user-name[aria-current] {
+	color: var(--text);
+}
+
+.auth-page {
+	max-width: 26rem;
+	margin: 2rem auto 0;
+}
+
+/* ── Forms ──────────────────────────────────────────────────── */
+
+/* A stacked form: one field under another, the button last. */
+.form {
+	display: grid;
+	gap: var(--space);
+	max-width: 26rem;
+}
+
+.form-wide {
+	display: grid;
+	gap: var(--space);
+}
+
+/* A label above its control, help text below it. */
+.field {
+	display: grid;
+	gap: var(--label-gap);
+	align-content: start;
+	min-width: 0;
+}
+
+.field label,
+.filters label {
+	font-weight: 600;
+	font-size: 0.875rem;
+	line-height: 1.25;
+}
+
+/*
+ * One box for every control: fields, drop-downs and buttons have the same
+ * height, border, corners and padding, and their text sits on one line.
+ * (Number and time fields were left out before add-phone-layout and drawn
+ * in the browser's light default in every theme.)
+ */
+input[type="text"],
+input[type="password"],
+input[type="number"],
+input[type="time"],
+select,
+button {
+	height: var(--control-height);
+	margin: 0;
+	padding: 0 0.75rem;
+	font: inherit;
+	font-size: 0.9375rem;
+	line-height: 1.25;
+	border: 1px solid var(--control-border);
+	border-radius: var(--radius);
+}
+
+input[type="text"],
+input[type="password"],
+input[type="number"],
+input[type="time"],
+select,
+textarea {
+	width: 100%;
+	min-width: 0;
+	color: var(--text);
+	background: var(--bg);
+}
+
+select {
+	padding-right: 0.5rem;
+}
+
+textarea {
+	margin: 0;
+	padding: 0.5rem 0.75rem;
+	font: inherit;
+	font-size: 0.9375rem;
+	line-height: 1.4;
+	border: 1px solid var(--control-border);
+	border-radius: var(--radius);
+}
+
+/* A single line of a person's text, kept as text content rather than an
+ * attribute: it looks and behaves like a text field. */
+textarea.one-line {
+	resize: none;
+	overflow: hidden;
+	white-space: nowrap;
+}
+
+/* A button is as wide as its text and its padding. */
+button {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	flex: none;
+	width: auto;
+	color: var(--text);
+	background: var(--surface-alt);
+	white-space: nowrap;
+	cursor: pointer;
+}
+
+button:hover {
+	border-color: var(--link);
+}
+
+button:disabled {
+	cursor: not-allowed;
+	opacity: 0.55;
+}
+
+progress {
+	accent-color: var(--link);
+}
+
+.button-primary {
+	background: var(--accent);
+	border-color: var(--accent);
+	color: var(--accent-text);
+	justify-self: start;
+}
+
+.button-primary:hover {
+	border-color: var(--link);
+}
+
+.button-danger {
+	color: var(--danger);
+	border-color: var(--danger);
+}
+
+.button-quiet {
+	background: none;
+	border-color: transparent;
+	color: var(--text-muted);
+}
+
+.button-quiet:hover {
+	color: var(--text);
+	border-color: var(--control-border);
+}
+
+/* The small box, for dense places: table rows, filter bars, the header. */
+.button-small,
+.data-table button,
+.data-table input[type="text"],
+.data-table input[type="password"],
+.data-table select,
+.filters input[type="text"],
+.filters select,
+.filters button,
+.user-menu button {
+	height: var(--control-height-small);
+	padding: 0 0.625rem;
+	font-size: 0.875rem;
+}
+
+/*
+ * A row of controls: each label sits above its own control, help text
+ * below, and every control's box shares one bottom edge, so a button
+ * beside a labelled field lines up with the field and not with its label.
+ * The fields are subgrids of the row's three lines (labels, controls,
+ * help); anything else (a button, a checkbox) sits on the controls' line.
+ */
+.inline-form {
+	display: inline-grid;
+	grid-auto-flow: column;
+	grid-template-rows: auto auto auto;
+	justify-content: start;
+	align-items: center;
+	column-gap: var(--space);
+	row-gap: 0;
+	margin: 0;
+	max-width: 100%;
+	vertical-align: baseline;
+}
+
+.inline-form > * {
+	grid-row: 2;
+}
+
+.inline-form > .field {
+	grid-row: 1 / span 3;
+	grid-template-rows: subgrid;
+	row-gap: var(--label-gap);
+	width: 18rem;
+	max-width: 100%;
+}
+
+.inline-form > .field > .help {
+	margin: 0;
+}
+
+.inline-form > .field-check {
+	align-self: center;
+}
+
+/* A form that is a block of its own (not a button in a sentence). */
+.card > .inline-form,
+.content > .inline-form,
+.card > form + .inline-form {
+	display: grid;
+	margin: 0 0 var(--space);
+}
+
+.card > .inline-form:last-child {
+	margin-bottom: 0;
+}
+
+.actions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 0.5rem;
+}
+
+/* A filter bar: the same row, with the small controls; it wraps as whole
+ * label-and-control pairs when the page is narrow. */
+.filters {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: flex-end;
+	gap: var(--space);
+	margin: 0 0 1rem;
+}
+
+.filters > .field {
+	flex: 0 1 12rem;
+	min-width: 9rem;
+}
+
+.filters > .field-wide {
+	flex-basis: 18rem;
+}
+
+/* A closed group of further fields under the row (the test search's
+ * identifiers and episode): a row of its own. */
+.filters > .guide-more {
+	flex: 1 1 100%;
+	margin: 0;
+	min-width: 0;
+}
+
+.filters > .guide-more > .filters {
+	margin-bottom: 0;
+}
+
+.filters > div:not(.field):not(.guide-more) {
+	display: flex;
+	align-items: center;
+	gap: 0.75rem;
+	min-height: var(--control-height-small);
+	font-size: 0.875rem;
+}
+
+/* ── Themes (the picker on the account page) ────────────────── */
+
+/*
+ * Each option previews its theme: a small page carrying that theme's
+ * data-theme attribute, whose own variables colour it whatever theme the
+ * page itself has: the page colour, the header with the mark in the
+ * theme's own colours, a card, and the accent.
+ */
+.theme-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(12rem, 1fr));
+	gap: var(--space);
+	margin: 0 0 1rem;
+	padding: 0;
+	border: 0;
+}
+
+.theme-option {
+	display: block;
+	cursor: pointer;
+}
+
+.theme-option input {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	margin: -1px;
+	opacity: 0;
+}
+
+.theme-card {
+	display: grid;
+	gap: 0.5rem;
+	height: 100%;
+	padding: 0.5rem;
+	border: 1px solid var(--control-border);
+	border-radius: var(--radius);
+	background: var(--surface);
+}
+
+.theme-option input:checked + .theme-card {
+	border-color: var(--link);
+	outline: 1px solid var(--link);
+}
+
+.theme-option input:focus-visible + .theme-card {
+	outline: 2px solid var(--focus);
+	outline-offset: 2px;
+}
+
+.theme-name {
+	font-weight: 600;
+}
+
+.theme-note {
+	display: block;
+	color: var(--text-muted);
+	font-size: 0.8125rem;
+	font-weight: 400;
+}
+
+.swatch {
+	display: grid;
+	gap: 0.375rem;
+	padding: 0 0 0.5rem;
+	border: 1px solid var(--border);
+	border-radius: 0.125rem;
+	background: var(--bg);
+	color: var(--text);
+	font-size: 0.75rem;
+	line-height: 1.3;
+}
+
+.swatch-bar {
+	display: flex;
+	align-items: center;
+	gap: 0.375rem;
+	padding: 0.25rem 0.5rem;
+	background: var(--surface);
+	border-bottom: 1px solid var(--logo-step-2);
+	font-weight: 700;
+	letter-spacing: 0.04em;
+}
+
+.swatch-bar .logo {
+	width: 1.25rem;
+	height: 1.25rem;
+}
+
+.swatch-card {
+	display: grid;
+	gap: 0.2rem;
+	margin: 0 0.5rem;
+	padding: 0.375rem 0.5rem;
+	background: var(--surface);
+	border: 1px solid var(--border);
+}
+
+.swatch-muted {
+	color: var(--text-muted);
+}
+
+.swatch-link {
+	color: var(--link);
+	text-decoration: underline;
+}
+
+.swatch-chip {
+	justify-self: start;
+	padding: 0.05rem 0.5rem;
+	background: var(--accent);
+	color: var(--accent-text);
+	border-radius: 0.125rem;
+}
+
+/* ── Settings and modules ───────────────────────────────────── */
+
+.setting {
+	max-width: 36rem;
+}
+
+/* What a page is for, directly under its heading: muted, one or two
+ * sentences, a reading width. */
+.page-intro {
+	max-width: 48rem;
+	margin: -0.25rem 0 1.25rem;
+	color: var(--text-muted);
+	font-size: 0.9375rem;
+	line-height: 1.5;
+}
+
+.help,
+.setting-meta {
+	margin: 0;
+	color: var(--text-muted);
+	font-size: 0.875rem;
+}
+
+p.help {
+	margin: 0 0 0.75rem;
+}
+
+.field > .help,
+.field > .setting-meta,
+.field > .field-error {
+	margin: 0;
+}
+
+.setting-invalid input,
+.setting-invalid select,
+.setting-invalid textarea {
+	border-color: var(--danger);
+}
+
+.field-error {
+	margin: 0;
+	color: var(--danger);
+	font-size: 0.875rem;
+}
+
+.secret-list {
+	display: grid;
+	gap: 0.5rem;
+	margin-top: 1rem;
+}
+
+.secret-row {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 0.5rem;
+}
+
+.blocked {
+	color: var(--text-muted);
+	font-size: 0.875rem;
+}
+
+/* Read by screen readers, not shown. */
+.visually-hidden {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	margin: -1px;
+	padding: 0;
+	overflow: hidden;
+	clip: rect(0 0 0 0);
+	white-space: nowrap;
+	border: 0;
+}
+
+/* ── Jobs ───────────────────────────────────────────────────── */
+
+/* The running-jobs indicator in the header. */
+.activity {
+	display: inline-flex;
+	align-items: center;
+	flex: none;
+	gap: 0.25rem;
+	height: var(--control-height-small);
+	padding: 0 0.625rem;
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	color: var(--text-muted);
+	text-decoration: none;
+	font-size: 0.875rem;
+	white-space: nowrap;
+}
+
+.activity-busy {
+	border-color: var(--link);
+	color: var(--text);
+}
+
+.activity-count {
+	font-weight: 700;
+	font-variant-numeric: tabular-nums;
+}
+
+/* ── What needs attention (add-attention-notices) ───────────── */
+
+/*
+ * The bell in the header, to the right of the search box: a link to the
+ * page "Needs attention".  The number sits in a badge over the bell's
+ * corner and takes no room of the row, so the bell is as wide with nothing
+ * as with "99+" and a notice coming or going moves nothing else.  With
+ * nothing waiting the bell is muted and has no badge.  The badge is the
+ * warning colour, the danger colour when something is "Not working"; the
+ * link's name says the same in words.
+ */
+.attn-bell {
+	position: relative;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	flex: none;
+	width: 2.75rem;
+	height: var(--control-height-small);
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	color: var(--text);
+	text-decoration: none;
+}
+
+.attn-bell:hover {
+	background: var(--surface-alt);
+}
+
+.attn-bell[aria-current] {
+	border-color: var(--link);
+}
+
+.attn-bell-none {
+	color: var(--text-muted);
+}
+
+.attn-bell-icon {
+	width: 1.25rem;
+	height: 1.25rem;
+	fill: currentColor;
+}
+
+.attn-bell-badge {
+	position: absolute;
+	top: -0.4375rem;
+	right: -0.4375rem;
+	min-width: 1.125rem;
+	padding: 0 0.25rem;
+	border: 1px solid var(--warn);
+	border-radius: 0.625rem;
+	background: var(--warn-bg);
+	color: var(--warn);
+	font-size: 0.6875rem;
+	font-weight: 700;
+	font-variant-numeric: tabular-nums;
+	line-height: 1rem;
+	text-align: center;
+}
+
+.attn-bell-broken .attn-bell-badge {
+	border-color: var(--danger);
+	background: var(--danger-bg);
+	color: var(--danger);
+}
+
+/* No search box (its module is off): the bell takes the box's place at the
+ * right, and the user's corner follows it. */
+.search-slot:empty ~ .attn-bell {
+	margin-left: auto;
+}
+
+.search-slot:empty ~ .attn-bell ~ .user-menu {
+	margin-left: 0;
+}
+
+/* The page: a card for each level, a row for each notice (its sentence,
+ * since when and where it is dealt with, and its one button at the right). */
+.attn-group > h2 {
+	margin: 0 0 0.25rem;
+}
+
+.attn-rows {
+	list-style: none;
+	margin: 0.75rem 0 0;
+	padding: 0;
+}
+
+.attn-row {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	align-items: center;
+	gap: 0.25rem 1rem;
+	padding: 0.625rem 0;
+	border-top: 1px solid var(--border);
+}
+
+.attn-text {
+	grid-column: 1;
+	margin: 0;
+	overflow-wrap: anywhere;
+}
+
+.attn-meta {
+	grid-column: 1;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.25rem 1rem;
+	margin: 0;
+	color: var(--text-muted);
+	font-size: 0.875rem;
+}
+
+.attn-form {
+	grid-column: 2;
+	grid-row: 1 / span 2;
+}
+
+.attn-unread {
+	margin: 0 0 1rem;
+	padding-left: 0.5rem;
+	border-left: 2px solid var(--warn);
+	color: var(--text-muted);
+	font-size: 0.875rem;
+}
+
+.attn-dismissed {
+	margin: 0 0 1rem;
+}
+
+.attn-dismissed > summary {
+	color: var(--text-muted);
+	cursor: pointer;
+}
+
+.attn-dismissed > .help {
+	margin-top: 0.5rem;
+}
+
+/* ── What Axis is doing (add-activity-feedback) ─────────────── */
+
+/*
+ * The header's indicator says what runs by kind; a row's or a card's line
+ * says what is happening to it (words, never a spinner), coloured by how
+ * it stands; a button whose work is in hand says so and cannot be pressed;
+ * a notice drawn where the person was working sits inside the row or card.
+ */
+.activity-kinds {
+	/* ": 2 searches" follows "running" without the indicator's gap. */
+	margin-left: -0.25rem;
+	color: var(--text-muted);
+}
+
+/* Above a phone, when the top row is tight, what runs gives way first (cut;
+ * whole on the Activity page), before the user's name and the search box;
+ * the count and "running" never do.  (Its shrink is so much the name's that
+ * the name's share is far under a pixel: no ellipsis on a name that fits.) */
+@media (min-width: 40.0625rem) {
+	.site-header .activity {
+		flex: 0 100000 auto;
+		min-width: 7rem;
+	}
+
+	.site-header .activity > span:not(.activity-kinds) {
+		flex: none;
+	}
+
+	.site-header .activity-kinds {
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+}
+
+.activity-line {
+	margin: 0.25rem 0;
+	padding-left: 0.5rem;
+	border-left: 2px solid var(--border);
+	color: var(--text-muted);
+	font-size: 0.875rem;
+}
+
+.activity-line[hidden] {
+	display: none;
+}
+
+.activity-running {
+	border-left-color: var(--link);
+	color: var(--text);
+}
+
+.activity-waiting {
+	border-left-color: var(--text-muted);
+}
+
+.activity-done {
+	border-left-color: var(--ok);
+}
+
+.activity-nothing {
+	border-left-color: var(--warn);
+}
+
+.activity-failed {
+	border-left-color: var(--danger);
+}
+
+.activity-act[hidden] {
+	display: none;
+}
+
+.button-busy,
+.button-busy:hover {
+	cursor: not-allowed;
+	opacity: 0.75;
+}
+
+.notice-slot:empty {
+	display: none;
+}
+
+.notice.notice-here {
+	margin: 0.5rem 0;
+}
+
+/* The Activity page. */
+.activity-section h2 {
+	margin: 1.25rem 0 0.5rem;
+	font-size: 1rem;
+}
+
+.activity-items {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.activity-item {
+	padding: 0.4rem 0 0.4rem 0.5rem;
+	border-left: 2px solid var(--border);
+	border-bottom: 1px solid var(--border);
+}
+
+.activity-item .activity-what {
+	font-weight: 600;
+}
+
+.activity-item .activity-state {
+	display: inline;
+	margin: 0;
+}
+
+.activity-item .activity-detail {
+	display: block;
+	color: var(--text-muted);
+	font-size: 0.8125rem;
+}
+
+/* The bar above a list: where this person's Adds go; a card's Options says
+ * what its Add uses. */
+.add-defaults {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 0.5rem 1rem;
+	margin: 0.75rem 0;
+	padding: 0.5rem 0.75rem;
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	background: var(--surface);
+}
+
+.add-defaults .field {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	margin: 0;
+}
+
+.add-defaults .field label {
+	color: var(--text-muted);
+	white-space: nowrap;
+}
+
+.add-defaults select {
+	min-width: 0;
+	max-width: 100%;
+}
+
+.quick-add-chosen {
+	display: block;
+	color: var(--text-muted);
+	font-size: 0.75rem;
+	overflow-wrap: anywhere;
+}
+
+/* A release's name in a box of what needs attention breaks rather than
+ * widening the page on a phone. */
+.attention-box {
+	overflow-wrap: anywhere;
+}
+
+/*
+ * Status pills.  A pill is a thin-edged label; the ones that mean
+ * something are filled with their status colour's own background, never
+ * with the brand colour: ok (green), active (the action colour), warning
+ * (amber), failed (red-orange) and offline (a dimmer red-orange).
+ */
+.badge {
+	display: inline-block;
+	padding: 0 0.4rem;
+	border: 1px solid var(--border);
+	border-radius: 0.125rem;
+	font-size: 0.8125rem;
+	line-height: 1.4;
+	white-space: nowrap;
+	background: var(--surface-alt);
+	color: var(--text);
+}
+
+.badge-succeeded,
+.state-online,
+.scan-complete {
+	background: var(--ok-bg);
+	border-color: var(--ok);
+	color: var(--ok);
+}
+
+.badge-running,
+.scan-running {
+	border-color: var(--link);
+	color: var(--link);
+}
+
+.badge-warn,
+.state-read_only,
+.scan-incomplete {
+	background: var(--warn-bg);
+	border-color: var(--warn);
+	color: var(--warn);
+}
+
+.badge-failed {
+	background: var(--danger-bg);
+	border-color: var(--danger);
+	color: var(--danger);
+}
+
+.state-offline,
+.state-mismatch,
+.scan-unavailable {
+	background: var(--offline-bg);
+	border-color: var(--offline);
+	color: var(--offline);
+}
+
+.badge-note {
+	margin-left: 0.25rem;
+	color: var(--text-muted);
+}
+
+.job-progress {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 0.25rem 0.5rem;
+}
+
+.job-progress progress,
+.scan-progress progress {
+	width: 6rem;
+	height: 0.5rem;
+	accent-color: var(--link);
+}
+
+/* In the list the bar is the tables' short one, so that it and the
+ * figure fit the column side by side. */
+.data-table .job-progress progress {
+	width: 4rem;
+}
+
+.job-percent {
+	font-variant-numeric: tabular-nums;
+}
+
+.job-message {
+	color: var(--text-muted);
+	overflow-wrap: anywhere;
+}
+
+.job-error {
+	color: var(--danger);
+}
+
+.job-actions .actions {
+	flex-wrap: nowrap;
+	justify-content: flex-end;
+}
+
+/* A job: what it does in plain words, and beside it, quietly, its kind and
+ * number. */
+.job-name {
+	display: inline-flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 0 0.5rem;
+	min-width: 0;
+}
+
+.job-kind {
+	display: inline-flex;
+	align-items: baseline;
+	gap: 0.375rem;
+	color: var(--text-muted);
+	font-size: 0.75rem;
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+
+.job-kind code {
+	font-size: 0.75rem;
+	color: var(--text-muted);
+}
+
+/* Upkeep: under its own heading, closed until opened, without script. */
+.upkeep > summary {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 0.25rem 0.75rem;
+	cursor: pointer;
+	list-style: none;
+}
+
+.upkeep > summary::-webkit-details-marker {
+	display: none;
+}
+
+.upkeep > summary::before {
+	content: "";
+	flex: none;
+	align-self: center;
+	width: 0.4375rem;
+	height: 0.4375rem;
+	border-right: 2px solid var(--text-muted);
+	border-bottom: 2px solid var(--text-muted);
+	transform: rotate(-45deg);
+}
+
+.upkeep[open] > summary::before {
+	transform: rotate(45deg);
+}
+
+.upkeep-title {
+	font-size: 1.125rem;
+	font-weight: 600;
+}
+
+.upkeep-counts {
+	color: var(--text-muted);
+	font-size: 0.875rem;
+	font-variant-numeric: tabular-nums;
+}
+
+.upkeep[open] > summary {
+	margin-bottom: 0.75rem;
+}
+
+.pager {
+	display: flex;
+	gap: 1rem;
+	margin-top: 0.75rem;
+}
+
+/* ── Storage ────────────────────────────────────────────────── */
+
+.volume-reason {
+	margin: 0.25rem 0 0;
+	color: var(--text-muted);
+	font-size: 0.875rem;
+}
+
+.volume-space,
+.volume-checked {
+	font-size: 0.9375rem;
+	font-variant-numeric: tabular-nums;
+}
+
+.volume-checked {
+	color: var(--text-muted);
+}
+
+.volume-table code {
+	overflow-wrap: anywhere;
+}
+
+.field-check {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+}
+
+.field-check input {
+	margin: 0;
+}
+
+.link-danger {
+	color: var(--danger);
+	align-self: center;
+}
+
+/* ── Conversion profiles ────────────────────────────────────────── */
+
+.profile-group {
+	display: grid;
+	gap: var(--space);
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	padding: 0.75rem 1rem 1rem;
+	margin: 0;
+	min-width: 0;
+}
+
+.profile-group legend {
+	font-weight: 600;
+	padding: 0 0.25rem;
+}
+
+/* A field of its own is as wide as a field needs, not the page. */
+.profile-group > .field {
+	max-width: 36rem;
+}
+
+/* The fields of a rule side by side; each field is a subgrid of its
+ * line's labels, controls and help, so the controls of a line share their
+ * edges whatever their labels. */
+.profile-rule {
+	grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+	align-items: start;
+}
+
+.profile-rule > .field {
+	grid-row: span 3;
+	grid-template-rows: subgrid;
+	row-gap: var(--label-gap);
+}
+
+.definition-text {
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	font-size: 0.875rem;
+	background: var(--surface-alt);
+	border-radius: var(--radius);
+	padding: 0.5rem;
+}
+
+.snapshot-revision {
+	margin: 0 0 1rem;
+	color: var(--text-muted);
+}
+
+/* ── Quality profiles ───────────────────────────────────────────── */
+
+/* Try a name: the name on a line of its own, the rest beside each other,
+ * the button on the controls' bottom edge. */
+.quality-try {
+	display: grid;
+	gap: var(--space);
+	max-width: 60rem;
+}
+
+.quality-try-name input {
+	font-family: var(--mono);
+	font-size: 0.875rem;
+}
+
+.quality-try-row {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: flex-end;
+	gap: var(--space);
+}
+
+.quality-try-row > .field {
+	flex: 0 1 13rem;
+	min-width: 9rem;
+}
+
+/* The order of the qualities: a row each, its place, its name, its sizes
+ * and the buttons that move it. */
+.quality-order {
+	display: grid;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+	border-top: 1px solid var(--border);
+}
+
+.quality-row {
+	display: grid;
+	grid-template-columns: 2rem minmax(8rem, 1fr) 8.5rem 8.5rem auto;
+	align-items: center;
+	gap: 0.375rem 0.75rem;
+	padding: 0.375rem 0;
+	border-bottom: 1px solid var(--border);
+}
+
+.quality-place {
+	color: var(--text-muted);
+	font-variant-numeric: tabular-nums;
+	text-align: right;
+}
+
+.quality-equal .quality-name {
+	padding-left: 0.75rem;
+	border-left: 1px solid var(--border);
+}
+
+.quality-size {
+	display: flex;
+	align-items: center;
+	gap: 0.375rem;
+}
+
+.quality-size input[type="text"] {
+	width: 4.5rem;
+	height: var(--control-height-small);
+	padding: 0 0.5rem;
+	font-size: 0.875rem;
+	font-variant-numeric: tabular-nums;
+	text-align: right;
+}
+
+.quality-size-word {
+	color: var(--text-muted);
+	font-size: 0.8125rem;
+	white-space: nowrap;
+}
+
+.quality-moves {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: flex-end;
+	gap: 0.375rem;
+}
+
+.quality-row > .field-error {
+	grid-column: 2 / -1;
+}
+
+.quality-others-head {
+	margin: 0.25rem 0 0;
+	color: var(--text-muted);
+	font-size: 0.875rem;
+}
+
+.quality-others {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.375rem;
+}
+
+/* A rule's Remove sits on its controls' line: a subgrid of the rule's
+ * three lines, like the fields beside it. */
+.quality-rule-end {
+	grid-row: span 3;
+	display: grid;
+	grid-template-rows: subgrid;
+	row-gap: var(--label-gap);
+	align-self: stretch;
+}
+
+.quality-rule-end > button {
+	grid-row: 2;
+	justify-self: start;
+}
+
+.quality-reasons,
+.quality-lines,
+.quality-notes,
+.quality-rules {
+	margin: 0 0 0.75rem;
+	padding-left: 1.25rem;
+}
+
+.quality-reasons li,
+.quality-lines li,
+.quality-notes li,
+.quality-rules li {
+	margin: 0.25rem 0;
+}
+
+.quality-reasons .badge {
+	margin-left: 0.5rem;
+}
+
+.quality-notes {
+	color: var(--text-muted);
+	font-size: 0.875rem;
+}
+
+.quality-score {
+	color: var(--text-muted);
+	font-variant-numeric: tabular-nums;
+}
+
+/* ── Library scans ──────────────────────────────────────────────── */
+
+.scan-subhead {
+	margin: 1rem 0 0.25rem;
+	font-weight: 600;
+}
+
+.scan-path {
+	overflow-wrap: anywhere;
+	white-space: pre-wrap;
+}
+
+/* ── Library pages ──────────────────────────────────────────────── */
+
+.scan-progress {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 0.25rem 0.5rem;
+}
+
+.crumbs {
+	overflow-wrap: anywhere;
+}
+
+.file-dir {
+	color: var(--text-muted);
+	font-size: 0.8125rem;
+}
+
+pre {
+	margin: 0;
+	padding: 0.75rem;
+	overflow-x: auto;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	background: var(--code-bg);
+	border-radius: var(--radius);
+	font-family: var(--mono);
+	font-size: 0.875rem;
+}
+
+/* A worker's token, shown once: one click selects all of it. */
+pre.worker-token {
+	margin: 0.75rem 0;
+	user-select: all;
+}
+
+/* ── Dashboard ──────────────────────────────────────────────── */
+
+/*
+ * The landing page: what is coming in, space, what is running, what needs
+ * attention, savings.  Each card says when its figures were taken and
+ * links to the page behind it.
+ */
+.dashboard {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(28rem, 1fr));
+	gap: 1rem;
+	align-items: start;
+}
+
+.dashboard > .card {
+	margin: 0;
+}
+
+.dashboard > .card-wide {
+	grid-column: 1 / -1;
+}
+
+/* A card's heading is the way to the page behind it: quiet until
+ * pointed at. */
+.dash-card h2 a {
+	color: var(--text);
+	text-decoration: none;
+}
+
+.dash-card h2 a:hover,
+.dash-card h2 a:focus-visible {
+	color: var(--link);
+	text-decoration: underline;
+}
+
+.dash-piece + .dash-piece {
+	margin-top: 1rem;
+	padding-top: 1rem;
+	border-top: 1px solid var(--border);
+}
+
+.dash-piece > :last-child {
+	margin-bottom: 0;
+}
+
+.dash-subhead {
+	margin: 1rem 0 0.375rem;
+	color: var(--text-muted);
+	font-size: 0.8125rem;
+	font-weight: 600;
+}
+
+.dash-piece > .dash-subhead:first-child {
+	margin-top: 0;
+}
+
+.figure-row {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.5rem 2.5rem;
+	margin: 0 0 0.75rem;
+}
+
+.figure {
+	display: grid;
+	gap: 0.125rem;
+	margin: 0 0 0.5rem;
+}
+
+a.figure {
+	text-decoration: none;
+}
+
+.figure-value {
+	color: var(--text);
+	font-size: 1.5rem;
+	font-weight: 600;
+	line-height: 1.2;
+	font-variant-numeric: tabular-nums;
+}
+
+.figure-long .figure-value {
+	font-size: 1.125rem;
+}
+
+.figure-label {
+	color: var(--text-muted);
+	font-size: 0.8125rem;
+}
+
+a.figure .figure-label {
+	color: var(--link);
+	text-decoration: underline;
+}
+
+.space-list,
+.attention-list,
+.dash-list {
+	display: grid;
+	gap: 0.625rem;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.space-item {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	align-items: baseline;
+	gap: 0.25rem 1rem;
+}
+
+.space-figures {
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+	color: var(--text-muted);
+	font-size: 0.875rem;
+}
+
+/* How full a volume is: a thin bar drawn in SVG (its length is an
+ * attribute, which the content security policy allows). */
+.space-bar {
+	grid-column: 1 / -1;
+	display: block;
+	width: 100%;
+	height: 0.375rem;
+}
+
+.space-bar-track {
+	fill: var(--surface-alt);
+}
+
+.space-bar-used {
+	fill: var(--link);
+}
+
+.space-bar-full {
+	fill: var(--warn);
+}
+
+/* A download's progress in its table cell: its figures over the same thin
+ * bar, the width of the column. */
+.download-progress {
+	display: grid;
+	gap: 0.25rem;
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+
+.download-progress .space-bar {
+	grid-column: auto;
+}
+
+/* Why a finished download waits: under its progress. */
+.download-problem {
+	white-space: normal;
+	color: var(--warn);
+}
+
+.attention-list li,
+.dash-list li {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 0.25rem 0.5rem;
+}
+
+/* The dashboard's card of what needs attention (add-attention-notices, N2):
+ * each line is its level in words, as a badge, then the notice's sentence as
+ * the link to the page where it is dealt with.  The sentence takes the rest
+ * of the line and wraps under itself, not under the badge. */
+.attention-level {
+	flex: none;
+}
+
+.attention-list li > a {
+	flex: 1 1 12rem;
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+.all-clear {
+	color: var(--text-muted);
+	margin: 0;
+}
+
+/* When a card's figures were taken: apart from the last of them. */
+.dash-card .as-of {
+	margin-top: 0.75rem;
+}
+
+.card-foot {
+	margin: 0.75rem 0 0;
+	font-size: 0.875rem;
+}
+
+/* ── Getting started: what is needed to download ────────────── */
+
+/* One line per thing needed: its mark in a column of its own, what it is
+ * with its sentence, and where to set it up at the right. */
+.ready-list {
+	display: grid;
+	margin: 0.25rem 0 0;
+	padding: 0;
+	list-style: none;
+}
+
+.ready-item {
+	display: grid;
+	grid-template-columns: 4.5rem minmax(0, 1fr) auto;
+	align-items: baseline;
+	gap: 0.125rem 0.75rem;
+	padding: 0.5rem 0;
+	border-top: 1px solid var(--border);
+}
+
+.ready-item:first-child {
+	border-top: 0;
+}
+
+.ready-item > .badge {
+	justify-self: start;
+}
+
+.ready-what {
+	display: flex;
+	flex-direction: column;
+	gap: 0.125rem;
+	min-width: 0;
+}
+
+.ready-label {
+	font-weight: 600;
+}
+
+.ready-done .ready-label {
+	font-weight: 400;
+	color: var(--text-muted);
+}
+
+.ready-text {
+	color: var(--text-muted);
+	font-size: 0.875rem;
+	overflow-wrap: anywhere;
+}
+
+.ready-link {
+	font-size: 0.875rem;
+	white-space: nowrap;
+}
+
+/* The notice at the top of a wanted title's page, and the note under the
+ * Add button. */
+.title-notices > .notice {
+	margin: 0 0 1rem;
+}
+
+.ready-notice p,
+.ready-note p {
+	margin: 0;
+}
+
+.ready-statement + .ready-statement {
+	margin-top: 0.25rem;
+}
+
+.ready-links {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.25rem 1rem;
+	margin: 0.375rem 0 0;
+	font-size: 0.875rem;
+}
+
+.ready-links:empty {
+	display: none;
+}
+
+.ready-note {
+	margin-top: 0.75rem;
+}
+
+/* The way into the setup guide, under the list. */
+.ready-guide {
+	color: var(--text-muted);
+}
+
+/* ── The setup guide ────────────────────────────────────────── */
+
+/*
+ * The steps down the left, each with its mark, and the open page beside
+ * them; on a phone the steps are a row of numbered marks across the top.
+ * A mark is a small square: filled and ticked when done, edged in amber
+ * when needed, dashed when put off, struck through when not used.
+ */
+.guide {
+	display: grid;
+	grid-template-columns: 14rem minmax(0, 1fr);
+	gap: 0 2rem;
+	align-items: start;
+}
+
+.guide-steps {
+	position: sticky;
+	top: 1rem;
+	border-left: 1px solid var(--border);
+	font-size: 0.9375rem;
+}
+
+.guide-overview-link,
+.guide-step a {
+	display: block;
+	margin-left: -1px;
+	padding: 0.4375rem 0.75rem;
+	border-left: 2px solid transparent;
+	color: var(--text-muted);
+	text-decoration: none;
+	line-height: 1.3;
+}
+
+.guide-overview-link {
+	margin-bottom: 0.25rem;
+}
+
+.guide-overview-link:hover,
+.guide-step a:hover {
+	color: var(--text);
+}
+
+.guide-overview-link[aria-current],
+.guide-step a[aria-current] {
+	color: var(--text);
+	border-left-color: var(--link);
+	background: var(--surface);
+}
+
+.guide-step-list {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.guide-step a {
+	display: grid;
+	grid-template-columns: 0.875rem 1rem minmax(0, 1fr);
+	align-items: center;
+	gap: 0 0.5rem;
+}
+
+.guide-step-number {
+	color: var(--text-muted);
+	font-size: 0.8125rem;
+	font-variant-numeric: tabular-nums;
+	text-align: right;
+}
+
+.guide-step-dismissed .guide-step-name,
+.guide-step-off .guide-step-name {
+	color: var(--text-muted);
+}
+
+.guide-mark {
+	position: relative;
+	display: block;
+	width: 0.875rem;
+	height: 0.875rem;
+	border: 1px solid var(--control-border);
+	border-radius: 0.125rem;
+}
+
+.guide-mark-done {
+	border-color: var(--ok);
+	background: var(--ok-bg);
+}
+
+.guide-mark-done::after {
+	content: "";
+	position: absolute;
+	left: 0.25rem;
+	top: 0.0625rem;
+	width: 0.25rem;
+	height: 0.4375rem;
+	border-right: 2px solid var(--ok);
+	border-bottom: 2px solid var(--ok);
+	transform: rotate(45deg);
+}
+
+.guide-mark-needed {
+	border-color: var(--warn);
+}
+
+.guide-mark-skipped {
+	border-style: dashed;
+}
+
+.guide-mark-dismissed,
+.guide-mark-off {
+	border-color: var(--border);
+}
+
+.guide-mark-dismissed::after {
+	content: "";
+	position: absolute;
+	left: 0.125rem;
+	right: 0.125rem;
+	top: 50%;
+	border-top: 1px solid var(--text-muted);
+}
+
+.guide-body {
+	min-width: 0;
+	max-width: 56rem;
+}
+
+/* A card's prose keeps a reading width. */
+.guide-body .card > p,
+.guide-body .card > .guide-how {
+	max-width: 48rem;
+}
+
+/* A line after a form stands apart from its button. */
+.guide-body .card > form + p {
+	margin-top: 0.75rem;
+}
+
+/* What leads a form: a small heading of its own. */
+.guide-lead {
+	margin: 1rem 0 0.5rem;
+	font-weight: 600;
+	font-size: 0.875rem;
+}
+
+/* The guide's column is narrower than a client's own page: a row of fields
+ * wraps as whole fields, every control on one bottom edge. */
+.guide-body .inline-form.guide-row {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: flex-end;
+	gap: var(--space);
+}
+
+.guide-body .inline-form.guide-row > .field {
+	flex: 1 1 12rem;
+	width: auto;
+	min-width: 0;
+	grid-template-rows: none;
+}
+
+/* The one thing a step looked at: what can be done with it, under the
+ * sentence. */
+.guide-solo {
+	display: grid;
+	gap: 0.5rem;
+	margin: 0.75rem 0 0;
+}
+
+.guide-solo > .guide-more {
+	margin-top: 0.25rem;
+}
+
+.guide-solo .actions a,
+.guide-item-what .actions a {
+	font-size: 0.875rem;
+}
+
+.guide-kicker {
+	margin: 0 0 0.25rem;
+	color: var(--text-muted);
+	font-size: 0.8125rem;
+	font-variant-numeric: tabular-nums;
+}
+
+/* What the step's check found: its badge, then its sentence. */
+.guide-state-line {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 0.25rem 0.75rem;
+	margin: 0;
+}
+
+.guide-state-line > .badge {
+	flex: none;
+}
+
+.guide-state-text {
+	flex: 1 1 20rem;
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+.guide-state > .help,
+.guide-state > .inline-form,
+.guide-check {
+	margin: 0.75rem 0 0;
+}
+
+.guide-state > .help + .inline-form {
+	margin-top: 0.5rem;
+}
+
+/* One thing the step looked at (a source, a client, a root). */
+.guide-item {
+	display: grid;
+	grid-template-columns: 6.5rem minmax(0, 1fr);
+	align-items: baseline;
+	gap: 0.25rem 0.75rem;
+	margin-top: 0.75rem;
+	padding-top: 0.75rem;
+	border-top: 1px solid var(--border);
+}
+
+.guide-item > .badge {
+	justify-self: start;
+}
+
+.guide-item-what {
+	display: grid;
+	gap: 0.5rem;
+	min-width: 0;
+}
+
+.guide-item-text {
+	margin: 0;
+	overflow-wrap: anywhere;
+}
+
+.guide-item-what > .actions {
+	gap: 0.5rem 1rem;
+}
+
+.guide-item-what > .guide-more {
+	margin-top: 0;
+}
+
+/* What to do outside Axis, in order. */
+.guide-how {
+	max-width: 48rem;
+	margin: 0 0 1rem;
+	padding-left: 1.25rem;
+}
+
+.guide-how > li + li {
+	margin-top: 0.375rem;
+}
+
+.guide-how p {
+	margin: 0;
+}
+
+.guide-service-link {
+	margin: 0 0 0.5rem;
+}
+
+/* A guide that stays closed until it is opened, without script. */
+.guide-more {
+	margin: 1rem 0 0;
+	padding-top: 0.75rem;
+	border-top: 1px solid var(--border);
+}
+
+.guide-more > summary {
+	display: flex;
+	align-items: baseline;
+	gap: 0.5rem;
+	color: var(--link);
+	cursor: pointer;
+	list-style: none;
+	font-size: 0.9375rem;
+}
+
+.guide-more > summary::-webkit-details-marker {
+	display: none;
+}
+
+.guide-more > summary::before {
+	content: "";
+	flex: none;
+	align-self: center;
+	width: 0.375rem;
+	height: 0.375rem;
+	border-right: 2px solid var(--text-muted);
+	border-bottom: 2px solid var(--text-muted);
+	transform: rotate(-45deg);
+}
+
+.guide-more[open] > summary::before {
+	transform: rotate(45deg);
+}
+
+.guide-more[open] > summary {
+	margin-bottom: 0.75rem;
+}
+
+.guide-more > p {
+	max-width: 48rem;
+}
+
+.guide-more > :last-child {
+	margin-bottom: 0;
+}
+
+/* Two mount lists side by side: before (amber edge) and after (green). */
+.guide-layouts {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+	gap: var(--space);
+	margin: 0 0 0.75rem;
+}
+
+.guide-layout {
+	margin: 0;
+	min-width: 0;
+	border: 1px solid var(--border);
+	border-left-width: 3px;
+	border-radius: var(--radius);
+}
+
+.guide-layout-before {
+	border-left-color: var(--warn);
+}
+
+.guide-layout-after {
+	border-left-color: var(--ok);
+}
+
+.guide-layout figcaption {
+	padding: 0.5rem 0.75rem;
+	border-bottom: 1px solid var(--border);
+	color: var(--text-muted);
+	font-size: 0.875rem;
+}
+
+.guide-layout pre {
+	border-radius: 0;
+}
+
+/* What writing does and what it never does, side by side when there is room. */
+.guide-columns {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+	gap: 0 2rem;
+}
+
+.guide-columns h3 {
+	margin-top: 0;
+}
+
+.guide-list {
+	margin: 0;
+	padding-left: 1.125rem;
+}
+
+.guide-list > li + li {
+	margin-top: 0.5rem;
+}
+
+/* Put off, not used, and the way on. */
+.guide-actions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: space-between;
+	gap: 0.75rem 1rem;
+	margin: 1.5rem 0 0;
+	padding-top: 1rem;
+	border-top: 1px solid var(--border);
+}
+
+.guide-next {
+	margin-left: auto;
+	font-weight: 600;
+	text-decoration: none;
+}
+
+.guide-next:hover {
+	text-decoration: underline;
+}
+
+/* The overview: how far it has got, where to carry on, and every step. */
+.guide-summary-text {
+	margin: 0 0 0.75rem;
+}
+
+.guide-continue {
+	display: inline-flex;
+	align-items: center;
+	height: var(--control-height);
+	padding: 0 0.75rem;
+	border: 1px solid var(--accent);
+	border-radius: var(--radius);
+	background: var(--accent);
+	color: var(--accent-text);
+	font-size: 0.9375rem;
+	text-decoration: none;
+}
+
+.guide-continue:hover {
+	border-color: var(--link);
+}
+
+.guide-overview {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+	border-top: 1px solid var(--border);
+}
+
+.guide-overview-step {
+	padding: 0.75rem 0;
+	border-bottom: 1px solid var(--border);
+}
+
+.guide-overview-head {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 0.25rem 0.75rem;
+}
+
+.guide-overview-head > .guide-step-number {
+	width: 1rem;
+}
+
+.guide-overview-name {
+	color: var(--text);
+	font-weight: 600;
+	text-decoration: none;
+}
+
+.guide-overview-name:hover {
+	color: var(--link);
+	text-decoration: underline;
+}
+
+.guide-overview-head > .badge {
+	margin-left: auto;
+}
+
+.guide-overview-text {
+	margin: 0.25rem 0 0 1.75rem;
+	color: var(--text-muted);
+	font-size: 0.9375rem;
+	overflow-wrap: anywhere;
+}
+
+/* A text setting offered as a choice: one line per value, the picked one
+ * shaded. */
+.form-choices {
+	max-width: 40rem;
+}
+
+.setting-choice {
+	min-width: 0;
+	margin: 0;
+	padding: 0;
+	border: 0;
+}
+
+.setting-choice > legend {
+	margin: 0 0 var(--label-gap);
+	padding: 0;
+	font-weight: 600;
+	font-size: 0.875rem;
+	line-height: 1.25;
+}
+
+.choice-list {
+	display: grid;
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+}
+
+.choice,
+.field .choice {
+	display: grid;
+	grid-template-columns: auto minmax(0, 1fr);
+	align-items: start;
+	gap: 0 0.625rem;
+	padding: 0.625rem 0.75rem;
+	font-weight: 400;
+	font-size: 0.9375rem;
+	line-height: 1.4;
+	cursor: pointer;
+}
+
+.choice + .choice {
+	border-top: 1px solid var(--border);
+}
+
+.choice:has(input:checked) {
+	background: var(--surface-alt);
+}
+
+.choice input {
+	margin: 0.2rem 0 0;
+	accent-color: var(--link);
+}
+
+.choice-text {
+	display: grid;
+	gap: 0.125rem;
+}
+
+.choice-name {
+	font-weight: 600;
+}
+
+.choice-detail {
+	color: var(--text-muted);
+	font-size: 0.875rem;
+}
+
+/* ── Analysis ───────────────────────────────────────────────── */
+
+/*
+ * Charts are inline SVG whose geometry is in attributes; everything the
+ * content security policy forbids in a style attribute is done here.
+ * Series colours come from the theme (--series-1 .. --series-6).
+ */
+.chart {
+	display: block;
+	width: 100%;
+	max-width: 48rem;
+	height: auto;
+	margin: 0.5rem 0 1rem;
+}
+
+.chart text {
+	fill: var(--text);
+	font-family: var(--font);
+	font-size: 13px;
+}
+
+.chart .chart-value {
+	fill: var(--text-muted);
+}
+
+.chart .chart-value-end {
+	text-anchor: end;
+}
+
+.chart-bar {
+	fill: var(--series-1);
+	fill-opacity: 0.8;
+}
+
+.chart-bar-muted {
+	fill: var(--text-muted);
+}
+
+.chart a {
+	text-decoration: none;
+}
+
+.chart a:hover .chart-label,
+.chart a:focus-visible .chart-label {
+	text-decoration: underline;
+}
+
+a:hover .chart-bar,
+a:focus-visible .chart-bar {
+	fill-opacity: 1;
+}
+
+.chart-axis {
+	stroke: var(--border);
+	stroke-width: 1;
+}
+
+.chart-line {
+	fill: none;
+	stroke: var(--series-1);
+	stroke-width: 2;
+}
+
+.chart-point {
+	fill: var(--series-1);
+}
+
+.chart-series-1 {
+	fill: var(--series-1);
+}
+
+.chart-series-2 {
+	fill: var(--series-2);
+}
+
+.chart-series-3 {
+	fill: var(--series-3);
+}
+
+.chart-series-4 {
+	fill: var(--series-4);
+}
+
+.chart-series-5 {
+	fill: var(--series-5);
+}
+
+.chart-series-6 {
+	fill: var(--series-6);
+}
+
+/* The reports of a section, as a row of links under its heading. */
+.tabs {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.25rem 1.25rem;
+	margin: 0 0 1rem;
+	padding: 0;
+	list-style: none;
+	font-size: 0.9375rem;
+}
+
+.tabs [aria-current="page"] {
+	font-weight: 600;
+	color: var(--text);
+	text-decoration: none;
+}
+
+.snapshot-header {
+	margin: 0 0 1rem;
+}
+
+.dup-group {
+	margin: 1rem 0;
+	padding-top: 0.5rem;
+	border-top: 1px solid var(--border);
+}
+
+.data-table td.num {
+	text-align: right;
+	font-variant-numeric: tabular-nums;
+}
+
+.coverage-list {
+	margin: 0 0 0.5rem;
+	padding-left: 1.25rem;
+}
+
+/* ── Finding titles ─────────────────────────────────────────── */
+
+/*
+ * The search box sits on the top bar's centre line, in the small control
+ * height; the bar's own flex gives it what the tabs and the corner leave.
+ * The kind it searches comes first: one control of two parts, one height
+ * and one bottom edge, the seam a single line.
+ */
+.search-box {
+	display: flex;
+	align-items: stretch;
+	margin: 0;
+}
+
+.search-box select {
+	flex: none;
+	width: auto;
+	height: var(--control-height-small);
+	padding: 0 0.25rem 0 0.5rem;
+	font-size: 0.875rem;
+	color: var(--text);
+	background: var(--surface);
+	border-right-width: 0;
+	border-radius: var(--radius) 0 0 var(--radius);
+}
+
+/* Its own width is the room it is given (no intrinsic width of its own to
+ * hold the row open), never less than 9rem. */
+.search-box input[type="search"] {
+	flex: 1 1 0;
+	width: 0;
+	min-width: 9rem;
+	height: var(--control-height-small);
+	padding: 0 0.625rem;
+	font-size: 0.875rem;
+	color: var(--text);
+	background: var(--bg);
+	border: 1px solid var(--control-border);
+	border-radius: 0 var(--radius) var(--radius) 0;
+	-webkit-appearance: none;
+	appearance: none;
+}
+
+.search-box input[type="search"]::placeholder {
+	color: var(--text-muted);
+	opacity: 1;
+}
+
+/* The kind tabs of the results, in the manner of the page row's tabs. */
+.kind-tabs {
+	margin: 0 0 1rem;
+	border-bottom: 1px solid var(--border);
+}
+
+.kind-tabs ul {
+	display: flex;
+	flex-wrap: wrap;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.kind-tabs a {
+	display: flex;
+	align-items: baseline;
+	gap: 0.5rem;
+	height: 2.5rem;
+	padding: 0 0.875rem;
+	margin-bottom: -1px;
+	border-bottom: 2px solid transparent;
+	color: var(--text-muted);
+	font-size: 0.9375rem;
+	text-decoration: none;
+	line-height: 2.4rem;
+}
+
+.kind-tabs a:hover {
+	color: var(--text);
+	background: var(--surface-alt);
+}
+
+.kind-tabs a.current {
+	color: var(--text);
+	border-bottom-color: var(--link);
+}
+
+.tab-count {
+	font-size: 0.8125rem;
+	font-variant-numeric: tabular-nums;
+	color: var(--text-muted);
+}
+
+.title-group > h2 {
+	display: flex;
+	align-items: baseline;
+	gap: 0.5rem;
+	margin: 1.5rem 0 0.75rem;
+}
+
+.title-group:first-of-type > h2 {
+	margin-top: 0.5rem;
+}
+
+.title-group .more {
+	margin: 1rem 0 0;
+}
+
+.no-results {
+	margin: 0 0 1rem;
+}
+
+/*
+ * A grid of poster cards.  Every card of a page is one size (the columns
+ * share the width), every poster has the 2:3 shape of a poster (a missing
+ * one takes the same room, with the title set in it), the gaps are one
+ * step both ways, and each card's title takes two lines whatever it is, so
+ * the lines under the posters start at the same height across a row.
+ */
+.title-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(10.5rem, 1fr));
+	gap: var(--gutter);
+	margin: 0 0 1rem;
+}
+
+/* In a card (the Library's folders) the card's padding takes some of the
+ * room: the posters may be a little narrower, so a phone still has two. */
+.card .title-grid {
+	grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr));
+}
+
+.title-card {
+	position: relative;
+	display: block;
+	min-width: 0;
+}
+
+.title-card:focus-within {
+	outline: 2px solid var(--focus);
+	outline-offset: 4px;
+}
+
+.poster {
+	width: 100%;
+	aspect-ratio: 2 / 3;
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	overflow: hidden;
+	background: var(--surface-alt);
+}
+
+.poster img {
+	display: block;
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+}
+
+.poster-none {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 0.75rem;
+	color: var(--text-muted);
+	font-size: 0.9375rem;
+	line-height: 1.3;
+	text-align: center;
+}
+
+.poster-title {
+	display: -webkit-box;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 5;
+	line-clamp: 5;
+	overflow: hidden;
+	overflow-wrap: anywhere;
+}
+
+.title-card:hover .poster {
+	border-color: var(--link);
+}
+
+.title-card-name {
+	display: -webkit-box;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 2;
+	line-clamp: 2;
+	height: 2.4375rem;
+	margin: 0 0 0.125rem;
+	overflow: hidden;
+	overflow-wrap: anywhere;
+	font-size: 0.9375rem;
+	font-weight: 600;
+	line-height: 1.3;
+}
+
+.title-card-name a {
+	color: var(--text);
+	text-decoration: none;
+}
+
+/* The whole card is the link. */
+.title-card-name a::after {
+	content: "";
+	position: absolute;
+	inset: 0;
+}
+
+.title-card-name a:focus-visible {
+	outline: none;
+}
+
+.title-card-name a:hover {
+	color: var(--link);
+}
+
+.title-card-line {
+	margin: 0.625rem 0 0.125rem;
+	overflow: hidden;
+	color: var(--text-muted);
+	font-size: 0.8125rem;
+	line-height: 1.3;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.title-card-overview {
+	display: -webkit-box;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 2;
+	line-clamp: 2;
+	height: 2.275rem;
+	margin: 0;
+	overflow: hidden;
+	font-size: 0.8125rem;
+	line-height: 1.4;
+}
+
+.title-card .meta-ids,
+.title-card .as-of {
+	margin: 0.375rem 0 0;
+}
+
+.meta-ids code {
+	font-size: 0.8125rem;
+	overflow-wrap: anywhere;
+}
+
+/* What a module offers for a result, in the corner of its poster. */
+.card-actions {
+	position: absolute;
+	top: 0.375rem;
+	right: 0.375rem;
+	z-index: 1;
+	display: flex;
+	gap: 0.25rem;
+}
+
+/*
+ * Discover: under a card's overview, why it is recommended, then a row with
+ * its state or its one-step add and Not interested.  The row sits above the
+ * card's link (which covers the card), so its buttons are what is pressed.
+ */
+.discover-extra {
+	margin: 0.375rem 0 0;
+}
+
+.title-card-because {
+	margin: 0 0 0.25rem;
+	overflow: hidden;
+	color: var(--text-muted);
+	font-size: 0.8125rem;
+	line-height: 1.3;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.discover-actions,
+.discover-state,
+.quick-add {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 0.25rem 0.5rem;
+}
+
+.discover-actions {
+	position: relative;
+	z-index: 1;
+}
+
+.discover-actions .inline-form {
+	display: inline-flex;
+}
+
+.quick-add-options {
+	font-size: 0.8125rem;
+}
+
+.discover-list-help {
+	margin: 0 0 0.75rem;
+}
+
+.discover-filters {
+	flex-wrap: wrap;
+	grid-auto-flow: row;
+	display: flex;
+	align-items: flex-end;
+	gap: 0.5rem var(--space);
+	margin: 0 0 1rem;
+}
+
+.discover-filters > * {
+	grid-row: auto;
+}
+
+.discover-filters > .field {
+	display: grid;
+	row-gap: var(--label-gap);
+	width: auto;
+	min-width: 8rem;
+}
+
+.discover-filters input[type="number"] {
+	width: 7rem;
+}
+
+/* A title's own page. */
+.title-hero {
+	position: relative;
+	margin: 0 0 1rem;
+	overflow: hidden;
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+}
+
+/* The backdrop is a dimmed band behind the header, never the first thing seen. */
+.title-backdrop {
+	position: absolute;
+	inset: 0;
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+	opacity: 0.16;
+}
+
+.title-head {
+	position: relative;
+	display: grid;
+	grid-template-columns: 10rem minmax(0, 1fr);
+	gap: 1.5rem;
+	align-items: start;
+	padding: 1.25rem;
+}
+
+.title-info {
+	min-width: 0;
+}
+
+.title-info h1 {
+	margin: 0 0 0.5rem;
+	overflow-wrap: anywhere;
+}
+
+.title-original {
+	margin: 0 0 0.5rem;
+	color: var(--text-muted);
+}
+
+.title-line {
+	display: flex;
+	flex-wrap: wrap;
+	margin: 0 0 1rem;
+	padding: 0;
+	list-style: none;
+	color: var(--text-muted);
+	font-size: 0.9375rem;
+}
+
+.title-line li + li {
+	margin-left: 0.75rem;
+	padding-left: 0.75rem;
+	border-left: 1px solid var(--border);
+}
+
+.title-overview {
+	max-width: 46rem;
+	margin: 0 0 1rem;
+	line-height: 1.55;
+}
+
+.title-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.5rem;
+}
+
+.title-links {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.25rem 1.25rem;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.title-links code {
+	margin-left: 0.375rem;
+	color: var(--text-muted);
+}
+
+/* Seasons: each opens to its episodes, without script. */
+.season {
+	border-top: 1px solid var(--border);
+}
+
+.season summary {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 0.25rem 0.75rem;
+	padding: 0.625rem 0;
+	cursor: pointer;
+	list-style: none;
+}
+
+.season summary::-webkit-details-marker {
+	display: none;
+}
+
+.season summary::before {
+	content: "";
+	flex: none;
+	width: 0.4375rem;
+	height: 0.4375rem;
+	border-right: 2px solid var(--text-muted);
+	border-bottom: 2px solid var(--text-muted);
+	transform: rotate(-45deg);
+}
+
+.season[open] summary::before {
+	transform: rotate(45deg);
+}
+
+.season-name {
+	font-weight: 600;
+	white-space: nowrap;
+}
+
+.season-meta {
+	margin-left: auto;
+	color: var(--text-muted);
+	font-size: 0.875rem;
+	font-variant-numeric: tabular-nums;
+}
+
+.season-body {
+	padding: 0 0 0.5rem 1.25rem;
+}
+
+.episodes {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.episode {
+	display: grid;
+	grid-template-columns: 2.5rem minmax(0, 1fr) auto;
+	align-items: baseline;
+	gap: 0 var(--space);
+	padding: 0.375rem 0;
+	border-top: 1px solid var(--border);
+}
+
+.episode-number,
+.episode-date {
+	color: var(--text-muted);
+	font-size: 0.875rem;
+	font-variant-numeric: tabular-nums;
+}
+
+.episode-number {
+	text-align: right;
+}
+
+.episode-name {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+.episode-future .episode-name {
+	color: var(--text-muted);
+}
+
+/* An episode still to come is marked under its name. */
+.episode .badge {
+	grid-column: 2 / -1;
+	justify-self: start;
+	margin: 0.125rem 0 0;
+}
+
+.attribution {
+	margin: 0 0 0.5rem;
+}
+
+.search-results > .attribution {
+	margin-top: 1.5rem;
+}
+
+/* The link to the source, beside the version, in the footer of every page. */
+.footer-source {
+	margin-left: 0.75rem;
+}
+
+/* The details providers' notices under the version, in the footer of every
+ * page (add-metadata-tvdb). */
+.footer-notices {
+	margin-top: 0.375rem;
+	font-variant-numeric: normal;
+}
+
+.footer-notices .attribution {
+	margin: 0 0 0.25rem;
+	font-size: inherit;
+	overflow-wrap: anywhere;
+}
+
+/* TheTVDB's notice beside the seasons of a series that follows its order. */
+.seasons-source {
+	margin: 0 0 0.75rem;
+}
+
+/* A title page's choice of numbering (the strip of views, .list-links: its
+ * links are 44 px tall on a phone) and whether the one shown is followed. */
+.seasons-numbering {
+	margin: 0 0 0.75rem;
+}
+
+.seasons-numbering > .notice,
+.seasons-numbering > .help {
+	margin: 0.375rem 0 0;
+	overflow-wrap: anywhere;
+}
+
+/* ── Films ──────────────────────────────────────────────────── */
+
+/*
+ * A film's state mark: one size, one place and one shape on every card (and
+ * the same box on its page and in tables); the state is told by the word and
+ * a tonal edge, never by a filled block.  Opaque, so that a poster under it
+ * does not show through.
+ */
+.film-mark {
+	display: inline-block;
+	width: 10rem;
+	max-width: 100%;
+	height: 1.375rem;
+	padding: 0 0.25rem;
+	border: 1px solid var(--border);
+	border-radius: 0.125rem;
+	background: var(--surface);
+	color: var(--text-muted);
+	font-size: 0.6875rem;
+	font-weight: 600;
+	letter-spacing: 0.04em;
+	line-height: 1.25rem;
+	text-align: center;
+	text-transform: uppercase;
+	white-space: nowrap;
+}
+
+.film-mark-searching,
+.film-mark-downloading {
+	border-color: var(--link);
+	color: var(--link);
+}
+
+.film-mark-to_import,
+.film-mark-in_library {
+	border-color: var(--ok);
+	color: var(--ok);
+}
+
+.film-mark-upgrade_wanted {
+	border-color: var(--warn);
+	color: var(--warn);
+}
+
+.film-mark-attention {
+	border-color: var(--danger);
+	color: var(--danger);
+}
+
+.film-mark-wanted {
+	border-color: var(--control-border);
+	color: var(--text);
+}
+
+/* The quietest: muted words, but an edge that still holds against the card
+ * (the plain divider colour does not); the contrast test checks every mark's
+ * words and edge in every theme.  An episode's Not aired and Not monitored
+ * are as quiet. */
+.film-mark-not_available,
+.film-mark-not_aired,
+.film-mark-unmonitored {
+	border-color: var(--control-border);
+	color: var(--text-muted);
+}
+
+/* Not out yet and not aired yet are an outline, not a state to act on: a
+ * dashed edge and slanted words, so that they are never taken for Wanted
+ * (solid edge, upright words), which is the same colour pair otherwise. */
+.film-mark-not_available,
+.film-mark-not_aired {
+	border-style: dashed;
+	font-style: italic;
+}
+
+/* A Library folder of a films or series root that is not identified: as
+ * quiet as a film not out yet, with the room its words need; a link to its
+ * unit on the Identify page where it has one. */
+.folder-mark {
+	width: auto;
+	min-width: 7rem;
+	border-color: var(--control-border);
+	color: var(--text-muted);
+	text-decoration: none;
+}
+
+a.folder-mark:hover {
+	border-color: var(--link);
+	color: var(--link);
+}
+
+/* On a poster: its top left corner, the same on every card. */
+.card-actions.film-corner,
+.title-card .card-actions {
+	top: 0.375rem;
+	right: auto;
+	left: 0.375rem;
+}
+
+/*
+ * A search result that can be added carries the whole one-step add (the
+ * button, "Add with options" and the line saying what the Add uses) in the
+ * card's corner.  A badge fits on the poster; those do not, and covered the
+ * artwork.  On a wide screen that corner is under the poster with the card's
+ * text instead, as on Discover.  (A phone's card is a row, set below.)
+ */
+@media (min-width: 40.0625rem) {
+	.title-card .card-actions:has(.quick-add) {
+		position: static;
+		margin: 0.375rem 0 0;
+	}
+}
+
+.data-table td.col-state .film-mark {
+	vertical-align: baseline;
+}
+
+/* A film's panel in its title page's header: state, then what can be done. */
+.film-panel {
+	display: grid;
+	gap: 0.75rem;
+	flex: 1 1 100%;
+	min-width: 0;
+}
+
+.film-panel > .notice {
+	margin: 0;
+}
+
+.film-state {
+	display: grid;
+	gap: 0.375rem;
+	max-width: 46rem;
+}
+
+.film-state-line {
+	display: flex;
+	align-items: center;
+	gap: 0.75rem;
+}
+
+.film-reason {
+	margin: 0;
+	line-height: 1.5;
+}
+
+.film-state-profile {
+	margin: 0;
+	color: var(--text-muted);
+	font-size: 0.875rem;
+}
+
+.film-state .space-bar {
+	max-width: 24rem;
+}
+
+.film-add {
+	display: grid;
+	gap: 0.75rem;
+}
+
+.film-add > p {
+	margin: 0;
+}
+
+/* The add and options forms: labelled fields side by side, wrapping as whole
+ * fields; every control's box on one bottom edge. */
+.film-form {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: flex-end;
+	gap: var(--space);
+	margin: 0;
+}
+
+.film-form > .field,
+.film-form > .add-options > .field {
+	flex: 1 1 11rem;
+	max-width: 17rem;
+}
+
+/* A root's name with its disk and free space. */
+.film-form > .field-wide,
+.film-form > .add-options > .field-wide {
+	flex: 2 1 16rem;
+	max-width: 26rem;
+}
+
+.film-form > .field-check,
+.film-form > .add-options > .field-check {
+	display: flex;
+	align-items: center;
+	gap: 0.375rem;
+	min-height: var(--control-height);
+}
+
+/*
+ * The add form's fields are in a disclosure, closed, for a phone (see the
+ * phone section at the end); wider, the disclosure is not there to see: its
+ * summary is hidden and its fields are the form's row, open or closed.  A
+ * browser without ::details-content keeps the disclosure at every width.
+ */
+.add-options {
+	flex: 1 1 100%;
+}
+
+.add-options > summary {
+	cursor: pointer;
+}
+
+.add-options-chosen {
+	margin-left: 0.5rem;
+	color: var(--text-muted);
+	font-size: 0.875rem;
+}
+
+@supports selector(::details-content) {
+	.add-options {
+		display: contents;
+	}
+
+	.add-options::details-content {
+		display: contents;
+		content-visibility: visible;
+	}
+
+	.add-options > summary {
+		display: none;
+	}
+}
+
+.card > .film-form + .as-of {
+	margin-top: 0.75rem;
+}
+
+.film-actions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: flex-start;
+	gap: 0.5rem;
+}
+
+.film-button {
+	display: inline-flex;
+	margin: 0;
+}
+
+/* A settings card's actions: the one that removes is last, set apart to the
+ * right and drawn as a dangerous one, as .button-danger is. */
+.film-actions > .actions-apart {
+	margin-left: auto;
+}
+
+.film-confirm-danger summary {
+	border-color: var(--danger);
+	color: var(--danger);
+}
+
+/* What needs attention: each reason, its episodes linked, what to do. */
+.attention-box {
+	margin: 0.5rem 0;
+	padding: 0.5rem 0.75rem;
+	border: 1px solid var(--border);
+	border-left: 3px solid var(--danger);
+	border-radius: var(--radius);
+	background: var(--surface);
+}
+
+.attention-lead {
+	margin: 0 0 0.25rem;
+	font-weight: 600;
+}
+
+.attention-reasons {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.attention-reasons > li + li {
+	margin-top: 0.5rem;
+}
+
+.attention-what,
+.attention-do,
+.attention-more {
+	margin: 0;
+}
+
+.attention-do,
+.attention-more {
+	font-size: 0.875rem;
+}
+
+/* What can be done about what a search found. */
+.resolve-box {
+	margin: 0 0 0.75rem;
+	padding: 0.5rem 0.75rem;
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	background: var(--bg);
+}
+
+.resolve-box h3 {
+	margin: 0 0 0.5rem;
+	font-size: 1rem;
+}
+
+.resolve-box > * + * {
+	margin-top: 0.5rem;
+}
+
+.profile-choice .profile-group {
+	margin: 0 0 0.5rem;
+}
+
+.profile-choice .field-check {
+	display: flex;
+	align-items: baseline;
+	gap: 0.375rem;
+}
+
+.profile-verdict {
+	color: var(--text-muted);
+}
+
+.profile-accepts .profile-verdict {
+	color: var(--text);
+	font-weight: 600;
+}
+
+.series-profile-line {
+	margin: 0.25rem 0;
+}
+
+/* A list's mark that leads to where what is wrong is put right. */
+.mark-link {
+	text-decoration: none;
+}
+
+/* A button that opens to the form that confirms it: no script. */
+.film-confirm summary {
+	display: inline-flex;
+	align-items: center;
+	height: var(--control-height-small);
+	padding: 0 0.625rem;
+	border: 1px solid var(--control-border);
+	border-radius: var(--radius);
+	background: var(--surface-alt);
+	color: var(--text);
+	font-size: 0.875rem;
+	white-space: nowrap;
+	cursor: pointer;
+	list-style: none;
+}
+
+.film-confirm summary::-webkit-details-marker {
+	display: none;
+}
+
+.film-confirm summary:hover,
+.film-confirm[open] summary {
+	border-color: var(--link);
+}
+
+.film-confirm-form {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 0.5rem 0.75rem;
+	max-width: 36rem;
+	margin: 0.5rem 0 0;
+	padding: 0.5rem 0.75rem;
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	background: var(--bg);
+}
+
+.film-confirm-form .field-check {
+	display: flex;
+	align-items: baseline;
+	gap: 0.375rem;
+	font-size: 0.875rem;
+}
+
+.film-search-line {
+	margin: 0 0 0.5rem;
+	color: var(--text-muted);
+	font-size: 0.875rem;
+}
+
+.film-outcome {
+	margin: 0 0 0.75rem;
+}
+
+/* A release's reasons, under its name. */
+.release-reasons {
+	margin: 0.25rem 0 0;
+	padding: 0;
+	list-style: none;
+	color: var(--text-muted);
+	font-size: 0.8125rem;
+	line-height: 1.4;
+}
+
+.release-reasons li + li {
+	margin-top: 0.125rem;
+}
+
+.release-reasons .reason-note {
+	color: var(--text);
+}
+
+.release-accepted td.col-name > bdi {
+	font-weight: 600;
+}
+
+/* A manual search: its groups, one under another, the sort and filter
+ * links above them, and the confirmation of a grab by hand. */
+.manual-choices {
+	margin: 0 0 0.75rem;
+}
+
+.manual-group + .manual-group {
+	margin-top: 1rem;
+}
+
+.manual-group h3 {
+	margin: 0 0 0.25rem;
+	font-size: 1rem;
+}
+
+.manual-running {
+	margin: 0 0 0.5rem;
+	font-weight: 600;
+}
+
+.manual-sentence {
+	margin: 0 0 0.75rem;
+	max-width: 48rem;
+}
+
+.manual-confirm-form {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 0.5rem 0.75rem;
+}
+
+.manual-confirm-form .field-check {
+	display: flex;
+	align-items: baseline;
+	gap: 0.375rem;
+}
+
+/* The confirmation of a grab by force, and the episode picker: one tick per
+ * row (a file's long text wraps beside its box), the picker's episodes in a
+ * column, and the rule set aside in the warning colour. */
+.manual-confirm-form > .field-check,
+.force-pick-list > .field-check {
+	flex: 1 1 100%;
+	align-items: flex-start;
+	min-width: 0;
+}
+
+.manual-confirm-form > .field-check > input,
+.force-pick-list > .field-check > input {
+	flex: none;
+	margin-top: 0.25rem;
+}
+
+.manual-confirm-form > .field-check > label,
+.force-pick-list > .field-check > label {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+.force-pick-list {
+	display: flex;
+	flex-direction: column;
+	flex: 1 1 100%;
+	gap: 0.5rem;
+	margin: 0 0 0.25rem;
+	min-width: 0;
+}
+
+.manual-confirm-form > .field {
+	flex: 1 1 100%;
+	max-width: 24rem;
+}
+
+.manual-confirm-form > .field select {
+	width: 100%;
+}
+
+.manual-confirm-form > .button-small,
+.manual-confirm-form > .film-actions {
+	margin-top: 0.25rem;
+}
+
+.force-rule {
+	margin: 0 0 0.5rem;
+	padding: 0.4rem 0.7rem;
+	border: 1px solid var(--warn);
+	border-left-width: 3px;
+	border-radius: var(--radius);
+	background: var(--warn-bg);
+	color: var(--warn);
+	overflow-wrap: anywhere;
+}
+
+@media (max-width: 40rem) {
+	.manual-confirm-form > .field-check > input,
+	.force-pick-list > .field-check > input {
+		width: 1.25rem;
+		height: 1.25rem;
+		margin-top: 0.125rem;
+	}
+
+	.manual-confirm-form > .field {
+		max-width: none;
+	}
+}
+
+/* An import's page: its state line stands apart from the cards below. */
+.import-state {
+	margin: 0 0 1rem;
+}
+
+/* What resolves a blocked import: one form under another. */
+.import-actions > form + form,
+.import-actions > form + .film-actions {
+	margin-top: 1rem;
+}
+
+/* The volume warning: one paragraph per pair of volumes. */
+.import-volume-warning > p {
+	margin: 0;
+}
+
+.import-volume-warning > p + p {
+	margin-top: 0.5rem;
+}
+
+/* The Naming page: the fields in a narrow column, the preview as wide as
+ * its card; a name wraps anywhere rather than widen the page, and the file
+ * sits under its folder. */
+.naming-form > .field {
+	max-width: 26rem;
+}
+
+.naming-preview code {
+	padding: 0;
+	background: none;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+
+.naming-file {
+	padding-left: 1.25rem;
+}
+
+.data-table td.col-actions .film-button {
+	justify-content: flex-end;
+}
+
+.film-sort {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 0.25rem 0.875rem;
+	margin: 0 0 1rem;
+	color: var(--text-muted);
+	font-size: 0.875rem;
+}
+
+.film-sort a {
+	color: var(--text-muted);
+	text-decoration: none;
+	border-bottom: 2px solid transparent;
+}
+
+.film-sort a:hover {
+	color: var(--text);
+}
+
+.film-sort a.current {
+	color: var(--text);
+	border-bottom-color: var(--link);
+}
+
+/* ── Lists of titles: the filter line, the views, the pages ─── */
+
+/*
+ * Under the state tabs, one line: the name box and its button at the left,
+ * and at the right the orders and the views, each a row of text links with
+ * the current one marked as a tab is.  It wraps as whole groups.
+ */
+.list-bar {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: space-between;
+	gap: 0.75rem 1.5rem;
+	margin: 0 0 1rem;
+}
+
+.list-filter {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	flex: 0 1 24rem;
+	min-width: 0;
+}
+
+.list-filter input[type="text"] {
+	flex: 1 1 auto;
+	height: var(--control-height-small);
+	padding: 0 0.625rem;
+	font-size: 0.875rem;
+}
+
+.list-filter > a {
+	font-size: 0.875rem;
+	white-space: nowrap;
+}
+
+.list-choices {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 0.5rem 1.75rem;
+}
+
+.list-links {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 0.25rem 0.875rem;
+	font-size: 0.875rem;
+	line-height: var(--control-height-small);
+}
+
+.list-links-label {
+	color: var(--text-muted);
+	font-size: 0.75rem;
+	font-weight: 600;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+}
+
+.list-links a {
+	color: var(--text-muted);
+	text-decoration: none;
+	border-bottom: 2px solid transparent;
+	line-height: 1.4;
+}
+
+.list-links a:hover {
+	color: var(--text);
+}
+
+.list-links a.current {
+	color: var(--text);
+	border-bottom-color: var(--link);
+}
+
+/* A table's heading that sorts it: a link in the style of the strip of
+ * choices, the sorted one marked with its direction (aria-sort). */
+.data-table th a.sort-link {
+	color: inherit;
+	text-decoration: none;
+	border-bottom: 2px solid transparent;
+}
+
+.data-table th a.sort-link:hover {
+	color: var(--text);
+}
+
+.data-table th[aria-sort] a.sort-link {
+	color: var(--text);
+	border-bottom-color: var(--link);
+}
+
+.data-table th[aria-sort="ascending"] a.sort-link::after {
+	content: " \25B2";
+	font-size: 0.75em;
+}
+
+.data-table th[aria-sort="descending"] a.sort-link::after {
+	content: " \25BC";
+	font-size: 0.75em;
+}
+
+/* A group of a manual search folded under its count. */
+.manual-fold {
+	cursor: pointer;
+	font-weight: 600;
+}
+
+/* Under the list: how many, and the way to the other pages. */
+.list-foot {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 0.5rem 1rem;
+	margin: 0 0 1rem;
+}
+
+.list-count {
+	margin: 0;
+	color: var(--text-muted);
+	font-size: 0.875rem;
+	font-variant-numeric: tabular-nums;
+}
+
+.list-foot .pager {
+	margin: 0;
+}
+
+/*
+ * The overview: one dense line a title, as dense as a unit to review: a
+ * small poster, the title and year, a line of facts, the reason when it
+ * needs a person, and the state's mark at the right.
+ */
+.title-rows {
+	margin: 0 0 1rem;
+	padding: 0;
+	list-style: none;
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+}
+
+.title-row {
+	display: grid;
+	grid-template-columns: 4rem minmax(0, 1fr) auto;
+	gap: 0 1rem;
+	align-items: start;
+	padding: 0.5rem 0.75rem;
+}
+
+.title-row + .title-row {
+	border-top: 1px solid var(--border);
+}
+
+.title-row-thumb {
+	display: block;
+	width: 4rem;
+}
+
+/* The title is beside it: a poster not kept yet is a tonal box. */
+.title-row-thumb .poster-none {
+	padding: 0;
+}
+
+.title-row-thumb .poster-title {
+	display: none;
+}
+
+.title-row-thumb:hover .poster {
+	border-color: var(--link);
+}
+
+.title-row-main {
+	display: grid;
+	gap: 0.125rem;
+	min-width: 0;
+	padding-top: 0.125rem;
+}
+
+.title-row-head {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 0 0.5rem;
+	margin: 0;
+}
+
+.title-row-name {
+	color: var(--text);
+	font-weight: 600;
+	text-decoration: none;
+	overflow-wrap: anywhere;
+}
+
+.title-row-name:hover {
+	color: var(--link);
+	text-decoration: underline;
+}
+
+.title-row-year {
+	color: var(--text-muted);
+	font-size: 0.875rem;
+	font-variant-numeric: tabular-nums;
+}
+
+.title-row-facts,
+.title-row-reason {
+	margin: 0;
+	color: var(--text-muted);
+	font-size: 0.8125rem;
+	line-height: 1.4;
+}
+
+.title-row-reason {
+	display: -webkit-box;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 2;
+	line-clamp: 2;
+	overflow: hidden;
+}
+
+.title-row-attention {
+	color: var(--danger);
+}
+
+.title-row-mark {
+	padding-top: 0.125rem;
+}
+
+.title-table {
+	margin: 0 0 1rem;
+}
+
+/* ── Series ─────────────────────────────────────────────────── */
+
+/* How complete a series is: its figures over the same thin bar a volume's
+ * fullness has, under a card's overview and in a series' head. */
+.series-complete {
+	display: grid;
+	gap: 0.25rem;
+	margin: 0.375rem 0 0;
+}
+
+.series-complete-text {
+	margin: 0;
+	color: var(--text-muted);
+	font-size: 0.8125rem;
+	font-variant-numeric: tabular-nums;
+}
+
+.series-complete .space-bar {
+	height: 0.25rem;
+}
+
+/* A series' head: its poster, then its name, state and completeness. */
+.series-head {
+	display: flex;
+	align-items: flex-start;
+	gap: var(--space);
+	margin: 0 0 1rem;
+}
+
+.series-head > .poster {
+	flex: none;
+	width: 7.5rem;
+}
+
+.series-info {
+	display: grid;
+	gap: 0.5rem;
+	flex: 1 1 auto;
+	min-width: 0;
+	max-width: 46rem;
+}
+
+.series-info > h1 {
+	margin: 0;
+}
+
+.series-info .series-complete {
+	max-width: 24rem;
+}
+
+.series-back {
+	margin: -0.5rem 0 1rem;
+}
+
+/* A season: its name, whether it is monitored, its figures; then what can
+ * be done about it and its episodes. */
+.season-monitored {
+	margin: 0;
+	color: var(--text-muted);
+	font-size: 0.875rem;
+}
+
+.season summary > .season-name,
+.season summary > .season-meta {
+	margin: 0;
+}
+
+.season-actions {
+	align-items: center;
+	margin: 0 0 0.5rem;
+}
+
+.season-monitor {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	margin: 0;
+}
+
+.episode-reason,
+.episode-line {
+	margin: 0.125rem 0 0;
+	color: var(--text-muted);
+	font-size: 0.8125rem;
+	line-height: 1.4;
+}
+
+.series-options {
+	margin-top: 0.75rem;
+}
+
+/* The calendar: one section a day, an episode a row. */
+.series-calendar {
+	display: grid;
+	gap: 1.25rem;
+}
+
+.calendar-day > h2 {
+	margin: 0 0 0.375rem;
+	font-size: 1rem;
+}
+
+.calendar-today > h2 {
+	font-weight: 700;
+}
+
+.calendar-list {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.calendar-item {
+	display: grid;
+	grid-template-columns: 7rem minmax(0, 16rem) 4.5rem minmax(0, 1fr);
+	align-items: baseline;
+	gap: 0.25rem 0.75rem;
+	padding: 0.375rem 0;
+	border-top: 1px solid var(--border);
+}
+
+.calendar-number,
+.calendar-title {
+	margin: 0;
+}
+
+.calendar-number {
+	color: var(--text-muted);
+	font-size: 0.875rem;
+	font-variant-numeric: tabular-nums;
+}
+
+.calendar-title {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+/* ── Identify ───────────────────────────────────────────────── */
+
+/* A root's figures, then where its identification is. */
+.identify-counts {
+	margin-bottom: 0.25rem;
+}
+
+.identify-progress > p {
+	margin: 0 0 0.25rem;
+}
+
+.identify-progress + .film-button {
+	margin-top: 0.75rem;
+}
+
+/*
+ * A unit to review: one bordered row.  On the left its name and mark, its
+ * runtime and its reasons; on the right its candidates, each a thumbnail
+ * with the title and year beside it and a small button under them, then the
+ * unit's own small buttons: every button on one bottom edge.  A unit with
+ * one candidate is as tall as a thumbnail and the row's padding.  At narrow
+ * widths the two sides stack.
+ */
+.identify-row {
+	display: grid;
+	grid-template-columns: minmax(14rem, 1fr) minmax(0, 2fr);
+	gap: 0.5rem 1.5rem;
+	align-items: start;
+	padding: 0.5rem 0.75rem;
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+}
+
+.identify-row + .identify-row {
+	margin-top: 0.5rem;
+}
+
+.identify-review > .identify-row + a {
+	display: inline-block;
+	margin-top: 0.75rem;
+}
+
+.identify-facts {
+	display: grid;
+	gap: 0.25rem;
+	min-width: 0;
+}
+
+.identify-head {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 0.25rem 0.75rem;
+	min-width: 0;
+	font-weight: 600;
+}
+
+.identify-head > a {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+.identify-runs {
+	margin: 0;
+	color: var(--text-muted);
+	font-size: 0.8125rem;
+}
+
+.identify-facts > .release-reasons {
+	margin: 0;
+}
+
+.identify-side {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: flex-end;
+	gap: 0.5rem 1rem;
+	min-width: 0;
+}
+
+.identify-picks {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: flex-end;
+	gap: 0.5rem 1rem;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+/* A candidate: the thumbnail sets the height; the button sits at its foot. */
+.identify-pick {
+	display: grid;
+	grid-template-columns: 4rem 9rem;
+	gap: 0 0.5rem;
+}
+
+.identify-thumb {
+	width: 4rem;
+}
+
+/* A poster not stored yet is a tonal box: the title is beside it. */
+.identify-thumb .poster-none {
+	padding: 0;
+}
+
+.identify-thumb .poster-title {
+	display: none;
+}
+
+.identify-pick-text {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+}
+
+.identify-pick-name {
+	display: -webkit-box;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 2;
+	line-clamp: 2;
+	overflow: hidden;
+	overflow-wrap: anywhere;
+	font-size: 0.875rem;
+	font-weight: 600;
+	line-height: 1.3;
+}
+
+.identify-pick-year {
+	margin: 0.125rem 0 0;
+	color: var(--text-muted);
+	font-size: 0.8125rem;
+}
+
+/* What tells candidates apart: the running time, a series' seasons. */
+.identify-pick-facts {
+	margin: 0;
+	color: var(--text-muted);
+	font-size: 0.8125rem;
+}
+
+/*
+ * After an action the page lands at the card that followed the one acted
+ * on (its id is the address's fragment), with the notice of the action
+ * directly before it: the room kept above a card is where that notice is.
+ */
+.identify-row,
+.kind-identify-linked tr,
+.kind-identify-not-film tr {
+	scroll-margin-top: 6rem;
+}
+
+.identify-notice {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 0.5rem 1rem;
+}
+
+.identify-notice > p {
+	margin: 0;
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+.identify-review > .identify-notice {
+	margin: 0.5rem 0;
+}
+
+.identify-notice-row > td {
+	padding: 0.25rem 0;
+}
+
+.identify-notice-row .notice {
+	margin: 0;
+}
+
+.identify-pick-text > .film-button {
+	margin-top: auto;
+}
+
+.identify-actions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: flex-end;
+	gap: 0.5rem;
+}
+
+/* A row's own buttons keep to its right edge, as a table's do. */
+.identify-side > .identify-actions {
+	margin-left: auto;
+}
+
+/* A title's page: where its file is. */
+.identify-line {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 0.25rem 0.75rem;
+	margin: 0 0 0.5rem;
+	min-width: 0;
+}
+
+.identify-line > a {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+.identify-line + .data-table + .identify-line {
+	margin-top: 1rem;
+}
+
+.identify-note {
+	margin: 0;
+}
+
+/* ── htmx ───────────────────────────────────────────────────── */
+
+/*
+ * htmx would inject this rule in a style element, which the content
+ * security policy forbids (the page turns that off with
+ * includeIndicatorStyles).
+ */
+.htmx-indicator {
+	opacity: 0;
+	transition: opacity 200ms ease-in;
+}
+
+.htmx-request .htmx-indicator,
+.htmx-request.htmx-indicator {
+	opacity: 1;
+}
+
+/* ── Narrow widths ──────────────────────────────────────────── */
+
+/*
+ * Below this width the tabs leave the top row for a line of their own
+ * under it, and every navigation line scrolls sideways rather than wraps.
+ * Nothing opens or closes, so no script is involved.  The width is what the
+ * top row takes on one line with its five tabs (Dashboard, Media, Activity,
+ * Media management, System; every media type is a section of Media, so
+ * another type adds none), the search box with its kind and a text field of
+ * 9rem, the running-jobs indicator and a long user name cut to 4rem (a
+ * name gives way before the tabs do), measured in headless Chrome: 1190
+ * pixels in the browser's own face, 1230 in Montserrat, the widest face
+ * measured.  1024 pixels is not reachable without cutting the search box,
+ * the tabs or the name further.
+ *
+ * (add-attention-notices) The bell of what needs attention and its gap add
+ * 4.25rem to the row, to the right of the search box.  The width above is
+ * kept: since those figures were taken the running-jobs indicator gives way
+ * to 7rem before anything else does, which leaves more than the bell takes.
+ * Measured again in headless Chrome at 1233 pixels, one above this width,
+ * with the bell at nothing, 3 and "99+": in the browser's own face the row is
+ * one line with the search field at 189 pixels (its floor is 144); in
+ * Montserrat with a long user name it is one line with the field and the
+ * indicator at their floors and the name cut to 69.5 pixels, still above
+ * the 4rem (64) it was cut to for the figures above: the row needs 1228
+ * pixels there.  Nothing overlaps and the page does not scroll sideways,
+ * there or at 768, 1024 and 1280 pixels.
+ */
+@media (max-width: 77rem) {
+	.top-bar {
+		flex-wrap: wrap;
+		gap: 0 0.75rem;
+		min-height: 0;
+		padding-top: 0.5rem;
+	}
+
+	.top-bar > :not(.primary-nav) {
+		margin-bottom: 0.5rem;
+	}
+
+	.primary-nav {
+		order: 10;
+		flex: 1 0 100%;
+		margin: 0 calc(-1 * var(--gutter));
+		padding: 0 calc(var(--gutter) - 0.875rem);
+		border-top: 1px solid var(--border);
+		overflow-x: auto;
+		scrollbar-width: thin;
+	}
+
+	.tab-list {
+		min-height: 2.75rem;
+	}
+
+	.page-nav .bar {
+		overflow-x: auto;
+		scrollbar-width: thin;
+	}
+
+	.brand .logo {
+		width: 2.25rem;
+		height: 2.25rem;
+	}
+
+	.brand-name {
+		font-size: 1.25rem;
+	}
+}
+
+@media (max-width: 40rem) {
+	h1 {
+		font-size: 1.375rem;
+	}
+
+	.top-bar {
+		gap: 0 0.5rem;
+	}
+
+	.user-name {
+		max-width: 6rem;
+	}
+
+	/* On a phone the box has a line of its own, above the tabs. */
+	.search-slot {
+		order: 5;
+		flex: 1 0 100%;
+		max-width: none;
+		margin-left: 0;
+	}
+
+	.user-menu {
+		margin-left: auto;
+	}
+
+	.title-head {
+		grid-template-columns: minmax(0, 1fr);
+		gap: 1rem;
+		padding: 0.75rem;
+	}
+
+	.poster-large {
+		width: 8rem;
+	}
+
+	/* A line that wraps has no rules at its ends. */
+	.title-line {
+		gap: 0 1rem;
+	}
+
+	.title-line li + li {
+		margin-left: 0;
+		padding-left: 0;
+		border-left: 0;
+	}
+
+	.season-body {
+		padding-left: 0;
+	}
+
+	.card {
+		padding: 0.75rem;
+	}
+
+	.facts {
+		grid-template-columns: 1fr;
+	}
+
+	.facts dd {
+		margin-bottom: 0.25rem;
+	}
+
+	/* A row of controls stacks. */
+	.inline-form {
+		grid-auto-flow: row;
+		grid-template-rows: none;
+		justify-items: start;
+		row-gap: var(--space);
+	}
+
+	.inline-form > *,
+	.inline-form > .field {
+		grid-row: auto;
+	}
+
+	.inline-form > .field {
+		grid-template-rows: none;
+		width: 100%;
+	}
+
+	/* A quality's row: its name, then its sizes, then its buttons. */
+	.quality-row {
+		grid-template-columns: 1.5rem minmax(0, 1fr) minmax(0, 1fr);
+	}
+
+	.quality-row > .quality-name {
+		grid-column: 2 / -1;
+	}
+
+	.quality-row > .quality-size:first-of-type {
+		grid-column: 2;
+	}
+
+	.quality-moves {
+		grid-column: 2 / -1;
+		justify-content: flex-start;
+	}
+
+	.quality-try-row > .field {
+		flex-basis: 100%;
+	}
+
+	/* A film's form: one field under another. */
+	.film-form > .field {
+		flex-basis: 100%;
+		max-width: none;
+	}
+
+	/* The Naming preview: each film a block, its names under it, so that
+	 * the form keeps the card's width. */
+	.naming-form > * {
+		min-width: 0;
+	}
+
+	.data-table.kind-naming-preview {
+		min-width: 0;
+	}
+
+	.kind-naming-preview colgroup,
+	.kind-naming-preview thead {
+		display: none;
+	}
+
+	.data-table.kind-naming-preview,
+	.data-table.kind-naming-preview tbody,
+	.data-table.kind-naming-preview tr,
+	.data-table.kind-naming-preview td {
+		display: block;
+	}
+
+	.data-table.kind-naming-preview td {
+		height: auto;
+		padding-left: 0;
+		padding-right: 0;
+	}
+
+	.data-table.kind-naming-preview td:first-child {
+		border-bottom: 0;
+	}
+
+	.data-table.kind-naming-preview td + td {
+		padding-top: 0;
+	}
+
+	.dashboard {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	/* A title of the overview: its mark under its facts. */
+	.title-row {
+		grid-template-columns: 3rem minmax(0, 1fr);
+		gap: 0.375rem 0.75rem;
+	}
+
+	.title-row-thumb {
+		grid-row: 1 / span 2;
+		width: 3rem;
+	}
+
+	.title-row-mark {
+		grid-column: 2;
+		padding-top: 0;
+	}
+
+	/* The name box takes the line; the orders and views go under it. */
+	.list-filter {
+		flex-basis: 100%;
+	}
+
+	/* What is needed: the link under its sentence. */
+	.ready-item {
+		grid-template-columns: 4.5rem minmax(0, 1fr);
+	}
+
+	.ready-link {
+		grid-column: 2;
+	}
+
+	/* The setup guide: its steps a row of numbered marks across the top,
+	 * the way to every step on a line above them. */
+	.guide {
+		grid-template-columns: minmax(0, 1fr);
+		gap: 1rem;
+	}
+
+	.guide-steps {
+		position: static;
+		border-left: 0;
+		border-bottom: 1px solid var(--border);
+	}
+
+	.guide-overview-link {
+		display: inline-block;
+		margin: 0 0 0.25rem;
+		padding: 0.25rem 0;
+		border-left: 0;
+		background: none;
+	}
+
+	.guide-overview-link[aria-current] {
+		background: none;
+	}
+
+	.guide-step-list {
+		display: flex;
+		justify-content: space-between;
+	}
+
+	.guide-step a {
+		grid-template-columns: 0.875rem auto;
+		gap: 0 0.3125rem;
+		margin: 0 0 -1px;
+		padding: 0.5rem 0.3125rem;
+		border-left: 0;
+		border-bottom: 2px solid transparent;
+	}
+
+	.guide-step a[aria-current] {
+		border-bottom-color: var(--link);
+		background: none;
+	}
+
+	.guide-step-name {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		overflow: hidden;
+		clip: rect(0 0 0 0);
+		white-space: nowrap;
+	}
+
+	.guide-item {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.guide-overview-text {
+		margin-left: 0;
+	}
+
+	.guide-actions > .actions {
+		width: 100%;
+	}
+
+	/* A unit to review: its facts, then its candidates under them. */
+	.identify-row {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.identify-pick {
+		grid-template-columns: 4rem minmax(0, 9rem);
+	}
+
+	.identify-side > .identify-actions {
+		margin-left: 0;
+	}
+
+	/* A series' head: the poster beside the name, smaller (room for a
+	 * placeholder's word). */
+	.series-head > .poster {
+		width: 6.25rem;
+	}
+
+	/* A day's episode: its mark and its series, then its number and title. */
+	.calendar-item {
+		grid-template-columns: 7rem minmax(0, 1fr);
+	}
+
+	.calendar-number {
+		grid-column: 1;
+		text-align: right;
+	}
+}
+
+/* ── Phones (add-phone-layout) ──────────────────────────────── */
+
+/*
+ * At most 40rem wide (a phone held upright) the pages are laid out for a
+ * thumb.  Every rule of it is in this section, after the narrow widths
+ * above, which it builds on; nothing here applies to a wider screen.
+ *
+ *  - The header: the brand, the running jobs and the account on a top line;
+ *    under it the open tab's pages (in Media also the open type's), each a
+ *    strip that scrolls sideways; then the search box.  The header sticks
+ *    once the lines above the search box have scrolled away, so the box is
+ *    always one tap away.  The five tabs leave the header for a bar at the
+ *    foot of the screen, one tap each.  Room is kept on the top line for
+ *    what else the header shows there.
+ *  - Every field, drop-down and button is at least 44 px high, and the text
+ *    in a field is 16 px, so that a phone does not zoom in to it.
+ *  - A data table's rows are stacked: its first cell and its state on the
+ *    first line (with a short first cell, the name beside it), then a
+ *    progress bar, then every other cell after its column's heading (the
+ *    data-label the table helper gives each cell), then its buttons.
+ *  - The results of a search and Discover's cards are rows: a small poster
+ *    beside the title, its year and kind, the start of its overview, and its
+ *    state or its Add.
+ *  - A title's page: the poster beside the name and the facts, the add
+ *    form's options closed under a summary of what it adds with, and the
+ *    Add button straight after.
+ *  - The bars stay inside the screen's safe area (a notch, round corners,
+ *    the home indicator).
+ */
+@media (max-width: 40rem) {
+	:root {
+		/* The header's top line, a strip of pages, the bar of tabs. */
+		--phone-line: 3rem;
+		--phone-row: 2.75rem;
+		--phone-tabs: 3.5rem;
+		--phone-left: max(var(--gutter), env(safe-area-inset-left, 0px));
+		--phone-right: max(var(--gutter), env(safe-area-inset-right, 0px));
+		--control-height: 2.75rem;
+		--control-height-small: 2.75rem;
+	}
+
+	body {
+		padding-bottom: calc(var(--phone-tabs) + env(safe-area-inset-bottom, 0px));
+	}
+
+	.bar,
+	.content {
+		padding-left: var(--phone-left);
+		padding-right: var(--phone-right);
+	}
+
+	.content {
+		padding-top: 1rem;
+		padding-bottom: 1.5rem;
+	}
+
+	/* The header: its own lines, sticky above the search box. */
+	.site-header {
+		position: sticky;
+		top: calc(-1 * var(--phone-line));
+		z-index: 20;
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0 0.625rem;
+		padding: 0 var(--phone-right) 0 var(--phone-left);
+	}
+
+	.site-header:has(#nav-rows > .page-nav) {
+		top: calc(-1 * (var(--phone-line) + var(--phone-row) + 1px));
+	}
+
+	.site-header .top-bar {
+		display: contents;
+	}
+
+	.site-header .top-bar > * {
+		order: 1;
+		margin: 0;
+	}
+
+	.site-header .brand {
+		order: 0;
+		height: var(--phone-line);
+		margin-right: auto;
+	}
+
+	.brand .logo {
+		width: 2rem;
+		height: 2rem;
+	}
+
+	.brand-name {
+		font-size: 1.125rem;
+	}
+
+	.site-header .user-menu {
+		order: 2;
+	}
+
+	.user-name {
+		display: inline-flex;
+		align-items: center;
+		max-width: 5rem;
+		min-height: 2.75rem;
+	}
+
+	.site-header .activity {
+		min-height: 2.25rem;
+	}
+
+	/* (add-activity-feedback) The indicator keeps to one line of the top
+	 * line: its count; what runs is on the Activity page. */
+	.site-header .activity-kinds {
+		display: none;
+	}
+
+	/* (add-activity-feedback) The bar of where Adds go: a line per select,
+	 * each full width.  It scrolls away with the page: kept in place it took
+	 * a third of the screen from the list. */
+
+	.add-defaults {
+		gap: 0.375rem;
+	}
+
+	.add-defaults .field {
+		flex: 1 0 100%;
+	}
+
+	.add-defaults .field select {
+		flex: 1 1 auto;
+	}
+
+	/* The rows under the tabs: one strip, swiped sideways (in Media the
+	 * media types, a thin line, then the open type's pages). */
+	#nav-rows {
+		order: 3;
+		display: flex;
+		flex: 1 0 100%;
+		margin: 0 calc(-1 * var(--phone-right)) 0 calc(-1 * var(--phone-left));
+		padding: 0 var(--phone-right) 0 var(--phone-left);
+		overflow-x: auto;
+		scrollbar-width: none;
+	}
+
+	#nav-rows::-webkit-scrollbar {
+		display: none;
+	}
+
+	#nav-rows:not(:empty) {
+		border-top: 1px solid var(--border);
+	}
+
+	#nav-rows > .page-nav {
+		display: flex;
+		flex: none;
+		border-top: 0;
+	}
+
+	#nav-rows > .page-nav + .page-nav::before {
+		content: "";
+		flex: none;
+		align-self: center;
+		width: 1px;
+		height: 1.25rem;
+		margin: 0 0.5rem 0 1rem;
+		background: var(--control-border);
+	}
+
+	/* The search box and, to its right in the same line, the bell of what
+	 * needs attention (add-attention-notices): the line that stays at the
+	 * top of the screen.  The box takes the room the bell leaves (its text
+	 * field gives way first); the bell is a thumb's target, 44 px each way.
+	 * The box asks for the line less the bell and the gap (2.75rem and the
+	 * header's 0.625rem), which is more than the strip of pages above leaves
+	 * beside itself (its negative margins leave two gutters less the gap),
+	 * so the box starts a line and the bell is the one thing that fits after
+	 * it; without a bell the box grows to the whole line.  Measured in
+	 * headless Chrome at 360 and 390 px with the bell at nothing, 3 and
+	 * "99+": one line, nothing overlaps, nothing past the screen's edge. */
+	.site-header .search-slot {
+		order: 4;
+		flex: 1 1 calc(100% - 2.75rem - 0.625rem);
+		min-width: 0;
+		max-width: none;
+		padding: 0.375rem 0 0.5rem;
+	}
+
+	.site-header .attn-bell {
+		order: 5;
+		width: 2.75rem;
+		height: 2.75rem;
+		margin: 0.375rem 0 0.5rem;
+	}
+
+	.site-header .search-slot:empty ~ .attn-bell {
+		margin-left: auto;
+	}
+
+	/* A notice's button under its words, full width of the thumb's reach. */
+	.attn-row {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.attn-form {
+		grid-column: 1;
+		grid-row: auto;
+	}
+
+	#nav-rows .page-nav .bar {
+		max-width: none;
+		margin: 0;
+		padding: 0;
+		overflow: visible;
+	}
+
+	/* The strip opens scrolled to the open page, where the browser can
+	 * (scroll-initial-target); elsewhere it opens at its start. */
+	#nav-rows .page-nav:not(.section-nav) a[aria-current] {
+		scroll-initial-target: nearest;
+	}
+
+	.page-list,
+	.type-nav .page-list {
+		height: var(--phone-row);
+		min-height: 0;
+	}
+
+	/* The tabs: a bar at the foot of the screen. */
+	.site-header .primary-nav {
+		position: fixed;
+		right: 0;
+		bottom: 0;
+		left: 0;
+		z-index: 20;
+		display: block;
+		margin: 0;
+		padding: 0 env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
+		overflow: visible;
+		background: var(--surface);
+		border-top: 1px solid var(--logo-step-2);
+	}
+
+	.tab-list {
+		height: var(--phone-tabs);
+		min-height: 0;
+	}
+
+	.tab-list li {
+		flex: 1 1 0;
+		min-width: 0;
+	}
+
+	.tab-list a {
+		flex: 1 1 auto;
+		justify-content: center;
+		padding: 0 0.25rem;
+		border-bottom: 0;
+		font-size: 0.75rem;
+		line-height: 1.2;
+		text-align: center;
+		white-space: normal;
+	}
+
+	.tab-list a.current {
+		border-top-color: var(--link);
+	}
+
+	/* Fields, drop-downs and buttons: a thumb's size, a phone's text. */
+	input[type="text"],
+	input[type="password"],
+	input[type="search"],
+	input[type="number"],
+	input[type="time"],
+	select,
+	textarea,
+	.search-box select,
+	.search-box input[type="search"],
+	.list-filter input[type="text"],
+	.data-table td.col-controls .inline-form select {
+		font-size: 1rem;
+	}
+
+	.search-box select,
+	.search-box input[type="search"] {
+		height: 2.75rem;
+	}
+
+	input[type="checkbox"],
+	input[type="radio"] {
+		width: 1.25rem;
+		height: 1.25rem;
+	}
+
+	/* A box beside its label is tapped on its own: a thumb's size. */
+	.field-check > input[type="checkbox"],
+	.field-check > input[type="radio"] {
+		flex: none;
+		width: 2.75rem;
+		height: 2.75rem;
+	}
+
+	.field-check {
+		min-height: 2.75rem;
+	}
+
+	/* A disclosure's summary is a tap's height too. */
+	.content summary {
+		min-height: 2.75rem;
+		padding-top: 0.625rem;
+		padding-bottom: 0.625rem;
+	}
+
+	.user-menu button {
+		padding: 0 0.5rem;
+	}
+
+	/* Rows of tabs and links inside a page: a strip each, as tall as a tap. */
+	.kind-tabs {
+		margin-right: calc(-1 * var(--phone-right));
+		margin-left: calc(-1 * var(--phone-left));
+		padding: 0 var(--phone-right) 0 var(--phone-left);
+		overflow-x: auto;
+		scrollbar-width: none;
+	}
+
+	.kind-tabs::-webkit-scrollbar {
+		display: none;
+	}
+
+	.kind-tabs ul {
+		flex-wrap: nowrap;
+	}
+
+	/* A tab is one unit the strip scrolls past, never squeezed to fit: its
+	 * label and count stay together inside it. */
+	.kind-tabs li {
+		flex: none;
+	}
+
+	/* A tab is a box with its own padding.  The tap rule below, which wins
+	 * over a plain `.kind-tabs a` for being later, would give it a link's
+	 * padding and a negative sideways margin, pulling each tab over its
+	 * neighbours and leaving label and count outside the underline; the
+	 * element in the selector makes this rule the stronger one. */
+	nav.kind-tabs a {
+		flex: none;
+		gap: 0.375rem;
+		height: 2.75rem;
+		margin: 0 0 -1px;
+		padding: 0 0.75rem;
+		line-height: 2.65rem;
+		white-space: nowrap;
+	}
+
+	.list-links a,
+	.film-sort a {
+		display: inline-flex;
+		align-items: center;
+		min-height: 2.75rem;
+	}
+
+	/* A data table: each row stacked. */
+	table.data-table[class] {
+		display: block;
+		min-width: 0;
+	}
+
+	.data-table colgroup,
+	.data-table thead {
+		display: none;
+	}
+
+	.data-table tbody,
+	.data-table tfoot {
+		display: block;
+	}
+
+	.data-table tr {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) auto;
+		align-items: baseline;
+		gap: 0.25rem 0.75rem;
+		padding: 0.625rem 0;
+		border-bottom: 1px solid var(--border);
+	}
+
+	.data-table tbody tr:last-child {
+		border-bottom: 0;
+	}
+
+	.data-table tr > td,
+	.data-table tr > th,
+	.data-table td.col-count,
+	.data-table td.col-number,
+	.data-table td.col-size,
+	.data-table td.col-range,
+	.data-table td.col-date,
+	.data-table td.col-text,
+	.data-table td.col-state,
+	.data-table td.col-name,
+	.data-table td.col-wide,
+	.data-table td.col-code,
+	.data-table td.col-links,
+	.data-table td.col-actions,
+	.data-table td.col-controls {
+		display: block;
+		grid-column: 1 / -1;
+		height: auto;
+		min-width: 0;
+		padding: 0;
+		border: 0;
+		text-align: left;
+		white-space: normal;
+		overflow: visible;
+		text-overflow: clip;
+	}
+
+	.data-table td:empty {
+		display: none;
+	}
+
+	/* The first cell and the state on the first line. */
+	.data-table tr > :first-child,
+	.data-table tr > td.col-name:first-child {
+		grid-row: 1;
+		grid-column: 1;
+	}
+
+	.data-table tr > td.col-state {
+		grid-row: 1;
+		grid-column: 2;
+		justify-self: end;
+	}
+
+	.data-table tr > td.col-state ~ td.col-state,
+	.data-table tr > td.col-state:first-child {
+		grid-row: auto;
+		grid-column: 1 / -1;
+		justify-self: start;
+	}
+
+	/* A short first cell (an episode's number) with the name beside it. */
+	.data-table tr:has(> td.col-text:first-child + td.col-name) {
+		grid-template-columns: auto minmax(0, 1fr) auto;
+	}
+
+	.data-table tr:has(> td.col-text:first-child + td.col-name) > td.col-name {
+		grid-row: 1;
+		grid-column: 2;
+	}
+
+	.data-table tr:has(> td.col-text:first-child + td.col-name) > td.col-state {
+		grid-column: 3;
+	}
+
+	/* How far it has got, straight after. */
+	.data-table td:has(progress, .download-progress, .space-bar) {
+		order: -1;
+	}
+
+	/* Every other cell after its heading, in a column of headings at the
+	 * left; the value keeps the rest of the line, and wraps there. */
+	.data-table tr > td[data-label] {
+		position: relative;
+		padding-left: 7rem;
+	}
+
+	.data-table tr > td[data-label]::before {
+		content: attr(data-label);
+		position: absolute;
+		top: 0.1rem;
+		left: 0;
+		width: 6.5rem;
+		overflow: hidden;
+		color: var(--text-muted);
+		font-size: 0.8125rem;
+		font-weight: 600;
+		line-height: 1.4;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.data-table tr > td:first-child[data-label],
+	.data-table tr > td.col-name[data-label],
+	.data-table tr > td.col-state[data-label],
+	.data-table tr > td.col-links[data-label],
+	.data-table tr > td.col-actions[data-label],
+	.data-table tr > td.col-controls[data-label],
+	.data-table tr > td[data-label]:has(progress, .download-progress, .space-bar) {
+		padding-left: 0;
+	}
+
+	.data-table tr > td:first-child[data-label]::before,
+	.data-table tr > td.col-name[data-label]::before,
+	.data-table tr > td.col-state[data-label]::before,
+	.data-table tr > td.col-links[data-label]::before,
+	.data-table tr > td.col-actions[data-label]::before,
+	.data-table tr > td.col-controls[data-label]::before,
+	.data-table tr > td[data-label]:has(progress, .download-progress, .space-bar)::before {
+		content: none;
+	}
+
+	.data-table td.col-actions,
+	.data-table td.col-controls {
+		padding-top: 0.25rem;
+	}
+
+	.data-table .col-actions .actions,
+	.data-table .col-controls .actions,
+	.data-table td.col-controls .inline-form,
+	.data-table td.col-actions .film-button {
+		justify-content: flex-start;
+	}
+
+	.data-table td.col-controls .inline-form select {
+		max-width: 100%;
+	}
+
+	.data-table progress {
+		width: 6rem;
+	}
+
+	/* Results and Discover's cards: rows with a small poster. */
+	.search-results .title-grid,
+	.discover-page .title-grid {
+		grid-template-columns: minmax(0, 1fr);
+		gap: 0;
+	}
+
+	.search-results .title-card,
+	.discover-page .title-card {
+		display: grid;
+		grid-template-columns: 5.5rem minmax(0, 1fr);
+		align-content: start;
+		gap: 0.125rem 0.875rem;
+		padding: 0.75rem 0;
+		border-bottom: 1px solid var(--border);
+	}
+
+	.search-results .title-card > *,
+	.discover-page .title-card > * {
+		grid-column: 2;
+		min-width: 0;
+	}
+
+	.search-results .title-card > .poster,
+	.discover-page .title-card > .poster {
+		grid-row: 1 / span 6;
+		grid-column: 1;
+	}
+
+	.search-results .poster-none,
+	.discover-page .poster-none,
+	.film-grid .poster-none {
+		padding: 0.375rem;
+		font-size: 0.75rem;
+		overflow-wrap: normal;
+	}
+
+	.search-results .title-card-name,
+	.discover-page .title-card-name {
+		order: -2;
+		height: auto;
+		margin: 0;
+		font-size: 1rem;
+	}
+
+	.search-results .card-actions,
+	.discover-page .card-actions {
+		position: static;
+		order: -1;
+		justify-self: start;
+	}
+
+	.search-results .title-card-line,
+	.discover-page .title-card-line {
+		margin: 0;
+	}
+
+	.search-results .title-card-overview,
+	.discover-page .title-card-overview {
+		-webkit-line-clamp: 3;
+		line-clamp: 3;
+		height: auto;
+		margin: 0.125rem 0 0;
+	}
+
+	.discover-page .discover-extra {
+		margin-top: 0.375rem;
+	}
+
+	/* Discover's filters two to a line. */
+	.discover-filters {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		align-items: end;
+		justify-items: stretch;
+		gap: 0.5rem 0.75rem;
+	}
+
+	.discover-filters > .field {
+		width: auto;
+		min-width: 0;
+	}
+
+	.discover-filters input[type="number"] {
+		width: 100%;
+	}
+
+	/* The posters of a list: three to a line. */
+	.film-grid {
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+		gap: 0.75rem 0.625rem;
+	}
+
+	.film-grid .title-card-name {
+		height: 2.1rem;
+		font-size: 0.8125rem;
+	}
+
+	.film-grid .title-card-line {
+		margin-top: 0.375rem;
+		font-size: 0.75rem;
+	}
+
+	.film-grid .title-card-overview {
+		display: none;
+	}
+
+	/* A poster's mark within the poster's width. */
+	.film-grid .card-actions {
+		right: 0.25rem;
+		left: 0.25rem;
+	}
+
+	.film-grid .film-mark {
+		width: auto;
+		max-width: 100%;
+		overflow: hidden;
+		font-size: 0.625rem;
+		letter-spacing: 0.02em;
+		text-overflow: ellipsis;
+	}
+
+	/* A title's page: the poster beside its name and facts. */
+	.title-head {
+		grid-template-columns: 6rem minmax(0, 1fr);
+		gap: 0.375rem 0.875rem;
+	}
+
+	.title-head > .poster,
+	.title-head > .poster-large {
+		grid-row: 1 / span 3;
+		grid-column: 1;
+		width: 6rem;
+	}
+
+	.title-info {
+		display: contents;
+	}
+
+	.title-info > * {
+		grid-column: 1 / -1;
+	}
+
+	.title-info > h1,
+	.title-info > .title-original,
+	.title-info > .title-line {
+		grid-column: 2;
+	}
+
+	.title-info > h1 {
+		margin: 0;
+	}
+
+	.title-line {
+		margin: 0;
+	}
+
+	.title-overview {
+		margin: 0.5rem 0 0.75rem;
+	}
+
+	/* The add form: its options closed under their summary, Add after. */
+	.film-form > .add-options > .field {
+		flex-basis: 100%;
+		max-width: none;
+	}
+
+	.film-form > .add-options {
+		flex: 1 1 100%;
+	}
+
+	.add-options > summary {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: baseline;
+		gap: 0 0.5rem;
+		min-height: 2.75rem;
+		padding: 0.625rem 0;
+	}
+
+	.add-options-chosen {
+		margin-left: 0;
+	}
+
+	.add-options > summary {
+		list-style: none;
+	}
+
+	.add-options > summary::-webkit-details-marker {
+		display: none;
+	}
+
+	.add-options > summary::before {
+		content: "";
+		flex: none;
+		align-self: center;
+		width: 0.4375rem;
+		height: 0.4375rem;
+		margin-right: 0.25rem;
+		border-right: 2px solid var(--text-muted);
+		border-bottom: 2px solid var(--text-muted);
+		transform: rotate(-45deg);
+	}
+
+	.add-options[open] > summary::before {
+		transform: rotate(45deg);
+	}
+
+	@supports selector(::details-content) {
+		.add-options {
+			display: block;
+		}
+
+		.add-options > summary {
+			display: flex;
+		}
+
+		.add-options::details-content {
+			display: flex;
+			flex-wrap: wrap;
+			align-items: flex-end;
+			gap: var(--space);
+		}
+
+		.add-options:not([open])::details-content {
+			content-visibility: hidden;
+		}
+	}
+
+	.film-form > .button-primary {
+		flex: 1 1 100%;
+	}
+
+	/* A confirming form opens under its button, a line at a time. */
+	.film-confirm-form {
+		display: grid;
+		justify-items: start;
+	}
+
+	.film-actions,
+	.title-actions {
+		gap: 0.625rem;
+	}
+
+	/*
+	 * Tap targets: every link, box and button is at least 44 px each way.
+	 * A link in a sentence, a cell, a list or a heading is an inline box,
+	 * whose padding makes its tap area bigger and leaves the lines where
+	 * they are; the margin takes back the sideways room.  Strips of links
+	 * that are boxes already keep to a width as well as a height.
+	 */
+	.content :where(p, li, dd, td, h2, h3, span, section, nav, div:not(.list-links, .film-sort)) >
+	a:where(:not(.button, .mark-link, .quick-add-options)) {
+		padding: 0.875rem 1.125rem;
+		margin: 0 -1.125rem;
+	}
+
+	/* The padding of a link at the edge of a line may reach past the screen: clipped, not scrolled to. */
+	.content {
+		overflow-x: clip;
+	}
+
+	a.button {
+		display: inline-flex;
+		align-items: center;
+		min-height: 2.75rem;
+		padding: 0 0.75rem;
+	}
+
+	.list-links a,
+	.film-sort a,
+	.page-list a,
+	.kind-tabs a {
+		min-width: 2.75rem;
+		justify-content: center;
+	}
+
+	.guide-step a,
+	.guide-overview-link {
+		min-height: 2.75rem;
+		min-width: 2.75rem;
+	}
+
+	.quick-add-options,
+	.mark-link {
+		display: inline-flex;
+		align-items: center;
+		min-height: 2.75rem;
+	}
+
+	/* A bar chart's text is a few pixels high at this width, and its rows
+	 * are thinner than a tap; the table under it has the same figures. */
+	.chart:not(.chart-growth) {
+		display: none;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.htmx-indicator {
+		transition: none;
+	}
+}

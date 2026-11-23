@@ -1,0 +1,23 @@
+[
+  {
+    "id": 1,
+    "indexerId": 5,
+    "disabledTill": "2099-01-01T00:00:00Z",
+    "mostRecentFailure": "2024-11-10T09:12:00Z",
+    "initialFailure": "2024-11-10T08:30:00Z",
+    "escalationLevel": 3
+  },
+  {
+    "id": 2,
+    "indexerId": 7,
+    "disabledTill": "2020-01-01T00:00:00Z",
+    "mostRecentFailure": "2019-12-31T23:00:00Z",
+    "initialFailure": "2019-12-31T22:00:00Z",
+    "escalationLevel": 1
+  },
+  {
+    "id": 3,
+    "indexerId": 9,
+    "mostRecentFailure": "2024-11-10T09:12:00Z"
+  }
+]

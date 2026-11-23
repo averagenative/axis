@@ -1,0 +1,51 @@
+{
+  "status": "success",
+  "data": {
+    "id": 81001,
+    "name": "Wobbly Lighthouse",
+    "slug": "wobbly-lighthouse",
+    "image": "https://artworks.thetvdb.com/banners/posters/81001-1.jpg",
+    "firstAired": "2023-09-01",
+    "lastAired": "2024-06-15",
+    "nextAired": "",
+    "year": "2023",
+    "overview": "A lighthouse that will not stand still.",
+    "originalCountry": "gbr",
+    "originalLanguage": "eng",
+    "averageRuntime": 24,
+    "status": {"id": 1, "name": "Continuing", "recordType": "series", "keepUpdated": false},
+    "aliases": [
+      {"language": "eng", "name": "The Wobbly Lighthouse"},
+      {"language": "eng", "name": "The Wobbly Lighthouse"},
+      {"language": "x", "name": "Phare Sans Langue"}
+    ],
+    "genres": [
+      {"id": 1, "name": "Children", "slug": "children"},
+      {"id": 2, "name": "Animation", "slug": "animation"},
+      {"id": 2, "name": "Animation", "slug": "animation"}
+    ],
+    "remoteIds": [
+      {"id": "tt9000081", "type": 2, "sourceName": "IMDB"},
+      {"id": "7051", "type": 12, "sourceName": "TheMovieDB.com"},
+      {"id": "99", "type": 4, "sourceName": "Some Other Site"}
+    ],
+    "seasons": [
+      {"id": 9100101, "seriesId": 81001, "number": 0, "name": "Specials", "type": {"id": 1, "name": "Aired Order", "type": "official"}},
+      {"id": 9100102, "seriesId": 81001, "number": 1, "name": "Season 1", "type": {"id": 1, "name": "Aired Order", "type": "official"}},
+      {"id": 9100103, "seriesId": 81001, "number": 2, "name": "Season 2", "type": {"id": 1, "name": "Aired Order", "type": "official"}},
+      {"id": 9100104, "seriesId": 81001, "number": 1, "type": {"id": 2, "name": "DVD Order", "type": "dvd"}},
+      {"id": 9100105, "seriesId": 81001, "number": 1, "type": {"id": 3, "name": "Absolute Order", "type": "absolute"}},
+      {"id": 9100106, "seriesId": 81001, "number": 1, "type": {"id": 9, "name": "Unknown", "type": "madeup"}}
+    ],
+    "translations": {
+      "nameTranslations": [
+        {"name": "Wobbly Lighthouse", "language": "eng", "isPrimary": true},
+        {"name": "Le Phare Bancal", "language": "fra"}
+      ],
+      "overviewTranslations": [
+        {"overview": "A lighthouse that leans with the tide.", "language": "eng"},
+        {"overview": "Un phare qui penche avec la marée.", "language": "fra"}
+      ]
+    }
+  }
+}

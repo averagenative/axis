@@ -1,0 +1,17 @@
+{
+    "_constructed": "One frame carrying Dolby Vision metadata: not recorded from a real file (see README.md)",
+    "frames": [
+        {
+            "pix_fmt": "yuv420p10le",
+            "side_data_list": [
+                {
+                    "side_data_type": "Dolby Vision Metadata",
+                    "rpu_type": 2,
+                    "rpu_format": 18,
+                    "vdr_rpu_profile": 1,
+                    "vdr_rpu_level": 0
+                }
+            ]
+        }
+    ]
+}

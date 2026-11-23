@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Axis pinned-tab icon: one colour (Safari recolours it).  Shade cannot
+     show the steps or separate the line, so the sweep is solid and a gap
+     sets it apart from the line.
+     SPDX-License-Identifier: AGPL-3.0-or-later -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+	<defs>
+		<mask id="gap">
+			<rect width="64" height="64" fill="#fff"/>
+			<path d="M2.5 52.7 L61.5 11.3" stroke="#000" stroke-width="11"/>
+			<circle cx="32" cy="32" r="6" fill="#000"/>
+		</mask>
+	</defs>
+	<g mask="url(#gap)">
+		<path d="M32 32 L55.5 15.54 A28.7 28.7 0 0 0 32 3.3 Z" fill="#000"/>
+		<path d="M32 32 L8.5 48.46 A28.7 28.7 0 0 0 32 60.7 Z" fill="#000"/>
+	</g>
+	<path d="M6.6 49.8 L29.5 33.75 M34.5 30.25 L57.4 14.2" fill="none" stroke="#000" stroke-width="4.4"/>
+</svg>

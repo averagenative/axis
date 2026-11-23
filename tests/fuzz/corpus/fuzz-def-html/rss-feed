@@ -1,0 +1,2 @@
+xrss > channel > item:has([name=seeders]) > title
+<?xml version="1.0"?><rss><channel><item><title><![CDATA[Show S01E02 & more]]></title><link>https://x.invalid/1</link><enclosure url="/get/1"/><torznab:attr name="seeders" value="4"/></item></channel></rss>

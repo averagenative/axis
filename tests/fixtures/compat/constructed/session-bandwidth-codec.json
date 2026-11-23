@@ -1,0 +1,11 @@
+{"_constructed":"a remote conversion that also changes the codec, bandwidth below the source bitrate: the limit explains it","MediaContainer":{"size":1,"Metadata":[{
+"ratingKey":"605","librarySectionID":"1","type":"movie","title":"Invented Remote HEVC Film",
+"Media":[{"id":6,"bitrate":15000,"width":1920,"height":1080,"audioCodec":"aac","videoCodec":"hevc","container":"mkv","Part":[{"id":6,"file":"/data/movies/Invented Remote HEVC (2016)/Invented Remote HEVC (2016).mkv","container":"mkv","decision":"transcode","protocol":"hls","Stream":[
+{"id":50,"streamType":1,"decision":"transcode","codec":"hevc","profile":"main 10","bitDepth":10,"width":1920,"height":1080,"colorTrc":"bt709"},
+{"id":51,"streamType":2,"decision":"copy","codec":"aac","channels":2,"selected":true}
+]}]}],
+"Player":{"machineIdentifier":"client-android-1","platform":"Android","product":"Plex for Android","state":"playing","title":"Pixel","local":false,"relayed":false},
+"Session":{"id":"sess-bandwidth-codec-1","bandwidth":3000,"location":"wan"},
+"TranscodeSession":{"sourceVideoCodec":"hevc","sourceAudioCodec":"aac","videoDecision":"transcode","audioDecision":"copy","protocol":"hls","container":"mkv","videoCodec":"h264","audioCodec":"aac","width":1280,"height":720},
+"User":{"id":"2","title":"Bob Example"}
+}]}}

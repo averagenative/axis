@@ -1,0 +1,7 @@
+{{ if and .Keywords (eq .Config.a "x") }}search/{{ .Keywords }}{{ else if .Config.b }}{{ re_replace .Result.c "(\d+)" "[$1]" }}{{ else }}{{ range .Categories }}c={{ . }}&{{ end }}{{ join .Categories "," }}{{ end }}
+hearth 1995
+x
+y
+Hearth 1995 1080p
+1
+2

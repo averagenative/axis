@@ -1,0 +1,6 @@
+[
+  {"hash": "4040404040404040404040404040404040404040", "name": "Unknown.Word.Unfinished", "category": "axis", "state": "reticulatingSplines",
+   "size": 1000, "progress": 0.5, "dlspeed": 100, "eta": 10, "save_path": "/downloads", "content_path": "/downloads/Unknown.Word.Unfinished"},
+  {"hash": "4141414141414141414141414141414141414141", "name": "Unknown.Word.Finished", "category": "axis", "state": "UPLOADING",
+   "size": 1000, "progress": 1, "dlspeed": 0, "eta": 8640000, "save_path": "/downloads", "content_path": "/downloads/Unknown.Word.Finished"}
+]

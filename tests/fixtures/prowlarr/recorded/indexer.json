@@ -1,0 +1,320 @@
+[
+ {
+  "id": 36,
+  "name": "OpenShelf",
+  "protocol": "torrent",
+  "enable": true,
+  "privacy": "public",
+  "redirect": false,
+  "supportsRedirect": false,
+  "supportsRss": true,
+  "supportsSearch": true,
+  "priority": 25,
+  "capabilities": {
+   "searchParams": [
+    "q",
+    "q"
+   ],
+   "movieSearchParams": [
+    "q"
+   ],
+   "tvSearchParams": [
+    "q",
+    "season",
+    "ep"
+   ],
+   "limitsDefault": 100,
+   "limitsMax": 100,
+   "supportsRawSearch": true
+  }
+ },
+ {
+  "id": 29,
+  "name": "DozyNewt",
+  "protocol": "usenet",
+  "enable": true,
+  "privacy": "private",
+  "redirect": true,
+  "supportsRedirect": true,
+  "supportsRss": true,
+  "supportsSearch": true,
+  "priority": 25,
+  "capabilities": {
+   "searchParams": [
+    "q"
+   ],
+   "movieSearchParams": [
+    "q",
+    "imdbId"
+   ],
+   "tvSearchParams": [
+    "q",
+    "tvdbId",
+    "traktId",
+    "rId",
+    "tvMazeId",
+    "imdbId",
+    "tmdbId",
+    "season",
+    "ep"
+   ],
+   "limitsDefault": 100,
+   "limitsMax": 100,
+   "supportsRawSearch": false
+  }
+ },
+ {
+  "id": 42,
+  "name": "PageBarn",
+  "protocol": "torrent",
+  "enable": true,
+  "privacy": "public",
+  "redirect": false,
+  "supportsRedirect": false,
+  "supportsRss": true,
+  "supportsSearch": true,
+  "priority": 25,
+  "capabilities": {
+   "searchParams": [
+    "q",
+    "q"
+   ],
+   "movieSearchParams": [],
+   "tvSearchParams": [],
+   "limitsDefault": 100,
+   "limitsMax": 100,
+   "supportsRawSearch": false
+  }
+ },
+ {
+  "id": 37,
+  "name": "EZTV",
+  "protocol": "torrent",
+  "enable": true,
+  "privacy": "public",
+  "redirect": false,
+  "supportsRedirect": false,
+  "supportsRss": true,
+  "supportsSearch": true,
+  "priority": 25,
+  "capabilities": {
+   "searchParams": [
+    "q",
+    "q"
+   ],
+   "movieSearchParams": [],
+   "tvSearchParams": [
+    "q",
+    "season",
+    "ep"
+   ],
+   "limitsDefault": 100,
+   "limitsMax": 100,
+   "supportsRawSearch": false
+  }
+ },
+ {
+  "id": 41,
+  "name": "Open Stacks",
+  "protocol": "torrent",
+  "enable": false,
+  "privacy": "public",
+  "redirect": false,
+  "supportsRedirect": false,
+  "supportsRss": true,
+  "supportsSearch": true,
+  "priority": 25,
+  "capabilities": {
+   "searchParams": [
+    "q",
+    "q"
+   ],
+   "movieSearchParams": [
+    "q"
+   ],
+   "tvSearchParams": [
+    "q",
+    "season",
+    "ep"
+   ],
+   "limitsDefault": 100,
+   "limitsMax": 100,
+   "supportsRawSearch": false
+  }
+ },
+ {
+  "id": 40,
+  "name": "opencrate.example",
+  "protocol": "torrent",
+  "enable": false,
+  "privacy": "public",
+  "redirect": false,
+  "supportsRedirect": false,
+  "supportsRss": true,
+  "supportsSearch": true,
+  "priority": 25,
+  "capabilities": {
+   "searchParams": [
+    "q",
+    "q"
+   ],
+   "movieSearchParams": [
+    "q"
+   ],
+   "tvSearchParams": [
+    "q",
+    "season",
+    "ep"
+   ],
+   "limitsDefault": 100,
+   "limitsMax": 100,
+   "supportsRawSearch": false
+  }
+ },
+ {
+  "id": 38,
+  "name": "LimeTorrents",
+  "protocol": "torrent",
+  "enable": false,
+  "privacy": "public",
+  "redirect": false,
+  "supportsRedirect": false,
+  "supportsRss": true,
+  "supportsSearch": true,
+  "priority": 25,
+  "capabilities": {
+   "searchParams": [
+    "q",
+    "q"
+   ],
+   "movieSearchParams": [
+    "q"
+   ],
+   "tvSearchParams": [
+    "q",
+    "season",
+    "ep"
+   ],
+   "limitsDefault": 100,
+   "limitsMax": 100,
+   "supportsRawSearch": false
+  }
+ },
+ {
+  "id": 27,
+  "name": "NewsOwl",
+  "protocol": "usenet",
+  "enable": true,
+  "privacy": "private",
+  "redirect": true,
+  "supportsRedirect": true,
+  "supportsRss": true,
+  "supportsSearch": true,
+  "priority": 25,
+  "capabilities": {
+   "searchParams": [
+    "q"
+   ],
+   "movieSearchParams": [
+    "q",
+    "imdbId",
+    "genre"
+   ],
+   "tvSearchParams": [
+    "q",
+    "rId",
+    "tvdbId",
+    "tvMazeId",
+    "season",
+    "ep"
+   ],
+   "limitsDefault": 100,
+   "limitsMax": 100,
+   "supportsRawSearch": false
+  }
+ },
+ {
+  "id": 3,
+  "name": "The Pirate Bay",
+  "protocol": "torrent",
+  "enable": true,
+  "privacy": "public",
+  "redirect": false,
+  "supportsRedirect": false,
+  "supportsRss": true,
+  "supportsSearch": true,
+  "priority": 25,
+  "capabilities": {
+   "searchParams": [
+    "q",
+    "q"
+   ],
+   "movieSearchParams": [
+    "q"
+   ],
+   "tvSearchParams": [
+    "q",
+    "season",
+    "ep"
+   ],
+   "limitsDefault": 100,
+   "limitsMax": 100,
+   "supportsRawSearch": false
+  }
+ },
+ {
+  "id": 39,
+  "name": "SeedHollow",
+  "protocol": "torrent",
+  "enable": false,
+  "privacy": "public",
+  "redirect": false,
+  "supportsRedirect": false,
+  "supportsRss": true,
+  "supportsSearch": true,
+  "priority": 25,
+  "capabilities": {
+   "searchParams": [
+    "q",
+    "q"
+   ],
+   "movieSearchParams": [
+    "q"
+   ],
+   "tvSearchParams": [
+    "q",
+    "season",
+    "ep"
+   ],
+   "limitsDefault": 100,
+   "limitsMax": 100,
+   "supportsRawSearch": false
+  }
+ },
+ {
+  "id": 32,
+  "name": "YTS",
+  "protocol": "torrent",
+  "enable": true,
+  "privacy": "public",
+  "redirect": false,
+  "supportsRedirect": false,
+  "supportsRss": true,
+  "supportsSearch": true,
+  "priority": 25,
+  "capabilities": {
+   "searchParams": [
+    "q",
+    "q"
+   ],
+   "movieSearchParams": [
+    "q",
+    "imdbId"
+   ],
+   "tvSearchParams": [],
+   "limitsDefault": 100,
+   "limitsMax": 100,
+   "supportsRawSearch": false
+  }
+ }
+]

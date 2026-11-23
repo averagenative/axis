@@ -1,0 +1,170 @@
+# compose.yaml - Axis behind Traefik, with TLS
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Traefik terminates TLS and passes requests to Axis with X-Forwarded-For,
+# X-Forwarded-Proto and X-Forwarded-Host.  Axis believes those headers only
+# from the proxy named in AXIS_TRUSTED_PROXIES: the service name, which Axis
+# looks up again as needed, so Traefik can be recreated at a new address.
+# Copy this directory, change the
+# lines marked EDIT, make the secret files (README.md), then:
+#
+#   docker compose up -d
+
+services:
+  traefik:
+    # EDIT: pin the Traefik version you have tested.
+    image: docker.io/library/traefik:v3.3
+    restart: unless-stopped
+    command:
+      - --providers.docker=true
+      # Only containers with traefik.enable=true are routed.
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=axis-proxy
+      - --entrypoints.web.address=:80
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --entrypoints.websecure.address=:443
+      # Certificates from Let's Encrypt (HTTP challenge on port 80).
+      # EDIT: your e-mail address for the certificate authority.
+      - --certificatesresolvers.letsencrypt.acme.email=you@example.com
+      - --certificatesresolvers.letsencrypt.acme.storage=/certificates/acme.json
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
+      # Traefik writes X-Forwarded-* itself and, by default, throws away what
+      # a client sent in them.  Keep it that way: no forwardedHeaders.insecure,
+      # and trustedIPs only if another proxy stands in front of Traefik.
+    # Podman on a host with SELinux enforcing (Fedora): Traefik is refused the
+    # socket ("permission denied") unless you uncomment these two lines
+    # (../../README.md, "SELinux").
+    # security_opt:
+    #   - label=disable
+    # Rootless Podman cannot bind ports below 1024 unless the host allows it
+    # (sysctl net.ipv4.ip_unprivileged_port_start): set TRAEFIK_HTTP_PORT and
+    # TRAEFIK_HTTPS_PORT in .env (8080 and 8443, say) and forward 80 and 443.
+    ports:
+      - "${TRAEFIK_HTTP_PORT:-80}:80"
+      - "${TRAEFIK_HTTPS_PORT:-443}:443"
+    volumes:
+      # Docker's socket, read-only.  With Podman, start the socket
+      # (`systemctl --user enable --now podman.socket`) and use
+      # ${XDG_RUNTIME_DIR}/podman/podman.sock instead.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik-certificates:/certificates
+    networks:
+      axis-proxy:
+        # Optional: Axis trusts the name "traefik", not an address, so
+        # Traefik needs no fixed address.  This one is kept so that
+        # Traefik's address is known (for a firewall rule, say).  Remove it,
+        # and the subnet below, if you do not need that.
+        ipv4_address: 172.30.0.2
+
+  axis:
+    # EDIT: the published image, or AXIS_IMAGE=localhost/axis:latest.
+    image: ${AXIS_IMAGE:-ghcr.io/averagenative/axis:0.1.0-rc1}
+    restart: unless-stopped
+    user: "${PUID:-1000}:${PGID:-1000}"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 512
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,mode=1777
+    environment:
+      AXIS_DATABASE_URL_FILE: /run/secrets/axis_database_url
+      AXIS_LOG_LEVEL: info
+      # Traefik, by its service name, and nothing else: forwarded headers
+      # from any other address are ignored.  Docker's DNS gives the name
+      # Traefik's current address, whenever it is recreated.  Keep this
+      # to the name (or addresses): never trust the whole network.
+      AXIS_TRUSTED_PROXIES: traefik
+      # Cookies are Secure because Traefik says the request was https.
+      # AXIS_SECURE_COOKIES: always would make them Secure whatever arrives.
+    secrets:
+      - axis_database_url
+    # No ports: Traefik is the way in.
+    volumes:
+      # EDIT: your disks, read-only (or one data mount: ../compose-full).
+      - /path/to/disk1:/media/disk1:ro
+      - axis-data:/var/lib/axis
+    labels:
+      - traefik.enable=true
+      # EDIT: the name Axis is reached by.
+      - traefik.http.routers.axis.rule=Host(`axis.example.com`)
+      - traefik.http.routers.axis.entrypoints=websecure
+      - traefik.http.routers.axis.tls=true
+      - traefik.http.routers.axis.tls.certresolver=letsencrypt
+      - traefik.http.services.axis.loadbalancer.server.port=7800
+      # Host is passed through unchanged (Traefik's default); Axis reads the
+      # public host from X-Forwarded-Host anyway, from Traefik only.
+      - traefik.http.services.axis.loadbalancer.passhostheader=true
+      # HSTS, which Axis does not send itself.
+      - traefik.http.routers.axis.middlewares=axis-headers
+      - traefik.http.middlewares.axis-headers.headers.stsseconds=31536000
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/usr/bin/axisd", "--healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    stop_grace_period: 45s
+    networks:
+      - axis-proxy
+      - private
+
+  postgres:
+    image: docker.io/library/postgres:17
+    restart: unless-stopped
+    user: "999:999"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 512
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,mode=1777
+      - /var/run/postgresql:rw,noexec,nosuid,size=1m,mode=1777
+    environment:
+      POSTGRES_USER: axis
+      POSTGRES_DB: axis
+      POSTGRES_PASSWORD_FILE: /run/secrets/axis_db_password
+      # Page checksums; applies only when the database is first created.
+      POSTGRES_INITDB_ARGS: --data-checksums
+    secrets:
+      - axis_db_password
+    volumes:
+      - axis-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "--username=axis", "--dbname=axis"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - private
+
+networks:
+  # Traefik and Axis.  The subnet is fixed so that Traefik's address can be.
+  # EDIT: another subnet if 172.30.0.0/24 is in use on this host.
+  axis-proxy:
+    name: axis-proxy
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+  # Axis and PostgreSQL only.
+  private: {}
+
+volumes:
+  axis-db:
+  axis-data:
+  traefik-certificates:
+
+secrets:
+  axis_db_password:
+    file: ./secrets/axis_db_password
+  axis_database_url:
+    file: ./secrets/axis_database_url

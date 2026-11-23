@@ -1,0 +1,17 @@
+/*
+ * axis-version.h - generated from axis-version.h.in; do not edit
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
+#ifndef AXIS_VERSION_H
+#define AXIS_VERSION_H
+
+#define AXIS_VERSION_MAJOR @VERSION_MAJOR@
+#define AXIS_VERSION_MINOR @VERSION_MINOR@
+#define AXIS_VERSION_MICRO @VERSION_MICRO@
+#define AXIS_VERSION       "@VERSION@"
+#define AXIS_GIT_SHA       "@GIT_SHA@"
+/* Where the source of this build is offered (config.mk: SOURCE_URL). */
+#define AXIS_SOURCE_URL    "@SOURCE_URL@"
+
+#endif /* AXIS_VERSION_H */

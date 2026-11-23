@@ -1,0 +1,92 @@
+{
+  "adult": false,
+  "backdrop_path": "/madeUpBackdrop0000000006003.jpg",
+  "belongs_to_collection": {
+    "id": 6100,
+    "name": "The Mazework Collection",
+    "poster_path": "/madeUpPoster000000000006100.jpg",
+    "backdrop_path": "/madeUpBackdrop0000000006100.jpg"
+  },
+  "budget": 61000000,
+  "genres": [
+    { "id": 28, "name": "Action" },
+    { "id": 878, "name": "Science Fiction" }
+  ],
+  "homepage": "https://mazework.example/",
+  "id": 6003,
+  "imdb_id": "tt0600003",
+  "origin_country": ["US"],
+  "original_language": "en",
+  "original_title": "The Mazework",
+  "overview": "A cartographer maps a hedge maze that grows a new corridor every night, until one of them leads back to the day before.",
+  "popularity": 85.234,
+  "poster_path": "/madeUpPoster000000000006003.jpg",
+  "production_companies": [
+    { "id": 9079, "logo_path": "/madeUpLogo00000000000009079.png", "name": "Made Up Pictures", "origin_country": "US" }
+  ],
+  "release_date": "1999-03-30",
+  "revenue": 412345678,
+  "runtime": 136,
+  "spoken_languages": [
+    { "english_name": "English", "iso_639_1": "en", "name": "English" }
+  ],
+  "status": "Released",
+  "tagline": "Every corridor is a choice.",
+  "title": "The Mazework",
+  "video": false,
+  "vote_average": 8.2,
+  "vote_count": 25000,
+  "alternative_titles": {
+    "titles": [
+      { "iso_3166_1": "DE", "title": "Mazework", "type": "" },
+      { "iso_3166_1": "BR", "title": "Mazework", "type": "" },
+      { "iso_3166_1": "JP", "title": "メイズワーク", "type": "" },
+      { "iso_3166_1": "US", "title": "The Mazework 1", "type": "working title" },
+      { "iso_3166_1": "XXX", "title": "Wrong country code", "type": "" },
+      { "iso_3166_1": "DE", "title": "Mazework", "type": "" },
+      { "iso_3166_1": "FR", "title": 7, "type": "" }
+    ]
+  },
+  "external_ids": {
+    "imdb_id": "tt0600003",
+    "wikidata_id": "Q0000001",
+    "facebook_id": "TheMazeworkMovie",
+    "instagram_id": null,
+    "twitter_id": "whatisthemazework"
+  },
+  "release_dates": {
+    "results": [
+      {
+        "iso_3166_1": "DE",
+        "release_dates": [
+          { "certification": "16", "descriptors": [], "iso_639_1": "", "note": "", "release_date": "1999-06-17T00:00:00.000Z", "type": 3 },
+          { "certification": "16", "descriptors": [], "iso_639_1": "", "note": "DVD", "release_date": "1999-12-01T00:00:00.000Z", "type": 5 }
+        ]
+      },
+      {
+        "iso_3166_1": "GB",
+        "release_dates": [
+          { "certification": "15", "descriptors": [], "iso_639_1": "", "note": "", "release_date": "1999-06-11T00:00:00.000Z", "type": 3 },
+          { "certification": "15", "descriptors": [], "iso_639_1": "", "note": "Blu-ray", "release_date": "2008-05-12T00:00:00.000Z", "type": 5 }
+        ]
+      },
+      {
+        "iso_3166_1": "JP",
+        "release_dates": [
+          { "certification": "", "descriptors": [], "iso_639_1": "", "note": "", "release_date": "2001-01-01T00:00:00.000Z", "type": 4 },
+          { "certification": "", "descriptors": [], "iso_639_1": "", "note": "", "release_date": "not a date", "type": 3 }
+        ]
+      },
+      {
+        "iso_3166_1": "US",
+        "release_dates": [
+          { "certification": "R", "descriptors": [], "iso_639_1": "", "note": "Los Angeles", "release_date": "1999-03-24T00:00:00.000Z", "type": 1 },
+          { "certification": "R", "descriptors": [], "iso_639_1": "", "note": "", "release_date": "1999-03-31T00:00:00.000Z", "type": 3 },
+          { "certification": "R", "descriptors": [], "iso_639_1": "", "note": "", "release_date": "1998-12-01T00:00:00.000Z", "type": 6 },
+          { "certification": "R", "descriptors": [], "iso_639_1": "", "note": "DVD", "release_date": "1999-09-21T00:00:00.000Z", "type": 5 },
+          { "certification": "R", "descriptors": [], "iso_639_1": "", "note": "iTunes", "release_date": "2004-05-01T00:00:00.000Z", "type": 4 }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,1 @@
+{"audio":"stereo_first","bit_depth":8,"codec":"h264","container":"mp4","efficient_bpp_milli":120,"encoders":["software","nvenc","vaapi"],"format":1,"hdr":"skip","keep_languages":["eng","fre"],"kind":"video","libraries":["movies","tv","other"],"min_saving_bytes":0,"min_saving_percent":15,"quality":{"default":20,"rules":[]},"stereo_bitrate":160000,"subtitles":"text_only"}

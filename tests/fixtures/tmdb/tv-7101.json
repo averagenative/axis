@@ -1,0 +1,95 @@
+{
+  "adult": false,
+  "backdrop_path": "/madeUpBackdrop0000000007101.jpg",
+  "created_by": [
+    { "id": 66001, "credit_id": "000000000000000000066001", "name": "Vera Gallant", "gender": 2, "profile_path": "/madeUpProfile00000000066001.jpg" }
+  ],
+  "episode_run_time": [45, 47],
+  "first_air_date": "2008-01-20",
+  "genres": [
+    { "id": 18, "name": "Drama" },
+    { "id": 80, "name": "Crime" }
+  ],
+  "homepage": "https://crackingslate.example/",
+  "id": 7101,
+  "in_production": false,
+  "languages": ["en"],
+  "last_air_date": "2013-09-29",
+  "name": "Cracking Slate",
+  "networks": [
+    { "id": 9174, "logo_path": "/madeUpLogo00000000000009174.png", "name": "Made Up Network", "origin_country": "US" }
+  ],
+  "number_of_episodes": 62,
+  "number_of_seasons": 5,
+  "origin_country": ["US"],
+  "original_language": "en",
+  "original_name": "Cracking Slate",
+  "overview": "When Walden Grey, a quarry surveyor in a small hill town, finds that the slate under his own house is worth a fortune, he starts to dig at night and cannot stop.",
+  "popularity": 130.5,
+  "poster_path": "/madeUpPoster000000000007101.jpg",
+  "seasons": [
+    {
+      "air_date": "2009-02-17",
+      "episode_count": 11,
+      "id": 71000,
+      "name": "Specials",
+      "overview": "",
+      "poster_path": "/madeUpPoster000000000007100.jpg",
+      "season_number": 0,
+      "vote_average": 0.0
+    },
+    {
+      "air_date": "2008-01-20",
+      "episode_count": 7,
+      "id": 71002,
+      "name": "Season 1",
+      "overview": "The first season of Cracking Slate.",
+      "poster_path": "/madeUpPoster000000000007111.jpg",
+      "season_number": 1,
+      "vote_average": 8.3
+    },
+    {
+      "air_date": "2009-03-08",
+      "episode_count": 13,
+      "id": 71003,
+      "name": "Season 2",
+      "overview": "",
+      "poster_path": null,
+      "season_number": 2,
+      "vote_average": 8.4
+    },
+    {
+      "air_date": null,
+      "episode_count": "many",
+      "id": 71004,
+      "name": "Season 3",
+      "season_number": 3
+    },
+    {
+      "name": "A season without a number"
+    }
+  ],
+  "status": "Ended",
+  "tagline": "Mind the seam.",
+  "type": "Scripted",
+  "vote_average": 8.9,
+  "vote_count": 12500,
+  "alternative_titles": {
+    "results": [
+      { "iso_3166_1": "DE", "title": "Cracking Slate - Die komplette Serie", "type": "" },
+      { "iso_3166_1": "FR", "title": "Cracking Slate", "type": "" },
+      { "iso_3166_1": "JP", "title": "クラッキング・スレート", "type": "" }
+    ]
+  },
+  "external_ids": {
+    "imdb_id": "tt0700001",
+    "freebase_mid": "/m/0000001",
+    "freebase_id": "/en/cracking_slate",
+    "tvdb_id": 82001,
+    "tvrage_id": 71010,
+    "wikidata_id": "Q0000002",
+    "facebook_id": "CrackingSlate",
+    "instagram_id": "crackingslate",
+    "twitter_id": "crackingslate_tv"
+  }
+}

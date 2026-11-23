@@ -1,0 +1,55 @@
+---
+id: seed
+name: Seed
+description: "a seed"
+language: en-US
+type: public
+encoding: UTF-8
+links:
+  - https://seed.invalid/
+caps:
+  categorymappings:
+    - {id: 1, cat: Movies/HD, desc: "HD"}
+  modes:
+    search: [q]
+    movie-search: [q, imdbid]
+settings:
+  - name: sort
+    type: select
+    default: added
+    options:
+      added: Added
+search:
+  paths:
+    - path: "search/{{ .Keywords }}/{{ .Config.sort }}"
+  inputs:
+    cat: "{{ join .Categories \",\" }}"
+  rows:
+    selector: "tr:has(a[href^=\"/t/\"])"
+    after: 0
+  fields:
+    category:
+      text: 1
+    title:
+      selector: td:nth-child(2) a
+      filters:
+        - name: re_replace
+          args: ["\\s+", " "]
+    download:
+      selector: a
+      attribute: href
+    size:
+      selector: td.size
+    seeders:
+      optional: true
+      default: 0
+      selector: td.s
+    date:
+      selector: td.d
+      filters:
+        - name: dateparse
+          args: "yyyy-MM-dd"
+download:
+  selectors:
+    - selector: a.magnet
+      attribute: href

@@ -1,0 +1,11 @@
+{
+  "id": 4242,
+  "name": "A Series With A New Status",
+  "original_name": "A Series With A New Status",
+  "status": "Suspended Indefinitely",
+  "first_air_date": "2020-02-02",
+  "seasons": [
+    { "season_number": 1, "name": "Season 1", "episode_count": 3, "air_date": "2020-02-02" }
+  ],
+  "external_ids": { "imdb_id": "tt1234567", "tvdb_id": null }
+}

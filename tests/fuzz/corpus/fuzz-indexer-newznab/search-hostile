@@ -1,0 +1,16 @@
+1<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE rss [
+  <!ENTITY a "aaaaaaaaaa">
+  <!ENTITY b "&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;">
+  <!ENTITY c "&b;&b;&b;&b;&b;&b;&b;&b;&b;&b;">
+  <!ENTITY d "&c;&c;&c;&c;&c;&c;&c;&c;&c;&c;">
+]>
+<rss version="2.0" xmlns:newznab="http://www.newznab.com/DTD/2010/feeds/attributes/">
+<channel>
+<item>
+  <title>&d;</title>
+  <guid>laughs</guid>
+  <enclosure url="https://indexer.test/api?t=get&amp;id=nzb-laughs&amp;apikey=k3y" length="1" type="application/x-nzb"/>
+</item>
+</channel>
+</rss>

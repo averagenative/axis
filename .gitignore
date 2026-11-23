@@ -1,0 +1,25 @@
+# Build artifacts
+build/
+*.o
+*.a
+*.so
+*.so.*
+*.d
+
+# Editor files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# Debug (core dumps only, not src/core/)
+/core
+vgcore.*
+
+# Local configuration and secrets
+.env
+.env.*
+/axis.conf
+.mcp.json
+.claude/settings.local.json

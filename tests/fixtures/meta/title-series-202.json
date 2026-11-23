@@ -1,0 +1,18 @@
+{
+  "id": "202",
+  "kind": "series",
+  "title": "Harbour Lights",
+  "year": 2024,
+  "overview": "A harbour town, its lights, and the people who keep them burning.",
+  "status": "continuing",
+  "genres": ["Drama"],
+  "language": "en",
+  "first_air_date": "2024-03-01",
+  "last_air_date": "2026-11-13",
+  "ids": { "imdb": "tt7654321", "tvdb": "360002" },
+  "seasons": [
+    { "number": 0, "name": "Specials", "air_date": "2025-01-01", "episodes": 1 },
+    { "number": 1, "name": "Season 1", "air_date": "2024-03-01", "episodes": 4 },
+    { "number": 2, "name": "Season 2", "air_date": "2026-11-06", "episodes": 4 }
+  ]
+}

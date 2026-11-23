@@ -1,0 +1,72 @@
+---
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Torrents-CSV, a definition Axis ships (add-builtin-torrent-indexers),
+# written for Axis from how the public instance answered on 2026-11-18.  Its
+# JSON API (/service/search?q=WORDS) gives 25 results, the best seeded first,
+# each with its name, info-hash, size in bytes, creation time, seeders,
+# leechers and completed downloads; it has no categories and no search by
+# identifier.  Its next page is asked by the "next" cursor of the answer
+# (&after=NEXT), which a definition cannot carry from one request to the
+# next: one page is read.  People run their own instance (the server is open
+# source): its address is the indexer's setting, a path included.  To repair
+# it, raise the version and follow docs/CONTRIBUTING-definitions.md.
+id: axis-torrentscsv
+version: 1
+name: Torrents-CSV
+description: "Torrents-CSV is an open database of torrents with a JSON search API that people also run themselves; Axis asks it by words and reads its first 25 results, the best seeded first. Give your own instance's address if you run one."
+language: en-US
+type: public
+encoding: UTF-8
+links:
+  - https://torrents-csv.com/
+
+caps:
+  # Its results have no categories.
+  categorymappings:
+    - {id: "Other", cat: Other, desc: "Other"}
+
+  modes:
+    search: [q]
+    tv-search: [q, season, ep]
+    movie-search: [q]
+
+search:
+  paths:
+    - path: service/search
+      response:
+        type: json
+  inputs:
+    # Only a test asks with no words, for a word that always has results
+    # (the newest list, /service/new, is gone); a search with no words (a
+    # movie by an identifier alone) is not asked.
+    q: "{{ if .Keywords }}{{ .Keywords }}{{ else }}1080p{{ end }}"
+    # Older versions of the server take the page's size; newer ones ignore
+    # it and give 25.
+    size: 100
+
+  rows:
+    selector: torrents
+    # Every answer has its list, empty or not.
+    expect: torrents
+
+  fields:
+    title:
+      selector: name
+    infohash:
+      selector: infohash
+    size:
+      selector: size_bytes
+    date:
+      # Seconds since 1970.
+      selector: created_unix
+      optional: true
+    seeders:
+      selector: seeders
+      optional: true
+    leechers:
+      selector: leechers
+      optional: true
+    grabs:
+      selector: completed
+      optional: true

@@ -1,0 +1,55 @@
+{
+    "_constructed": "A PQ stream whose first frame has dynamic HDR metadata of a kind the probe does not know (see the .frames.json): not recorded from a real file (see README.md)",
+    "streams": [
+        {
+            "index": 0,
+            "codec_name": "hevc",
+            "profile": "Main 10",
+            "codec_type": "video",
+            "width": 3840,
+            "height": 2160,
+            "pix_fmt": "yuv420p10le",
+            "color_range": "tv",
+            "color_space": "bt2020nc",
+            "color_transfer": "smpte2084",
+            "color_primaries": "bt2020",
+            "r_frame_rate": "25/1",
+            "avg_frame_rate": "25/1",
+            "bits_per_raw_sample": "10",
+            "disposition": { "default": 1, "forced": 0, "attached_pic": 0 }
+        }
+    ],
+    "chapters": [],
+    "format": {
+        "filename": "fd:",
+        "nb_streams": 1,
+        "format_name": "mpegts",
+        "duration": "600.000000",
+        "size": "600000000",
+        "bit_rate": "8000000"
+    }
+}
+
+@@FRAMES@@
+{
+    "_constructed": "One frame with dynamic HDR metadata of an unrecognised kind: not recorded from a real file (see README.md)",
+    "frames": [
+        {
+            "pix_fmt": "yuv420p10le",
+            "color_space": "bt2020nc",
+            "color_primaries": "bt2020",
+            "color_transfer": "smpte2084",
+            "side_data_list": [
+                {
+                    "side_data_type": "Mastering display metadata",
+                    "max_luminance": "10000000/10000",
+                    "min_luminance": "50/10000"
+                },
+                {
+                    "side_data_type": "HDR Dynamic Metadata CUVA (Vivid)",
+                    "system_start_code": 1
+                }
+            ]
+        }
+    ]
+}

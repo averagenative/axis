@@ -1,0 +1,19 @@
+A ffmpeg version 8.1.3 Copyright (c) 2000-2026 the FFmpeg developers
+built with gcc 15 (GCC)
+Encoders:
+ V..... = Video
+ A..... = Audio
+ S..... = Subtitle
+ .F.... = Frame-level multithreading
+ ..S... = Slice-level multithreading
+ ...X.. = Codec is experimental
+ ....B. = Supports draw_horiz_band
+ .....D = Supports direct rendering method 1
+ ------
+ V....D libx264              libx264 H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10 (codec h264)
+ V....D libx265              libx265 H.265 / HEVC (codec hevc)
+ V....D hevc_nvenc           NVIDIA NVENC hevc encoder (codec hevc)
+ V....D hevc_vaapi           H.265/HEVC (VAAPI) (codec hevc)
+ A....D aac                  AAC (Advanced Audio Coding)
+ S..... mov_text             3GPP Timed Text subtitle
+ S..... srt                  SubRip subtitle (codec subrip)

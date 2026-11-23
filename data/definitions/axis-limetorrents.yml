@@ -1,0 +1,91 @@
+---
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# LimeTorrents, a definition Axis ships (add-builtin-torrent-indexers),
+# written for Axis from how the site answered on 2026-11-18.  It reads the
+# site's search feed (/searchrss/WORDS/), not its HTML pages: one request
+# gives each result's name, category, size, seeders and leechers, date and,
+# inside the enclosure's address, its info-hash.  That address is another
+# site's (itorrents) and is never fetched: Axis builds the magnet link from
+# the hash.  To repair it, raise the version and follow
+# docs/CONTRIBUTING-definitions.md.
+id: axis-limetorrents
+version: 1
+name: LimeTorrents
+description: "LimeTorrents is a public torrent index of every kind of file; Axis reads its search feed by words, which gives each result's name, category, size, seeders and info-hash in one request."
+language: en-US
+type: public
+encoding: UTF-8
+links:
+  - https://www.limetorrents.fun/
+
+caps:
+  categorymappings:
+    - {id: "Movies", cat: Movies, desc: "Movies"}
+    - {id: "TV shows", cat: TV, desc: "TV shows"}
+    - {id: "Anime", cat: TV/Anime, desc: "Anime"}
+    - {id: "Music", cat: Audio, desc: "Music"}
+    - {id: "Games", cat: Console, desc: "Games"}
+    - {id: "Applications", cat: PC/0day, desc: "Applications"}
+    - {id: "E-books", cat: Books/EBook, desc: "E-books"}
+    - {id: "Other", cat: Other, desc: "Other"}
+
+  modes:
+    search: [q]
+    tv-search: [q, season, ep]
+    movie-search: [q]
+
+search:
+  paths:
+    # Only a test asks with no words, for a word that always has results;
+    # a search with no words (a movie by an identifier alone) is not asked.
+    - path: "searchrss/{{ if .Keywords }}{{ .Keywords }}{{ else }}1080p{{ end }}/"
+      response:
+        type: xml
+
+  rows:
+    selector: rss > channel > item
+    # Every answer of the feed has its channel, results or none.
+    expect: rss > channel
+
+  fields:
+    title:
+      selector: title
+      filters:
+        # The feed escapes some names twice ("&amp;amp;").
+        - name: htmldecode
+    category:
+      # "Movies", "TV shows", "Anime.", "Other - E-books", "Music - Music".
+      selector: category
+      optional: true
+      filters:
+        - name: re_replace
+          args: ["^.* - ", ""]
+        - name: re_replace
+          args: ["\\.$", ""]
+    infohash:
+      # https://itorrents.net/torrent/HASH.torrent?title=...: only the hash
+      # is read.
+      selector: enclosure
+      attribute: url
+      filters:
+        - name: regexp
+          args: "/torrent/([0-9A-Fa-f]{40})\\.torrent"
+    size:
+      # In bytes.
+      selector: size
+    seeders:
+      # "Seeds: 10 , Leechers 17"
+      selector: description
+      filters:
+        - name: regexp
+          args: "Seeds:? *([0-9,]+)"
+    leechers:
+      selector: description
+      filters:
+        - name: regexp
+          args: "Leechers:? *([0-9,]+)"
+    date:
+      # "14 Nov 2026 07:50:51 +0200"
+      selector: pubDate
+      optional: true

@@ -1,0 +1,37 @@
+{
+  "dates": {
+    "maximum": "2026-11-20",
+    "minimum": "2026-10-09"
+  },
+  "page": 1,
+  "results": [
+    {
+      "adult": false,
+      "genre_ids": [35, 10749],
+      "id": 9011,
+      "original_language": "en",
+      "original_title": "Saltwick Bells",
+      "overview": "A bell-ringer and a tuba player share one rehearsal room.",
+      "poster_path": "/p9011.jpg",
+      "release_date": "2026-10-30",
+      "title": "Saltwick Bells",
+      "vote_average": 6.6,
+      "vote_count": 74
+    },
+    {
+      "adult": false,
+      "genre_ids": [12],
+      "id": 9012,
+      "original_language": "en",
+      "original_title": "The Cartographer's Dog",
+      "overview": "The dog knows the way. The map does not.",
+      "poster_path": "/p9012.jpg",
+      "release_date": "2026-10-16",
+      "title": "The Cartographer's Dog",
+      "vote_average": 7.4,
+      "vote_count": 122
+    }
+  ],
+  "total_pages": 1,
+  "total_results": 2
+}

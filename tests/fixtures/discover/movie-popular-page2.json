@@ -1,0 +1,49 @@
+{
+  "page": 2,
+  "results": [
+    {
+      "adult": false,
+      "genre_ids": [18],
+      "id": 9004,
+      "original_language": "en",
+      "original_title": "Under the Glass Hill",
+      "overview": "On page 2 as well: the list moved while it was read.",
+      "popularity": 199.0,
+      "poster_path": "/p9004.jpg",
+      "release_date": "2022-09-02",
+      "title": "Under the Glass Hill",
+      "vote_average": 6.94,
+      "vote_count": 51
+    },
+    {
+      "adult": false,
+      "genre_ids": [16, 10751],
+      "id": 9008,
+      "original_language": "en",
+      "original_title": "Kettle Moon",
+      "overview": "A kettle that whistles at the moon, and the girl who listens.",
+      "popularity": 150.3,
+      "poster_path": "/p9008.jpg",
+      "release_date": "2021-12-10",
+      "title": "Kettle Moon",
+      "vote_average": 7.81,
+      "vote_count": 2210
+    },
+    {
+      "adult": false,
+      "genre_ids": [99],
+      "id": 9009,
+      "original_language": "en",
+      "original_title": "A Map of Small Weathers",
+      "overview": "A year of the weather over one village green.",
+      "popularity": 120.0,
+      "poster_path": "/p9009.jpg",
+      "release_date": "2024-05-03",
+      "title": "A Map of Small Weathers",
+      "vote_average": 7.0,
+      "vote_count": 40
+    }
+  ],
+  "total_pages": 2,
+  "total_results": 9
+}

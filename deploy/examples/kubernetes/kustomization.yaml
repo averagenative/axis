@@ -1,0 +1,21 @@
+# kustomization.yaml - Axis on Kubernetes
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+#   kubectl apply -k .          (after making the secrets: README.md)
+#
+# worker.yaml is left out until a worker has a token; ingress.yaml is the
+# plain Ingress (use ../traefik/ingressroute.yaml instead for Traefik).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: axis
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: axis
+resources:
+  - namespace.yaml
+  - storage.yaml
+  - postgres.yaml
+  - axisd.yaml
+  - ingress.yaml
+  - networkpolicy.yaml
+  # - worker.yaml

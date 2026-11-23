@@ -1,0 +1,18 @@
+{
+    "_constructed": "One frame with HDR10+ metadata: not recorded from a real file (see README.md)",
+    "frames": [
+        {
+            "pix_fmt": "yuv420p10le",
+            "color_space": "bt2020nc",
+            "color_primaries": "bt2020",
+            "color_transfer": "smpte2084",
+            "side_data_list": [
+                {
+                    "side_data_type": "HDR Dynamic Metadata SMPTE2094-40 (HDR10+)",
+                    "application version": 1,
+                    "num_windows": 1
+                }
+            ]
+        }
+    ]
+}

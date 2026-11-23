@@ -1,0 +1,64 @@
+{
+    "_constructed": "Dolby Vision profile 5: not recorded from a real file (see README.md)",
+    "streams": [
+        {
+            "index": 0,
+            "codec_name": "hevc",
+            "codec_long_name": "H.265 / HEVC (High Efficiency Video Coding)",
+            "profile": "Main 10",
+            "codec_type": "video",
+            "width": 3840,
+            "height": 2160,
+            "coded_width": 3840,
+            "coded_height": 2160,
+            "pix_fmt": "yuv420p10le",
+            "level": 153,
+            "color_range": "tv",
+            "field_order": "progressive",
+            "r_frame_rate": "24000/1001",
+            "avg_frame_rate": "24000/1001",
+            "time_base": "1/1000",
+            "bits_per_raw_sample": "10",
+            "disposition": { "default": 1, "forced": 0, "attached_pic": 0 },
+            "tags": { "language": "eng", "BPS": "30000000" },
+            "side_data_list": [
+                {
+                    "side_data_type": "DOVI configuration record",
+                    "dv_version_major": 1,
+                    "dv_version_minor": 0,
+                    "dv_profile": 5,
+                    "dv_level": 6,
+                    "rpu_present_flag": 1,
+                    "el_present_flag": 0,
+                    "bl_present_flag": 1,
+                    "dv_bl_signal_compatibility_id": 0
+                }
+            ]
+        },
+        {
+            "index": 1,
+            "codec_name": "eac3",
+            "profile": "Dolby Digital Plus + Dolby Atmos",
+            "codec_type": "audio",
+            "sample_fmt": "fltp",
+            "sample_rate": "48000",
+            "channels": 6,
+            "channel_layout": "5.1(side)",
+            "bit_rate": "768000",
+            "disposition": { "default": 1, "forced": 0, "attached_pic": 0 },
+            "tags": { "language": "eng" }
+        }
+    ],
+    "chapters": [],
+    "format": {
+        "filename": "fd:",
+        "nb_streams": 2,
+        "format_name": "matroska,webm",
+        "format_long_name": "Matroska / WebM",
+        "start_time": "0.000000",
+        "duration": "7200.000000",
+        "size": "28000000000",
+        "bit_rate": "31111111",
+        "probe_score": 100
+    }
+}

@@ -1,0 +1,63 @@
+{
+  "page": 1,
+  "results": [
+    {
+      "adult": false,
+      "genre_ids": [18],
+      "id": 9021,
+      "media_type": "movie",
+      "original_language": "en",
+      "original_title": "The Tin Garden",
+      "overview": "Recommended for The Brass Orchard.",
+      "poster_path": "/p9021.jpg",
+      "release_date": "2020-08-14",
+      "title": "The Tin Garden",
+      "vote_average": 7.0,
+      "vote_count": 640
+    },
+    {
+      "adult": false,
+      "genre_ids": [18, 9648],
+      "id": 9022,
+      "media_type": "movie",
+      "original_language": "en",
+      "original_title": "Seven Bridges of Elm",
+      "overview": "Recommended for both The Brass Orchard and Nine Lanterns South.",
+      "poster_path": "/p9022.jpg",
+      "release_date": "2019-10-11",
+      "title": "Seven Bridges of Elm",
+      "vote_average": 6.5,
+      "vote_count": 210
+    },
+    {
+      "adult": false,
+      "genre_ids": [28, 53],
+      "id": 9002,
+      "media_type": "movie",
+      "original_language": "en",
+      "original_title": "Nine Lanterns South",
+      "overview": "Already had: never recommended.",
+      "poster_path": "/p9002.jpg",
+      "release_date": "2023-11-17",
+      "title": "Nine Lanterns South",
+      "vote_average": 6.2,
+      "vote_count": 388
+    },
+    {
+      "adult": false,
+      "genre_ids": [27],
+      "id": 9023,
+      "media_type": "movie",
+      "original_language": "en",
+      "original_title": "Hollow Bell Road",
+      "overview": "Recommended for The Brass Orchard, low on its list.",
+      "poster_path": "/p9023.jpg",
+      "release_date": "2017-10-27",
+      "title": "Hollow Bell Road",
+      "vote_average": 5.9,
+      "vote_count": 77
+    }
+  ],
+  "total_pages": 1,
+  "total_results": 4
+}

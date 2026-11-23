@@ -1,0 +1,29 @@
+{
+  "page": 1,
+  "pageSize": 250,
+  "sortKey": "timeleft",
+  "sortDirection": "ascending",
+  "totalRecords": 3,
+  "records": [
+    {
+      "id": 9001,
+      "seriesId": 2,
+      "episodeId": 2201,
+      "seasonNumber": 2019,
+      "title": "The.Morning.Tide.Report.2019.03.04.720p.HDTV.x264-MADEUP",
+      "status": "downloading",
+      "protocol": "usenet",
+      "downloadClient": "Made Up Client"
+    },
+    {
+      "id": 9002,
+      "episodeId": 2202,
+      "status": "downloading"
+    },
+    {
+      "id": 9003,
+      "seriesId": "2",
+      "status": "queued"
+    }
+  ]
+}

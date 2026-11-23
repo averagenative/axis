@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A hand-written feed of the made-up site of example-rss.yml. -->
+<rss version="2.0" xmlns:torznab="http://torznab.com/schemas/2015/feed">
+<channel>
+<title>Example RSS</title>
+<link>https://feed.example-rss.invalid/</link>
+<item>
+<title><![CDATA[The Show S01E02 720p HDTV x264 & more]]></title>
+<link>https://feed.example-rss.invalid/item/1</link>
+<category>TV HD</category>
+<enclosure url="https://feed.example-rss.invalid/get/1.torrent" length="1" type="application/x-bittorrent"/>
+<torznab:attr name="size" value="1234567890"/>
+<torznab:attr name="seeders" value="42"/>
+<torznab:attr name="peers" value="7"/>
+<pubDate>Wed, 01 Nov 2023 12:00:00 GMT</pubDate>
+</item>
+<item>
+<title>The Show S01E02 1080p WEB-DL</title>
+<link>https://feed.example-rss.invalid/item/2</link>
+<category>TV</category>
+<enclosure url="https://files.elsewhere.invalid/2.torrent"/>
+<torznab:attr name="size" value="2000"/>
+<torznab:attr name="seeders" value="1"/>
+<torznab:attr name="peers" value="1"/>
+<pubDate>Wed, 01 Nov 2023 13:00:00 GMT</pubDate>
+</item>
+<item>
+<title>The Show S01E02 SD</title>
+<link>/item/3</link>
+<category>TV</category>
+<enclosure url="/get/3.torrent"/>
+<torznab:attr name="size" value="300"/>
+<torznab:attr name="seeders" value="3"/>
+<torznab:attr name="peers" value="0"/>
+<pubDate>Thu, 02 Nov 2023 14:30:00 +0100</pubDate>
+</item>
+</channel>
+</rss>

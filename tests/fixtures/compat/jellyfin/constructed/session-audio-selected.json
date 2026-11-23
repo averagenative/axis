@@ -1,0 +1,38 @@
+[
+  {
+    "Id": "671a9e6dc57fdd390fe16cbbb326ceca",
+    "UserId": "00a92bb1464e4f77bd70b5f880fdd6ef",
+    "UserName": "axis-test",
+    "Client": "AxisTestConsole",
+    "DeviceName": "Games Console",
+    "DeviceId": "axis-test-console",
+    "PlayState": {
+      "PositionTicks": 20000000,
+      "MediaSourceId": "9b5e6f8492f1cd69653163ef16b48fa9",
+      "AudioStreamIndex": 2,
+      "PlayMethod": "Transcode"
+    },
+    "NowPlayingItem": {
+      "Id": "9b5e6f8492f1cd69653163ef16b48fa9",
+      "Type": "Movie",
+      "Container": "mkv",
+      "Path": "/media/films/Test Film Multi (2024)/Test Film Multi (2024).mkv",
+      "MediaStreams": [
+        {"Codec": "h264", "Profile": "Constrained Baseline", "Type": "Video", "Index": 0, "BitDepth": 8, "Width": 640, "Height": 360, "Level": 30, "VideoRangeType": "SDR"},
+        {"Codec": "aac", "Language": "eng", "Type": "Audio", "Index": 1, "Channels": 1, "Profile": "LC"},
+        {"Codec": "ac3", "Language": "deu", "Type": "Audio", "Index": 2, "Channels": 1},
+        {"Codec": "subrip", "Language": "eng", "Type": "Subtitle", "Index": 3}
+      ]
+    },
+    "TranscodingInfo": {
+      "AudioCodec": "aac",
+      "VideoCodec": "h264",
+      "Container": "ts",
+      "IsVideoDirect": true,
+      "IsAudioDirect": false,
+      "Width": 640,
+      "Height": 360,
+      "TranscodeReasons": ["AudioCodecNotSupported"]
+    }
+  }
+]

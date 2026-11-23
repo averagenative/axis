@@ -1,0 +1,47 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+schema: spec-driven
+
+context: |
+  Axis is a single long-lived media engine written in C. It finds and downloads
+  movies and series through existing indexers and download clients, imports
+  them into a library, analyses the library and its disks, and converts files
+  to save space. Read openspec/project.md first: it holds the decisions, the
+  architecture, the conventions, the roadmap and the known limits.
+
+  Conventions:
+  - C, -std=gnu89, GLib/GObject, libsoup 3, json-glib, libpq. Tabs for indentation.
+    Prefix: Axis / axis_ / AXIS_. Ownership via g_autoptr, g_autofree, g_steal_pointer.
+  - GNU Make with Makefile + config.mk + rules.mk; DEBUG, ASAN and UBSAN switches.
+  - PostgreSQL only. SQL migrations in data/migrations/NNNN_name.sql, numbered
+    without gaps and never edited once released.
+  - Web UI is server-rendered through htmx-glib (deps/htmx-glib). No Node, no
+    JavaScript build, no hand-written frontend JavaScript.
+  - ffmpeg, ffprobe and yt-dlp run as subprocesses; they are never linked.
+  - Licence: AGPL-3.0-or-later. Every source file carries the SPDX identifier.
+  - Database tests run against a throwaway PostgreSQL container via
+    tests/with-postgres.sh (Podman). Use a container for any other service a
+    test needs.
+  - Tests use the GLib test framework and run under ASAN+UBSAN via `make check`.
+    Every parser of outside input has a fuzz target.
+  - The gates for a change are `make check`, `make fuzz`, `make check-container`
+    and `make check-examples`.
+  - Made-up titles, release names, identifiers and hosts only, in code, tests,
+    fixtures and documents. `make check-made-up` checks what it can.
+  - Documents are plain ASCII and follow the Google developer documentation
+    style guide.
+
+rules:
+  proposal:
+    - Keep a change to one small slice that can be archived as soon as it lands.
+  specs:
+    - Describe observable behaviour only; design reasoning belongs in design.md.
+    - Safety promises (data never lost, originals deleted only after verification,
+      offline volumes untouched) must be written as scenarios.
+    - Use made-up titles and release names in every example.
+  design:
+    - A change that writes or deletes media, or touches security, names its
+      independent review and what the review found.
+    - Record what is believed but not confirmed about an outside service, and
+      add each remaining limit to the Known limits of openspec/project.md.
+  tasks:
+    - Each spec scenario has a task for its test.

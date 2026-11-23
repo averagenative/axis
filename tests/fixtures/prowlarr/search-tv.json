@@ -1,0 +1,28 @@
+[
+  {
+    "size": 1500000000,
+    "grabs": 20,
+    "indexerId": 3,
+    "indexer": "NewsOwl",
+    "title": "The.Show.S01E02.1080p.WEB-DL.DDP5.1.H.264-GRP",
+    "imdbId": 700001,
+    "tmdbId": 7101,
+    "tvdbId": 82001,
+    "publishDate": "2024-09-09T09:09:09Z",
+    "downloadUrl": "@ORIGIN@@BASE@/3/download?apikey=@KEY@&link=U0hPVzAx&file=hearth-nzb",
+    "categories": [{ "id": 5040, "name": "TV/HD" }],
+    "protocol": "usenet"
+  },
+  {
+    "size": 9000000000,
+    "grabs": 40,
+    "indexerId": 3,
+    "indexer": "NewsOwl",
+    "title": "The.Show.S01.1080p.BluRay.x264-PACK",
+    "tvdbId": 82001,
+    "publishDate": "2024-09-10T09:09:09Z",
+    "downloadUrl": "@ORIGIN@@BASE@/3/download?apikey=@KEY@&link=U0hPVzAy&file=hearth-nzb",
+    "categories": [{ "id": 5040, "name": "TV/HD" }],
+    "protocol": "usenet"
+  }
+]

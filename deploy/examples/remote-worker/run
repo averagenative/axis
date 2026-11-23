@@ -1,0 +1,73 @@
+#!/bin/sh
+# run - axis-worker on a desktop with an NVIDIA GPU, with rootless Podman
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Starts (or starts again) the worker container against the server's disks,
+# which must be mounted on this machine first (README.md, step 3).  Run it as
+# the user who owns the token file and the mounts, never as root.  Lines to
+# change are marked EDIT.
+#
+#   ./run                       start, or replace the running one
+#   podman logs -f axis-worker  what it says
+#   podman stop axis-worker     it gives its work back, then exits
+
+set -eu
+
+# EDIT: Axis through the reverse proxy, over https.
+url=https://axis.example.org
+# EDIT: the token the Workers page showed, in a file only you can read
+# (README.md, step 1).
+token=$HOME/.config/axis-worker/token
+# EDIT: each of the server's disks as mounted here, and the path the worker
+# sees it at inside the container (host:container, space-separated).
+disks="/mnt/server/disk1:/media/disk1 /mnt/server/disk2:/media/disk2"
+# EDIT: those of the container paths above mounted with sshfs or SMB, which
+# do not keep file identities (comma-separated).  Empty for NFS.
+without_identity=/media/disk1,/media/disk2
+# EDIT: the image, the same version as Axis on the server.
+image=ghcr.io/averagenative/axis:0.1.0-rc1
+# How many of this machine's cores the worker's container may use.
+cpus=4
+
+[ -r "$token" ] || { echo "run: $token cannot be read" >&2; exit 1; }
+case $(stat -c %a "$token") in
+*00) ;;
+*) echo "run: $token can be read by other users: chmod 600 it" >&2; exit 1 ;;
+esac
+
+mounts=
+volumes=
+for pair in $disks; do
+	host=${pair%%:*}
+	inside=${pair#*:}
+	# The volume's marker, put there by Axis: without it the disk is not
+	# mounted (an empty directory), or not at this path.
+	if [ ! -f "$host/.axis-volume" ]; then
+		echo "run: $host has no .axis-volume: is the server's disk mounted there?" >&2
+		exit 1
+	fi
+	mounts="$mounts -v $host:$inside"
+	volumes=${volumes:+$volumes,}$inside
+done
+
+podman rm -f axis-worker >/dev/null 2>&1 || true
+# shellcheck disable=SC2086 # $mounts is several options on purpose
+exec podman run -d --name axis-worker \
+	--entrypoint /usr/bin/axis-worker \
+	--userns=keep-id \
+	--read-only --cap-drop ALL --security-opt no-new-privileges \
+	--security-opt label=disable \
+	--pids-limit 512 --tmpfs /tmp:rw,noexec,nosuid,size=256m,mode=1777 \
+	--cpus "$cpus" \
+	--device nvidia.com/gpu=all \
+	-v "$token:/run/secrets/axis_worker_token:ro" \
+	$mounts \
+	-e AXIS_WORKER_URL="$url" \
+	-e AXIS_WORKER_TOKEN_FILE=/run/secrets/axis_worker_token \
+	-e AXIS_WORKER_VOLUMES="$volumes" \
+	-e AXIS_WORKER_VOLUMES_WITHOUT_FILE_IDENTITY="$without_identity" \
+	-e AXIS_WORKER_ENCODER_FAMILIES=nvenc \
+	-e AXIS_WORKER_LOG_LEVEL=info \
+	--health-cmd '/usr/bin/axis-worker --healthcheck' --health-interval 30s \
+	--stop-timeout 75 --restart unless-stopped \
+	"$image"

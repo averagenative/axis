@@ -1,0 +1,11 @@
+{"_constructed":"a local conversion of audio to the same codec (a downmix): cause unclear","MediaContainer":{"size":1,"Metadata":[{
+"ratingKey":"606","librarySectionID":"1","type":"movie","title":"Invented Downmix Film",
+"Media":[{"id":7,"bitrate":8000,"width":1920,"height":1080,"audioCodec":"aac","videoCodec":"h264","container":"mkv","Part":[{"id":7,"file":"/data/movies/Invented Downmix (2015)/Invented Downmix (2015).mkv","container":"mkv","decision":"transcode","protocol":"hls","Stream":[
+{"id":60,"streamType":1,"decision":"copy","codec":"h264","profile":"high","bitDepth":8,"width":1920,"height":1080,"colorTrc":"bt709"},
+{"id":61,"streamType":2,"decision":"transcode","codec":"aac","channels":6,"selected":true}
+]}]}],
+"Player":{"machineIdentifier":"client-roku-1","platform":"Roku","product":"Plex for Roku","state":"playing","title":"Bedroom box","local":true,"relayed":false},
+"Session":{"id":"sess-unclear-1","bandwidth":8000,"location":"lan"},
+"TranscodeSession":{"sourceVideoCodec":"h264","sourceAudioCodec":"aac","videoDecision":"copy","audioDecision":"transcode","protocol":"hls","container":"mkv","videoCodec":"h264","audioCodec":"aac","audioChannels":2},
+"User":{"id":"1","title":"Alice Example"}
+}]}}

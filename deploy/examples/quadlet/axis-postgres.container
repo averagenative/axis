@@ -1,0 +1,41 @@
+# axis-postgres.container - PostgreSQL for Axis, as a systemd service
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Quadlet turns this into axis-postgres.service.  The password is the Podman
+# secret axis_db_password (README.md, step 1).
+[Unit]
+Description=PostgreSQL for Axis
+
+[Container]
+ContainerName=axis-postgres
+Image=docker.io/library/postgres:17
+Network=axis.network
+NetworkAlias=postgres
+Volume=axis-db.volume:/var/lib/postgresql/data
+Secret=axis_db_password,type=mount,target=/run/secrets/axis_db_password
+Environment=POSTGRES_USER=axis POSTGRES_DB=axis POSTGRES_PASSWORD_FILE=/run/secrets/axis_db_password
+# Page checksums; applies only when the database is first created.
+Environment=POSTGRES_INITDB_ARGS=--data-checksums
+# The image's own user, started directly, locked down as Axis is.
+User=999
+Group=999
+ReadOnly=true
+Tmpfs=/tmp:rw,noexec,nosuid,size=64m,mode=1777
+Tmpfs=/var/run/postgresql:rw,noexec,nosuid,size=1m,mode=1777
+DropCapability=all
+NoNewPrivileges=true
+PodmanArgs=--pids-limit=512
+HealthCmd=pg_isready --username=axis --dbname=axis
+HealthInterval=10s
+HealthTimeout=5s
+HealthRetries=5
+HealthStartPeriod=30s
+# The service is started once the database answers.
+Notify=healthy
+
+[Service]
+Restart=always
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target

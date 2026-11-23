@@ -1,0 +1,60 @@
+---
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# A hand-written definition of a made-up public site in windows-1251 whose
+# results take two table rows each, for Axis's tests (see README.md).  Not
+# a real site.
+id: example-after
+name: Example Two Rows
+description: "A made-up public site in windows-1251, two rows a result"
+language: ru-RU
+type: public
+encoding: windows-1251
+links:
+  - https://two.example-after.invalid/
+
+caps:
+  categorymappings:
+    - {id: 10, cat: Movies, desc: "Фильмы"}
+  modes:
+    search: [q]
+    movie-search: [q]
+
+search:
+  paths:
+    - path: /browse.php
+  inputs:
+    search: "{{ .Keywords }}"
+  rows:
+    selector: table#list tr.r
+    after: 1
+  fields:
+    category:
+      text: 10
+    title:
+      selector: a.name
+    download:
+      selector: a.dl
+      attribute: href
+    size:
+      selector: td.size
+    seeders:
+      selector: td.seed
+    leechers:
+      optional: true
+      selector: td.leech
+    date_ago:
+      optional: true
+      selector: td.when:contains("ago")
+      filters:
+        - name: timeago
+    date_fuzzy:
+      optional: true
+      selector: td.when:not(:contains("ago"))
+      filters:
+        - name: fuzzytime
+    date:
+      text: "{{ or .Result.date_ago .Result.date_fuzzy }}"
+    downloadvolumefactor:
+      text: 1
+    uploadvolumefactor:
+      text: 1

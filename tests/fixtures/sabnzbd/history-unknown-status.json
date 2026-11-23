@@ -1,0 +1,4 @@
+{"history": {"noofslots": 2, "slots": [
+  {"status": "Wibbling", "category": "axis", "name": "Some.Film.2020.1080p.WEB-DL", "nzb_name": "Some.Film.2020.1080p.WEB-DL.nzb", "nzo_id": "SABnzbd_nzo_dl0001", "bytes": 4320011264, "storage": "", "fail_message": ""},
+  {"status": "Wobbling", "category": "axis", "name": "Never.Seen.Before", "nzb_name": "Never.Seen.Before.nzb", "nzo_id": "SABnzbd_nzo_nw0002", "bytes": 100, "storage": "", "fail_message": ""}
+]}}

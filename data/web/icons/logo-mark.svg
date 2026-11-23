@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Axis mark: a line that has pivoted about an axis point.  The area it
+     swept is shaded in three steps that brighten toward the line.
+     SPDX-License-Identifier: AGPL-3.0-or-later
+     Colours are the oxblood palette: 4A0000, 7D0000, B00000 for the sweep
+     and E30000 for the line.  Drawn inline in a page, the classes let a
+     theme recolour it: logo-step-1 (furthest from the line) to
+     logo-step-3 (nearest), and logo-line.  The hub is a hole, so whatever
+     is behind the mark shows through. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Axis">
+	<defs>
+		<mask id="axis-hub">
+			<rect width="64" height="64" fill="#fff"/>
+			<circle cx="32" cy="32" r="3.6" fill="#000"/>
+		</mask>
+	</defs>
+	<g mask="url(#axis-hub)">
+		<path class="logo-step-1" d="M32 32 L32 3.3 A28.7 28.7 0 0 1 40.87 4.7 Z" fill="#4a0000"/>
+		<path class="logo-step-2" d="M32 32 L40.87 4.7 A28.7 28.7 0 0 1 48.87 8.78 Z" fill="#7d0000"/>
+		<path class="logo-step-3" d="M32 32 L48.87 8.78 A28.7 28.7 0 0 1 55.5 15.54 Z" fill="#b00000"/>
+		<path class="logo-step-1" d="M32 32 L32 60.7 A28.7 28.7 0 0 1 23.13 59.3 Z" fill="#4a0000"/>
+		<path class="logo-step-2" d="M32 32 L23.13 59.3 A28.7 28.7 0 0 1 15.13 55.22 Z" fill="#7d0000"/>
+		<path class="logo-step-3" d="M32 32 L15.13 55.22 A28.7 28.7 0 0 1 8.5 48.46 Z" fill="#b00000"/>
+		<path class="logo-line" d="M6.6 49.8 L57.4 14.2" fill="none" stroke="#e30000" stroke-width="3"/>
+	</g>
+</svg>

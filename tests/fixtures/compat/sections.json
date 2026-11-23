@@ -1,0 +1,5 @@
+{"MediaContainer":{"size":3,"allowSync":false,"title1":"Plex Library","Directory":[
+{"allowSync":true,"art":"/:/resources/movie-fanart.jpg","composite":"/library/sections/1/composite/1","filters":true,"refreshing":false,"key":"1","type":"movie","title":"Films","agent":"tv.plex.agents.movie","scanner":"Plex Movie","language":"en-US","uuid":"11111111-2222-3333-4444-555555555555","Location":[{"id":1,"path":"/data/movies"}]},
+{"allowSync":true,"key":"2","type":"show","title":"Series","agent":"tv.plex.agents.series","scanner":"Plex TV Series","language":"en-US","uuid":"66666666-7777-8888-9999-000000000000","Location":[{"id":2,"path":"/data/tv"},{"id":3,"path":"/data/tv-extra"}]},
+{"allowSync":true,"key":"3","type":"artist","title":"Music","agent":"tv.plex.agents.music","scanner":"Plex Music","language":"en-US","uuid":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","Location":[{"id":4,"path":"/data/music"}]}
+]}}

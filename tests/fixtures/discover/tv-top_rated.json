@@ -1,0 +1,33 @@
+{
+  "page": 1,
+  "results": [
+    {
+      "adult": false,
+      "genre_ids": [18],
+      "id": 9505,
+      "original_language": "en",
+      "original_name": "Kitchen at the End of Town",
+      "overview": "A diner that only opens when the last bus has gone.",
+      "poster_path": "/s9505.jpg",
+      "first_air_date": "2016-01-14",
+      "name": "Kitchen at the End of Town",
+      "vote_average": 8.9,
+      "vote_count": 5100
+    },
+    {
+      "adult": false,
+      "genre_ids": [80, 18],
+      "id": 9501,
+      "original_language": "en",
+      "original_name": "Harbour Lights Precinct",
+      "overview": "The night desk of a harbour police station.",
+      "poster_path": "/s9501.jpg",
+      "first_air_date": "2021-04-05",
+      "name": "Harbour Lights Precinct",
+      "vote_average": 8.1,
+      "vote_count": 900
+    }
+  ],
+  "total_pages": 1,
+  "total_results": 2
+}

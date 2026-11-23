@@ -1,0 +1,1 @@
+3[{"id":1,"indexerId":5,"disabledTill":"2099-01-01T00:00:00Z","mostRecentFailure":"2024-11-10T09:12:00Z","escalationLevel":3},{"id":2,"indexerId":7,"disabledTill":"2020-01-01T00:00:00Z"},{"id":3,"indexerId":9},{"indexerId":"x","disabledTill":5},7,null]

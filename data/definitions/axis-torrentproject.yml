@@ -1,0 +1,95 @@
+---
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# TorrentProject, a definition Axis ships (add-builtin-torrent-indexers),
+# written for Axis from how the site answered on 2026-11-18.  It has no API
+# and no feed for a search: its result page (/?t=WORDS) lists each result's
+# name, seeders, leechers, age and size, and the info-hash is only on the
+# result's own page, which is read when a release is fetched (and only for
+# the releases fetched).  That page's magnet link goes through another
+# site's redirector and is never followed: Axis reads the hash and builds the
+# link.  A long name is cut with "..." in the list but whole (its marks made
+# dashes) in its page's address, which is read instead then.  To repair it,
+# raise the version and follow docs/CONTRIBUTING-definitions.md.
+id: axis-torrentproject
+version: 1
+name: TorrentProject
+description: "TorrentProject is a search engine over many public torrent sites; Axis reads its result pages by words, and reads a release's info-hash from its own page only when that release is fetched."
+language: en-US
+type: public
+encoding: UTF-8
+requestDelay: 2
+links:
+  - https://torrentproject.cc/
+
+caps:
+  # Its results have no categories.
+  categorymappings:
+    - {id: "Other", cat: Other, desc: "Other"}
+
+  modes:
+    search: [q]
+    tv-search: [q, season, ep]
+    movie-search: [q]
+
+search:
+  paths:
+    - path: /
+  inputs:
+    # Only a test asks with no words, for a word that always has results;
+    # a search with no words (a movie by an identifier alone) is not asked.
+    t: "{{ if .Keywords }}{{ .Keywords }}{{ else }}1080p{{ end }}"
+    orderby: seeders
+
+  rows:
+    # <div><span><a href="/t3-ID/NAME-torrent.html">NAME</a>...</span>
+    # <span>SEEDERS</span><span>LEECHERS</span><span>AGE</span><span>SIZE</span></div>
+    selector: "#similarfiles > div:has(> span > a[href^=\"/t\"])"
+    # Every result page has the list, results or none.
+    expect: "#similarfiles"
+
+  fields:
+    _text:
+      selector: ":scope > span:first-child > a"
+    _cut:
+      # "..." at the end when the list cut the name.
+      text: "{{ .Result._text }}"
+      filters:
+        - name: regexp
+          args: "(\\.\\.\\.)$"
+    _slug:
+      selector: ":scope > span:first-child > a"
+      attribute: href
+      filters:
+        - name: regexp
+          args: "^/[^/]+/(.+)-torrent\\.html$"
+        - name: re_replace
+          args: ["-", " "]
+    title:
+      text: "{{ if .Result._cut }}{{ .Result._slug }}{{ else }}{{ .Result._text }}{{ end }}"
+    download:
+      # The result's own page, read when it is fetched.
+      selector: ":scope > span:first-child > a"
+      attribute: href
+    seeders:
+      selector: ":scope > span:nth-child(2)"
+    leechers:
+      selector: ":scope > span:nth-child(3)"
+    date:
+      # "6 months ago"
+      selector: ":scope > span:nth-child(4)"
+      optional: true
+    size:
+      # "2.5 GB"
+      selector: ":scope > span:nth-child(5)"
+
+download:
+  infohash:
+    hash:
+      # <div class="torrenthash">torrent hash<h4><a ...>HASH</a></h4></div>
+      selector: ".torrenthash h4"
+      filters:
+        - name: regexp
+          args: "([0-9A-Fa-f]{40})"
+    title:
+      selector: h1

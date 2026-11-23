@@ -1,0 +1,1 @@
+{"result": null, "error": {"message": "Failure: [Failure instance: Traceback (failure with no frames): <class 'deluge.error.InvalidTorrentError'>: torrent_id 0123456789abcdef0123456789abcdef01234567 not in session.\n]", "code": 4}, "id": 1}

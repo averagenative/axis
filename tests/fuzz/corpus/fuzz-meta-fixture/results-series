@@ -1,0 +1,13 @@
+1{
+  "results": [
+    {
+      "id": "201",
+      "kind": "series",
+      "title": "Fixture Street",
+      "year": 2021,
+      "overview": "A street of houses, each with a story that runs for a season.",
+      "poster": "/p201.png",
+      "ids": { "imdb": "tt1234567", "tvdb": "350001" }
+    }
+  ]
+}

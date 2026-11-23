@@ -1,0 +1,33 @@
+{
+  "page": 1,
+  "results": [
+    {
+      "adult": false,
+      "genre_ids": [18, 36],
+      "id": 9015,
+      "original_language": "en",
+      "original_title": "Second Shift at Halcyon Yard",
+      "overview": "A shipyard's night crew builds one last ship.",
+      "poster_path": "/p9015.jpg",
+      "release_date": "1987-04-24",
+      "title": "Second Shift at Halcyon Yard",
+      "vote_average": 8.72,
+      "vote_count": 15032
+    },
+    {
+      "adult": false,
+      "genre_ids": [16, 10751],
+      "id": 9008,
+      "original_language": "en",
+      "original_title": "Kettle Moon",
+      "overview": "A kettle that whistles at the moon, and the girl who listens.",
+      "poster_path": "/p9008.jpg",
+      "release_date": "2021-12-10",
+      "title": "Kettle Moon",
+      "vote_average": 7.81,
+      "vote_count": 2210
+    }
+  ],
+  "total_pages": 1,
+  "total_results": 2
+}

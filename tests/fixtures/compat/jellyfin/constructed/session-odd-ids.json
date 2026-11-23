@@ -1,0 +1,51 @@
+[
+  {
+    "Id": "f1a2c3d4e5f60718293a4b5c6d7e8f94",
+    "UserId": "00a92bb1464e4f77bd70b5f880fdd6ef",
+    "UserName": "axis-test",
+    "Client": "Jellyfin Web",
+    "DeviceName": "Firefox",
+    "DeviceId": "TW96aWxsYS81LjAgKFgxMTsgTGludXggeDg2XzY0OyBydjoxMjUuMCkgR2Vja28vMjAxMDAxMDEgRmlyZWZveC8xMjUuMHwxNzE0MDU3MjIxODk5MQ+/11",
+    "PlayState": {
+      "PositionTicks": "20000000",
+      "MediaSourceId": "ca8139a7c41a55835046264d60e1a618",
+      "PlayMethod": "DirectPlay"
+    },
+    "NowPlayingItem": {
+      "Id": "ca8139a7c41a55835046264d60e1a618",
+      "Type": "Movie",
+      "Container": "mkv",
+      "Path": "/media/films/Test Film H264 (2024)/Test Film H264 (2024).mkv",
+      "MediaStreams": [
+        {"Codec": "h264", "Profile": "Constrained Baseline", "Type": "Video", "Index": 0, "BitDepth": 8, "Width": 640, "Height": 360, "Level": 30, "VideoRangeType": "SDR"},
+        {"Codec": "aac", "Type": "Audio", "Index": 1, "Channels": 1, "Profile": "LC"}
+      ]
+    }
+  },
+  {
+    "Id": 12345,
+    "DeviceId": null,
+    "NowPlayingItem": {"Id": "ca8139a7c41a55835046264d60e1a618", "Type": "Movie"}
+  },
+  {
+    "Id": "0a1b2c3d4e5f60718293a4b5c6d7e8f9",
+    "DeviceId": "device-with-a-control\u0001-character",
+    "NowPlayingItem": {"Id": "ca8139a7c41a55835046264d60e1a618", "Type": "Movie"}
+  },
+  {
+    "Id": "1a1b2c3d4e5f60718293a4b5c6d7e8f9",
+    "DeviceId": "dev-numbers",
+    "PlayState": {"PlayMethod": "DirectPlay", "AudioStreamIndex": 99999999999999999999},
+    "NowPlayingItem": {
+      "Id": "ca8139a7c41a55835046264d60e1a618",
+      "Type": "Movie",
+      "Path": 12,
+      "MediaStreams": [
+        {"Codec": "h264", "Type": "Video", "Index": -5, "BitDepth": 9999, "Width": 99999999, "Height": 0, "BitRate": "lots"},
+        "not a stream",
+        {"Type": "Subtitle"}
+      ]
+    }
+  },
+  "not a session"
+]

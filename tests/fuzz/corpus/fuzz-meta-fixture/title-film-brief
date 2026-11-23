@@ -1,0 +1,11 @@
+2{
+  "id": "102",
+  "kind": "film",
+  "title": "The Mazework Reloaded",
+  "year": 2003,
+  "runtime": 138,
+  "status": "released",
+  "release_date": "2003-05-15",
+  "poster": "/p102.png",
+  "ids": { "imdb": "tt0680000" }
+}

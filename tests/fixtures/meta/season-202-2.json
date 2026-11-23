@@ -1,0 +1,11 @@
+{
+  "number": 2,
+  "name": "Season 2",
+  "air_date": "2026-11-06",
+  "episodes": [
+    { "number": 1, "id": "9201", "absolute": 5, "name": "Return", "air_date": "2026-11-06" },
+    { "number": 2, "id": "9202", "absolute": 6, "name": "Storm", "air_date": "2026-11-13" },
+    { "number": 3, "id": "9203", "absolute": 7, "name": "Undertow", "air_date": "2026-11-20" },
+    { "number": 4, "id": "9204", "absolute": 8, "name": "To Be Announced" }
+  ]
+}

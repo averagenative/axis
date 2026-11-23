@@ -1,0 +1,50 @@
+---
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# A hand-written definition, for Axis's tests (see README.md): ordinary in
+# itself; its site's pages (hostile-links-*.html) are what tries to lead
+# Axis elsewhere, with download addresses and a release page that point at
+# another address.
+id: hostile-links
+name: Hostile Links
+description: "A site whose pages point at other addresses"
+language: en-US
+type: public
+encoding: UTF-8
+links:
+  - https://links.example.invalid/
+
+caps:
+  categorymappings:
+    - {id: 1, cat: Movies, desc: "Movies"}
+  modes:
+    search: [q]
+    movie-search: [q]
+
+search:
+  paths:
+    - path: /search
+  inputs:
+    q: "{{ .Keywords }}"
+  rows:
+    selector: table tr.row
+  fields:
+    category:
+      text: 1
+    title:
+      selector: td.name
+    download:
+      selector: a.get
+      attribute: href
+    size:
+      selector: td.size
+    seeders:
+      selector: td.seeds
+    leechers:
+      text: 0
+    date:
+      text: now
+
+download:
+  selectors:
+    - selector: a.file
+      attribute: href

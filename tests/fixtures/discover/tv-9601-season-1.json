@@ -1,0 +1,27 @@
+{
+  "air_date": "2024-09-12",
+  "episodes": [
+    {
+      "air_date": "2024-09-12",
+      "episode_number": 1,
+      "id": 9601101,
+      "name": "Low Water",
+      "overview": "The archive floods for the first time in a hundred years.",
+      "runtime": 52,
+      "season_number": 1
+    },
+    {
+      "air_date": "2024-09-19",
+      "episode_number": 2,
+      "id": 9601102,
+      "name": "High Water",
+      "overview": "Someone has been reading the sealed boxes.",
+      "runtime": 51,
+      "season_number": 1
+    }
+  ],
+  "name": "Season 1",
+  "overview": "",
+  "id": 96011,
+  "season_number": 1
+}

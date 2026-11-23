@@ -1,0 +1,11 @@
+{"_constructed":"a stream decision word the daemon has never seen","MediaContainer":{"size":1,"Metadata":[{
+"ratingKey":"607","librarySectionID":"1","type":"movie","title":"Invented Odd Film",
+"Media":[{"id":8,"bitrate":8000,"width":1920,"height":1080,"audioCodec":"aac","videoCodec":"h264","container":"mkv","Part":[{"id":8,"file":"/data/movies/Invented Odd (2014)/Invented Odd (2014).mkv","container":"mkv","decision":"transcode","protocol":"hls","Stream":[
+{"id":70,"streamType":1,"decision":"frobnicate","codec":"h264","profile":"high","bitDepth":8,"width":1920,"height":1080,"colorTrc":"bt709"},
+{"id":71,"streamType":2,"decision":"copy","codec":"aac","channels":2,"selected":true}
+]}]}],
+"Player":{"machineIdentifier":"client-tizen-1","platform":"Tizen","product":"Plex for Samsung","state":"playing","title":"Living room TV","local":true,"relayed":false},
+"Session":{"id":"sess-unknown-1","bandwidth":8000,"location":"lan"},
+"TranscodeSession":{"sourceVideoCodec":"h264","sourceAudioCodec":"aac","videoDecision":"frobnicate","audioDecision":"copy","protocol":"hls","container":"mkv","videoCodec":"h264","audioCodec":"aac"},
+"User":{"id":"1","title":"Alice Example"}
+}]}}

@@ -1,0 +1,44 @@
+# .containerignore - what stays out of the image build context
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# The image is built from source inside the container, so build output from
+# this machine (compiled for it, not for the image) and anything that could
+# hold a secret stay out.  The submodule's source (deps/htmx-glib) is
+# needed and is therefore NOT listed; its own build output is.  The image
+# build's own copy of the commit comes in as the GIT_SHA build argument.
+
+# Version control
+.git
+.gitignore
+.gitmodules
+**/.git
+
+# Build output, here and in the submodule
+build
+**/build
+**/*.o
+**/*.a
+**/*.so
+**/*.so.*
+**/*.d
+
+# Local configuration and secrets
+.env
+.env.*
+**/.env
+**/.env.*
+axis.conf
+.mcp.json
+.claude
+
+# Editors
+*.swp
+*.swo
+*~
+.vscode
+.idea
+
+# Not needed to build or test
+openspec
+deploy
+README.md

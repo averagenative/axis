@@ -1,0 +1,94 @@
+# worker.yaml - encoding workers for Axis
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Workers are what scale out: raise replicas, or add a second Deployment for
+# nodes with a GPU.  Each talks to the daemon over its HTTP API only, with a
+# token the Workers page made (README.md, "A worker"), and reads the media
+# volume at the same path as the daemon.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: axis-worker
+  labels:
+    app.kubernetes.io/name: axis
+    app.kubernetes.io/component: worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: axis
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: axis
+        app.kubernetes.io/component: worker
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      # A worker gives its jobs back (at most a minute), then exits.
+      terminationGracePeriodSeconds: 75
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: axis-worker
+          # EDIT: the same image as axisd.
+          image: ghcr.io/averagenative/axis:0.1.0-rc1
+          command: ["/usr/bin/axis-worker"]
+          env:
+            # EDIT: the daemon through the ingress, over TLS.  The worker
+            # refuses to send its token over plain http to anything but
+            # loopback; http://axisd:7800 needs AXIS_WORKER_ALLOW_INSECURE_HTTP
+            # set to true, which is only sound on an encrypted pod network.
+            - name: AXIS_WORKER_URL
+              value: https://axis.example.com
+            - name: AXIS_WORKER_TOKEN_FILE
+              value: /run/secrets/axis/worker-token
+            - name: AXIS_WORKER_VOLUMES
+              value: /data
+            # software only.  With a GPU (the resources below), add nvenc or
+            # vaapi: "software, nvenc".
+            - name: AXIS_WORKER_ENCODER_FAMILIES
+              value: software
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: "1"
+              memory: 512Mi
+            # limits:
+            #   nvidia.com/gpu: 1        # NVENC, with NVIDIA's device plugin
+            #   gpu.intel.com/i915: 1    # VA-API, with Intel's device plugin
+          volumeMounts:
+            # The media volume, read-only, at the daemon's path.
+            - name: media
+              mountPath: /data
+              readOnly: true
+            - name: secrets
+              mountPath: /run/secrets/axis
+              readOnly: true
+            # Its scratch and state directories: never on a disk.
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: media
+          persistentVolumeClaim:
+            claimName: axis-media
+            readOnly: true
+        - name: secrets
+          secret:
+            secretName: axis-worker-token
+            defaultMode: 0440
+            items:
+              - key: worker-token
+                path: worker-token
+        - name: tmp
+          emptyDir:
+            sizeLimit: 2Gi

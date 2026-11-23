@@ -1,0 +1,6 @@
+htable.r > tbody > tr:has(a[href^="/torrent/"]):not(.ad) td:nth-child(2)
+<html><head><script>var a = "<tr>";</script></head><body>
+<table class=r><tr><td>1<td><a href="/torrent/1">A &amp; B</a><td>3
+<tr class=ad><td>x<td><a href="/torrent/2">ad</a>
+<tr><td>2<td><a href="/torrent/3" title="t">C</a><td>4</tr></table>
+<ul><li>a<li>b</ul><p>x<div>y</div><!-- c --></body></html>

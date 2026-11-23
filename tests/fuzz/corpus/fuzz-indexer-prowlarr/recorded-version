@@ -1,0 +1,8 @@
+4{
+ "appName": "Prowlarr",
+ "version": "3.0.1.5752",
+ "urlBase": "",
+ "authentication": "external",
+ "isDocker": true,
+ "branch": "develop"
+}

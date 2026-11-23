@@ -1,0 +1,37 @@
+{
+  "dates": {
+    "maximum": "2026-12-15",
+    "minimum": "2026-11-18"
+  },
+  "page": 1,
+  "results": [
+    {
+      "adult": false,
+      "genre_ids": [878],
+      "id": 9013,
+      "original_language": "en",
+      "original_title": "Lowland Engine",
+      "overview": "An engine that runs on fog, built by a town that has too much of it.",
+      "poster_path": "/p9013.jpg",
+      "release_date": "2026-12-04",
+      "title": "Lowland Engine",
+      "vote_average": 0,
+      "vote_count": 0
+    },
+    {
+      "adult": false,
+      "genre_ids": [10751, 16],
+      "id": 9014,
+      "original_language": "en",
+      "original_title": "Fennel and Thunder",
+      "overview": "Two goats, one mountain, no plan.",
+      "poster_path": "/p9014.jpg",
+      "release_date": "2026-12-11",
+      "title": "Fennel and Thunder",
+      "vote_average": 0,
+      "vote_count": 0
+    }
+  ],
+  "total_pages": 1,
+  "total_results": 2
+}

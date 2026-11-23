@@ -1,0 +1,18 @@
+{
+  "appName": "Radarr",
+  "instanceName": "Radarr",
+  "version": "5.2.6.8376",
+  "buildTime": "2024-01-02T03:04:05Z",
+  "isDebug": false,
+  "isProduction": true,
+  "isAdmin": false,
+  "isUserInteractive": false,
+  "startupPath": "/app/radarr/bin",
+  "appData": "/config",
+  "osName": "linux",
+  "isDocker": true,
+  "branch": "master",
+  "authentication": "forms",
+  "urlBase": "",
+  "runtimeName": "netcore"
+}

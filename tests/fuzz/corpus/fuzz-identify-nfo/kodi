@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
+<movie>
+    <title>Hearth</title>
+    <uniqueid type="imdb">tt0600001</uniqueid>
+    <uniqueid type="tmdb" default="true">6001</uniqueid>
+    <tmdbid>6001</tmdbid>
+    <id>tt0600001</id>
+</movie>

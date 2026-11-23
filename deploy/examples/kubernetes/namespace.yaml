@@ -1,0 +1,13 @@
+# namespace.yaml - Axis's own namespace
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# The restricted Pod Security Standard: every pod here runs as non-root with
+# no capabilities, no privilege escalation and the default seccomp profile,
+# which is how the manifests are written anyway.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: axis
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/warn: restricted

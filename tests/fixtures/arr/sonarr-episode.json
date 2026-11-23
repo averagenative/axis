@@ -1,0 +1,98 @@
+[
+  {
+    "id": 101,
+    "seriesId": 1,
+    "tvdbId": 81061001,
+    "episodeFileId": 501,
+    "seasonNumber": 1,
+    "episodeNumber": 1,
+    "absoluteEpisodeNumber": 1,
+    "title": "Low Water",
+    "airDate": "2025-01-06",
+    "airDateUtc": "2025-01-06T20:00:00Z",
+    "runtime": 24,
+    "overview": "Made up. Axis never copies this.",
+    "hasFile": true,
+    "monitored": true,
+    "unverifiedSceneNumbering": false,
+    "images": [{"coverType": "screenshot", "url": "/MediaCover/1/screenshot.jpg"}]
+  },
+  {
+    "id": 102,
+    "seriesId": 1,
+    "tvdbId": 81061002,
+    "episodeFileId": 502,
+    "seasonNumber": 1,
+    "episodeNumber": 2,
+    "absoluteEpisodeNumber": 0,
+    "title": "The Ropes (1)",
+    "airDate": "2025-01-13",
+    "hasFile": true,
+    "monitored": true
+  },
+  {
+    "id": 103,
+    "seriesId": 1,
+    "tvdbId": 81061003,
+    "episodeFileId": 502,
+    "seasonNumber": 1,
+    "episodeNumber": 3,
+    "title": "The Ropes (2)",
+    "airDate": "2025-01-13",
+    "hasFile": true,
+    "monitored": true
+  },
+  {
+    "id": 104,
+    "seriesId": 1,
+    "tvdbId": 81061004,
+    "episodeFileId": 0,
+    "seasonNumber": 1,
+    "episodeNumber": 4,
+    "absoluteEpisodeNumber": "4",
+    "title": "Ticket Office",
+    "airDate": "2025-01-27",
+    "hasFile": false,
+    "monitored": false
+  },
+  {
+    "id": 105,
+    "seriesId": 1,
+    "tvdbId": 0,
+    "seasonNumber": 0,
+    "episodeNumber": 1,
+    "absoluteEpisodeNumber": null,
+    "title": "Behind the Gangway",
+    "hasFile": false,
+    "monitored": false
+  },
+  {
+    "id": 106,
+    "seriesId": 1,
+    "tvdbId": 81061005,
+    "episodeFileId": 0,
+    "seasonNumber": 1,
+    "episodeNumber": 5,
+    "absoluteEpisodeNumber": 1000001,
+    "title": "Fog Horn",
+    "airDate": "2025-02-31",
+    "hasFile": false,
+    "monitored": true
+  },
+  {
+    "id": 107,
+    "seriesId": 1,
+    "episodeNumber": 6,
+    "title": "No Season",
+    "monitored": true
+  },
+  {
+    "id": 108,
+    "seriesId": 1,
+    "seasonNumber": 1,
+    "episodeNumber": "7",
+    "title": "A Number That Is Text",
+    "monitored": true
+  },
+  "not an episode"
+]

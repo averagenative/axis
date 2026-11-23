@@ -1,0 +1,39 @@
+{
+  "page": "1",
+  "results": [
+    {
+      "id": "9031",
+      "title": "An id written as text: not TMDb's form, dropped"
+    },
+    {
+      "id": 9032,
+      "overview": "No title and no original title: dropped"
+    },
+    {
+      "id": 9033,
+      "title": "Every other field of the wrong type",
+      "release_date": 2024,
+      "poster_path": "https://images.example/p9033.jpg",
+      "genre_ids": "18,28",
+      "vote_average": "7.5",
+      "vote_count": "12",
+      "original_language": "ENGLISH"
+    },
+    {
+      "id": 9034,
+      "title": "Numbers out of range",
+      "genre_ids": [0, -4, 18, 3000000000, 18.5, 35],
+      "vote_average": 11.5,
+      "vote_count": 30
+    },
+    {
+      "id": 9035,
+      "title": "A rating of exactly ten",
+      "vote_average": 10,
+      "vote_count": 1
+    },
+    7,
+    null
+  ],
+  "total_pages": -3
+}

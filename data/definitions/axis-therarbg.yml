@@ -1,0 +1,89 @@
+---
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# TheRARBG, a definition Axis ships (add-builtin-torrent-indexers), written
+# for Axis from how the site answered on 2026-11-18.  RARBG itself closed in
+# May 2023; TheRARBG took up its name with an index of its own.  Its JSON
+# listing (/get-posts/...:format:json/) gives each result's name, info-hash,
+# size, seeders, leechers, date, category and IMDb identifier, 50 to a page.
+# It matches several words as alternatives, so a result is kept only when
+# its name has every word (andmatch).  rarbg.torrentsbay.org is a proxy of
+# this site that answers programs with a Cloudflare challenge: Axis cannot
+# use it, and says so when it is chosen.  To repair it, raise the version and
+# follow docs/CONTRIBUTING-definitions.md.
+id: axis-therarbg
+version: 1
+name: TheRARBG
+description: "TheRARBG is the site that took up RARBG's name after RARBG closed in 2023, with an index of its own; Axis reads its JSON listing by words, in its movie or TV categories. Its mirror rarbg.torrentsbay.org answers programs with a browser challenge, which Axis cannot pass."
+language: en-US
+type: public
+encoding: UTF-8
+links:
+  - https://therarbg.com/
+  - https://rarbg.torrentsbay.org/
+legacylinks:
+  - https://therarbg.to/
+
+caps:
+  categorymappings:
+    - {id: "Movies", cat: Movies, desc: "Movies"}
+    - {id: "TV", cat: TV, desc: "TV"}
+    - {id: "Anime", cat: TV/Anime, desc: "Anime"}
+    - {id: "Documentaries", cat: TV/Documentary, desc: "Documentaries"}
+    - {id: "Games", cat: Console, desc: "Games"}
+    - {id: "Music", cat: Audio, desc: "Music"}
+    - {id: "Apps", cat: PC/0day, desc: "Apps"}
+    - {id: "Books", cat: Books, desc: "Books"}
+    - {id: "Other", cat: Other, desc: "Other"}
+    - {id: "XXX", cat: XXX, desc: "XXX"}
+
+  modes:
+    search: [q]
+    tv-search: [q, season, ep]
+    movie-search: [q]
+
+search:
+  paths:
+    # The best seeded first, in the categories of what is searched.  Only a
+    # test asks with no words, for a word that always has results; a search
+    # with no words (a movie by an identifier alone) is not asked.
+    - path: "get-posts/order:-se{{ range .Categories }}:category:{{ . }}{{ end }}:keywords:{{ if .Keywords }}{{ .Keywords }}{{ else }}1080p{{ end }}:paginate_by:100:format:json/"
+      response:
+        type: json
+
+  keywordsfilters:
+    # The words alone: a mark would end a part of the path.
+    - name: re_replace
+      args: ["\\W+", " "]
+    - name: trim
+
+  rows:
+    selector: results
+    # Every answer has its list of results, empty or not.
+    expect: results
+    filters:
+      - name: andmatch
+
+  fields:
+    category:
+      selector: c
+      optional: true
+    title:
+      selector: n
+    infohash:
+      selector: h
+    imdbid:
+      selector: i
+      optional: true
+    date:
+      # Seconds since 1970.
+      selector: a
+      optional: true
+    size:
+      selector: s
+    seeders:
+      selector: se
+      optional: true
+    leechers:
+      selector: le
+      optional: true

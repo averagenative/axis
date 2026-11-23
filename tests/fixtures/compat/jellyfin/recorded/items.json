@@ -1,0 +1,116 @@
+{
+  "Items": [
+    {
+      "Name": "Test Film H264 (2024)",
+      "ServerId": "df1a584d4cef4af88f0d75e7a582ff28",
+      "Id": "ca8139a7c41a55835046264d60e1a618",
+      "Container": "mkv",
+      "Path": "/media/films/Test Film H264 (2024)/Test Film H264 (2024).mkv",
+      "ChannelId": null,
+      "RunTimeTicks": 600230000,
+      "ProductionYear": 2024,
+      "IsFolder": false,
+      "Type": "Movie",
+      "VideoType": "VideoFile",
+      "ImageTags": {
+        "Primary": "fac93978a0e28bc6ee65351444c1cee8"
+      },
+      "BackdropImageTags": [],
+      "ImageBlurHashes": {
+        "Primary": {
+          "fac93978a0e28bc6ee65351444c1cee8": "W~KxSK$YSw*Zi%|rtPX3WnnSahn%W=SwWVaiW;j[ohaeW=WVX5j?"
+        }
+      },
+      "LocationType": "FileSystem",
+      "MediaType": "Video"
+    },
+    {
+      "Name": "Test Film HEVC10 (2024)",
+      "ServerId": "df1a584d4cef4af88f0d75e7a582ff28",
+      "Id": "718f1ff4f0c3cdf03dbec75cd773bfc7",
+      "Container": "mkv",
+      "Path": "/media/films/Test Film HEVC10 (2024)/Test Film HEVC10 (2024).mkv",
+      "ChannelId": null,
+      "RunTimeTicks": 600230000,
+      "ProductionYear": 2024,
+      "IsFolder": false,
+      "Type": "Movie",
+      "VideoType": "VideoFile",
+      "ImageTags": {
+        "Primary": "ac5aa9849f644d78aa9ffbeccb8fe438"
+      },
+      "BackdropImageTags": [],
+      "ImageBlurHashes": {
+        "Primary": {
+          "ac5aa9849f644d78aa9ffbeccb8fe438": "W~KxPD$YSw*ZnA|rtPX3WUi~ahn%W=Swa{aiWqj@kEaeW;WXX5j?"
+        }
+      },
+      "LocationType": "FileSystem",
+      "MediaType": "Video"
+    },
+    {
+      "Name": "Test Film Multi (2024)",
+      "ServerId": "df1a584d4cef4af88f0d75e7a582ff28",
+      "Id": "9b5e6f8492f1cd69653163ef16b48fa9",
+      "HasSubtitles": true,
+      "Container": "mkv",
+      "Path": "/media/films/Test Film Multi (2024)/Test Film Multi (2024).mkv",
+      "ChannelId": null,
+      "RunTimeTicks": 600230000,
+      "ProductionYear": 2024,
+      "IsFolder": false,
+      "Type": "Movie",
+      "VideoType": "VideoFile",
+      "ImageTags": {
+        "Primary": "de4e972c03fe3a8bedf3cd1524da999b"
+      },
+      "BackdropImageTags": [],
+      "ImageBlurHashes": {
+        "Primary": {
+          "de4e972c03fe3a8bedf3cd1524da999b": "W~KxSK$YSw*Zi%|rtPX3WnnSahn%W=SwWVaiW;j[ohaeW=WVX5j?"
+        }
+      },
+      "LocationType": "FileSystem",
+      "MediaType": "Video"
+    },
+    {
+      "Name": "Test Tone",
+      "ServerId": "df1a584d4cef4af88f0d75e7a582ff28",
+      "Id": "8049dce88a8349bff7c9123b513adaef",
+      "HasLyrics": false,
+      "Container": "flac",
+      "PremiereDate": "0001-01-01T00:00:00.0000000Z",
+      "Path": "/media/music/Test Artist/Test Album/01 Test Tone.flac",
+      "ChannelId": null,
+      "RunTimeTicks": 60000000,
+      "IndexNumber": 1,
+      "IsFolder": false,
+      "Type": "Audio",
+      "Artists": [
+        "Test Artist"
+      ],
+      "ArtistItems": [
+        {
+          "Name": "Test Artist",
+          "Id": "aeaf27d875ba46b275fb73ed578f15e1"
+        }
+      ],
+      "Album": "Test Album",
+      "AlbumId": "d3bb6369ccddebc82c87f80dbac29021",
+      "AlbumArtist": "Test Artist",
+      "AlbumArtists": [
+        {
+          "Name": "Test Artist",
+          "Id": "aeaf27d875ba46b275fb73ed578f15e1"
+        }
+      ],
+      "ImageTags": {},
+      "BackdropImageTags": [],
+      "ImageBlurHashes": {},
+      "LocationType": "FileSystem",
+      "MediaType": "Audio"
+    }
+  ],
+  "TotalRecordCount": 4,
+  "StartIndex": 0
+}

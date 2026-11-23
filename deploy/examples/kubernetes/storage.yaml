@@ -1,0 +1,44 @@
+# storage.yaml - the daemon's data directory and the one media volume
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# axis-data: the daemon's own files (artwork it can fetch again).  Small,
+# one pod at a time.
+#
+# axis-media: downloads AND library, on one volume, mounted once at /data
+# in every pod that touches them (Axis, the workers, and the download
+# clients if they run in the cluster), so that imports are renames (or
+# hardlinks, for torrents left seeding) and not copies.  Two
+# volumes, or two mounts of one, make every import a copy (../compose-full/
+# README.md, "The one layout rule").  It is ReadWriteMany so that workers on
+# other nodes can read it; most clusters give that through NFS or CephFS.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: axis-data
+  labels:
+    app.kubernetes.io/name: axis
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+  # EDIT: a storage class of your cluster, or leave out for the default.
+  # storageClassName: local-path
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: axis-media
+  labels:
+    app.kubernetes.io/name: axis
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      # EDIT: the size of the disk.
+      storage: 1Ti
+  # EDIT: a class that offers ReadWriteMany (NFS, CephFS), or bind this
+  # claim to a PersistentVolume of your own that points at the disk.
+  # storageClassName: nfs

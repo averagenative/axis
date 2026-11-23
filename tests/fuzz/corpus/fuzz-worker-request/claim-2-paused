@@ -1,0 +1,1 @@
+1{"protocol":2,"kinds":["convert.encode","worker.capabilities","estimate.sample.remote"],"volumes":["3f2a5c1e-7b9d-4e2f-8a6b-1c3d5e7f9a0b"],"paused":{"job":4242,"reason":"signal 11, SIGSEGV"}}

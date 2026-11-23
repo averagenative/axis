@@ -1,0 +1,127 @@
+---
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# A hand-written definition of a made-up public site, in the style of the
+# community's format, for Axis's tests (see README.md).  Not a real site.
+id: example-html
+name: Example HTML
+description: "A made-up public site whose search answers with an HTML table"
+language: en-US
+type: public
+encoding: UTF-8
+requestDelay: 1
+links:
+  - https://example-html.invalid/
+legacylinks:
+  - https://old.example-html.invalid/ # an address it had before
+
+caps:
+  categorymappings:
+    - {id: 1, cat: Movies/HD, desc: "Movies HD"}
+    - {id: 2, cat: Movies/SD, desc: "Movies SD"}
+    - {id: 3, cat: TV/HD, desc: "TV HD"}
+    - {id: 9, cat: Audio, desc: "Music"}
+  modes:
+    search: [q]
+    tv-search: [q, season, ep]
+    movie-search: [q]
+
+settings:
+  - name: sort
+    type: select
+    label: Sort
+    default: added
+    options:
+      added: Added
+      seeds: Seeders
+  - name: magnets
+    type: checkbox
+    label: Prefer magnet links
+    default: true
+  - name: uploader
+    type: text
+    label: Only this uploader
+  - name: info_about
+    type: info
+    label: About
+    default: "Nothing to see"
+
+search:
+  paths:
+    - path: "{{ if .Keywords }}search/{{ .Keywords }}/{{ .Config.sort }}/1/{{ else }}latest/{{ end }}"
+  inputs:
+    cat: "{{ join .Categories \",\" }}"
+    uploader: "{{ .Config.uploader }}"
+  keywordsfilters:
+    - name: re_replace
+      args: ["\\bS(\\d{2})E(\\d{2})\\b", "S$1E$2"]
+    - name: tolower
+  headers:
+    Referer: ["{{ .Config.sitelink }}"]
+  rows:
+    selector: "table.results > tbody > tr:has(a[href^=\"/torrent/\"]):not(.ad)"
+    filters:
+      - name: andmatch
+  fields:
+    category:
+      selector: td:nth-child(1) a
+      attribute: href
+      filters:
+        - name: querystring
+          args: cat
+    title_default:
+      selector: td:nth-child(2) a[href^="/torrent/"]
+    title_long:
+      optional: true
+      selector: td:nth-child(2) a[title]
+      attribute: title
+    title:
+      text: "{{ if .Result.title_long }}{{ .Result.title_long }}{{ else }}{{ .Result.title_default }}{{ end }}"
+      filters:
+        - name: replace
+          args: ["_", " "]
+        - name: re_replace
+          args: ["(?i)\\s+\\[ad\\]$", ""]
+    details:
+      selector: td:nth-child(2) a[href^="/torrent/"]
+      attribute: href
+    download:
+      selector: td:nth-child(2) a[href^="/torrent/"]
+      attribute: href
+    size:
+      selector: td.size
+      remove: span.note
+    seeders:
+      selector: td:nth-child(4)
+    leechers:
+      selector: td:nth-last-child(1)
+    date:
+      selector: td:nth-child(3)
+      filters:
+        - name: append
+          args: " +02:00"
+        - name: dateparse
+          args: "yyyy-MM-dd HH:mm zzz"
+    grabs:
+      optional: true
+      default: 0
+      selector: td.grabs:not(:empty)
+    _verified:
+      optional: true
+      default: "no"
+      selector: td:nth-child(2) img.verified
+      case:
+        "img[alt=\"yes\"]": "yes"
+        "*": "unknown"
+    description:
+      text: "Verified: {{ .Result._verified }}"
+    downloadvolumefactor:
+      text: 0
+    uploadvolumefactor:
+      text: 1
+
+download:
+  selectors:
+    - selector: "a.magnet[href^=\"magnet:\"]"
+      attribute: href
+    - selector: a.torrent
+      attribute: href

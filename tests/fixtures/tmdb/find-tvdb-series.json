@@ -1,0 +1,25 @@
+{
+  "movie_results": [],
+  "person_results": [],
+  "tv_results": [
+    {
+      "adult": false,
+      "backdrop_path": "/madeUpBackdrop0000000007101.jpg",
+      "id": 7101,
+      "name": "Cracking Slate",
+      "original_language": "en",
+      "original_name": "Cracking Slate",
+      "overview": "When Walden Grey, a quarry surveyor in a small hill town, finds that the slate under his own house is worth a fortune, he starts to dig at night and cannot stop.",
+      "poster_path": "/madeUpPoster000000000007101.jpg",
+      "media_type": "tv",
+      "genre_ids": [18, 80],
+      "popularity": 130.5,
+      "first_air_date": "2008-01-20",
+      "vote_average": 8.9,
+      "vote_count": 12500,
+      "origin_country": ["US"]
+    }
+  ],
+  "tv_episode_results": [],
+  "tv_season_results": []
+}

@@ -1,0 +1,7 @@
+1
+00:00:00,500 --> 00:00:02,500
+Hello from the test film.
+
+2
+00:00:03,000 --> 00:00:05,000
+This is a subtitle track.

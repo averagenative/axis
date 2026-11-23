@@ -1,0 +1,11 @@
+{"_constructed":"a direct play of a file with two audio tracks and no sign of which one plays","MediaContainer":{"size":1,"Metadata":[{
+"ratingKey":"608","librarySectionID":"1","type":"movie","title":"Invented Two Audio Film",
+"Media":[{"id":9,"bitrate":8000,"width":1920,"height":1080,"audioCodec":"aac","videoCodec":"h264","container":"mkv","Part":[{"id":9,"file":"/data/movies/Invented Two Audio (2013)/Invented Two Audio (2013).mkv","container":"mkv","decision":"directplay","Stream":[
+{"id":80,"streamType":1,"codec":"h264","profile":"high","bitDepth":8,"width":1920,"height":1080,"colorTrc":"bt709"},
+{"id":81,"streamType":2,"codec":"aac","channels":2},
+{"id":82,"streamType":2,"codec":"dts","channels":6}
+]}]}],
+"Player":{"machineIdentifier":"client-tizen-1","platform":"Tizen","product":"Plex for Samsung","state":"playing","title":"Living room TV","local":true,"relayed":false},
+"Session":{"id":"sess-twoaudio-1","bandwidth":8000,"location":"lan"},
+"User":{"id":"1","title":"Alice Example"}
+}]}}

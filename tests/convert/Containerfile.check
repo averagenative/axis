@@ -1,0 +1,41 @@
+# Containerfile.check - the real-encode conversion test, compiled on the
+# image's own Debian (tests/check-convert-container.sh)
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# The base and the packages are those of deploy/Containerfile's build stage,
+# instruction for instruction, so that a machine that has built the image
+# reuses those layers (nothing is downloaded); keep them the same.  Only the
+# one test program is built, so that this check does not depend on every
+# other test passing in that stage.
+ARG DEBIAN_IMAGE=docker.io/library/debian:stable-slim@sha256:cd9f2189b62dc5ce003b22ad8cb109bbc3cef8ddcc8bc13771472a6edeb16980
+
+
+FROM ${DEBIAN_IMAGE} AS build
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+	&& apt-get install -y --no-install-recommends \
+		binutils \
+		gcc \
+		libc6-dev \
+		libglib2.0-dev \
+		libjson-glib-dev \
+		libpq-dev \
+		libsodium-dev \
+		libsoup-3.0-dev \
+		make \
+		pkg-config \
+	&& rm -rf /var/lib/apt/lists/*
+
+# .git is not in the build context (see .containerignore), so the commit
+# comes in as an argument; `axisd --version` reports it.
+ARG GIT_SHA=unknown
+
+WORKDIR /src
+COPY . .
+
+# axisd first, as `make test` does: it builds htmx-glib and the generated
+# headers, which the test objects include but do not depend on in the
+# Makefile (its pattern rule for them has no recipe, so it adds nothing).
+RUN make RELEASE=1 GIT_SHA="${GIT_SHA}" build/gcc-release-hardened/axisd \
+	&& make RELEASE=1 GIT_SHA="${GIT_SHA}" build/gcc-release-hardened/tests/test-convert-real

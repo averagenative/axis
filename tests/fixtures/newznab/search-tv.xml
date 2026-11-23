@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:newznab="http://www.newznab.com/DTD/2010/feeds/attributes/">
+<channel>
+<title>Stand-in Newznab</title>
+<newznab:response offset="0" total="2"/>
+<item>
+  <title>The.Show.S01E02.1080p.WEB-DL.DDP5.1.H.264-GRP</title>
+  <guid isPermaLink="true">@ORIGIN@/details/tv000102</guid>
+  <pubDate>Sat, 02 Mar 2024 10:11:12 +0000</pubDate>
+  <enclosure url="@FILES@@BASE@/api?t=get&amp;id=nzb-tv000102&amp;apikey=@KEY@" length="2147483648" type="application/x-nzb"/>
+  <newznab:attr name="category" value="5000"/>
+  <newznab:attr name="category" value="5040"/>
+  <newznab:attr name="size" value="2147483648"/>
+  <newznab:attr name="season" value="S01"/>
+  <newznab:attr name="episode" value="E02"/>
+  <newznab:attr name="tvdbid" value="82002"/>
+  <newznab:attr name="rageid" value="24493"/>
+  <newznab:attr name="grabs" value="88"/>
+</item>
+<item>
+  <title>The.Show.S01E02.720p.HDTV.x264-OTHER</title>
+  <guid isPermaLink="true">@ORIGIN@/details/tv000102b</guid>
+  <pubDate>Sat, 02 Mar 2024 11:00:00 +0000</pubDate>
+  <enclosure url="@FILES@@BASE@/api?t=get&amp;id=nzb-tv000102b&amp;apikey=@KEY@" length="1073741824" type="application/x-nzb"/>
+  <newznab:attr name="category" value="5030"/>
+  <newznab:attr name="size" value="1073741824"/>
+  <newznab:attr name="tvdbid" value="82002"/>
+</item>
+</channel>
+</rss>

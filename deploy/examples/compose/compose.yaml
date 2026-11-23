@@ -1,0 +1,236 @@
+# compose.yaml - Axis and PostgreSQL, and a worker beside Axis
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# The smallest stack: copy this directory, change the lines marked EDIT, make
+# the secret files (README.md, step 1), then:
+#
+#   docker compose up -d        # or: podman compose up -d
+#
+# The worker is in the "worker" profile: it starts only once it has a token
+# (../../README.md, "A worker"), with `docker compose --profile worker up -d`.
+#
+# Media are mounted read-only here: Axis can find, analyse and plan, but not
+# import.  A disk mounted read-only is added on the Storage page without a
+# marker; Axis writes the marker (.axis-volume) the first time the disk is
+# mounted read-write (../../README.md, "Your disks").  To let it import, use
+# the full-stack example (../compose-full), which puts downloads and library
+# on one writable mount.
+#
+# Everything is plain Compose Specification, so Docker Compose and Podman
+# Compose both read it.
+
+services:
+  axis:
+    # EDIT: the published image (the release candidate 0.1.0-rc1 for now; the
+    # minor line "0.1" exists from the first final release on), or the one
+    # `make container` builds locally: AXIS_IMAGE=localhost/axis:latest
+    image: ${AXIS_IMAGE:-ghcr.io/averagenative/axis:0.1.0-rc1}
+    restart: unless-stopped
+
+    # Never root.  PUID and PGID pick the user and group; the image works with
+    # any (an arbitrary user id with group 0 too), and only the data volume
+    # needs to be theirs (../../README.md, "User and group").
+    user: "${PUID:-1000}:${PGID:-1000}"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 512
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,mode=1777
+
+    environment:
+      # The database URL, with its password, comes from a file (a secret),
+      # never from the environment.
+      AXIS_DATABASE_URL_FILE: /run/secrets/axis_database_url
+      AXIS_LOG_LEVEL: info
+      # AXIS_LOG_FORMAT: json            # one JSON object per log line
+      # Behind a reverse proxy, name the proxy's service here
+      # (../traefik); until then no forwarded header is believed.
+      # AXIS_TRUSTED_PROXIES: traefik
+      # The first administrator, instead of the setup token in the log: add
+      # the secret below and its file (README.md, "First administrator").
+      # AXIS_ADMIN_USERNAME: admin
+      # AXIS_ADMIN_PASSWORD_FILE: /run/secrets/axis_admin_password
+    secrets:
+      - axis_database_url
+      # - axis_admin_password
+
+    # The web interface, on this machine only.  Write "7800:7800" to offer it
+    # to the network, once the first administrator exists.  Port 7800 is taken
+    # on this machine? Set AXIS_PORT in .env.
+    ports:
+      - "127.0.0.1:${AXIS_PORT:-7800}:7800"
+
+    # EDIT: whole disks, each at its own path, read-only.  Replace the
+    # left-hand sides with your own paths and keep ":ro".  Docker creates a
+    # missing host path as an empty directory owned by root, so check them
+    # before you start.  axis-data is the daemon's data directory, the one
+    # place it writes files (artwork, which can always be fetched again).
+    volumes:
+      - /path/to/disk1:/media/disk1:ro
+      - /path/to/disk2:/media/disk2:ro
+      - axis-data:/var/lib/axis
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # /healthz: the daemon answers and so does its database.  (Kubernetes
+    # uses /livez and /readyz instead; see ../kubernetes.)
+    healthcheck:
+      test: ["CMD", "/usr/bin/axisd", "--healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    # axisd gives running jobs 30 seconds to finish, then exits.
+    stop_grace_period: 45s
+
+    networks:
+      - private
+
+  # axis-worker, from the same image, doing the encoding work axisd gives
+  # it.  It shares axis's network namespace, so it reaches axisd on
+  # 127.0.0.1, which is this container pair's own loopback: the token never
+  # crosses a network, and plain http is allowed only for that.
+  worker:
+    image: ${AXIS_IMAGE:-ghcr.io/averagenative/axis:0.1.0-rc1}
+    entrypoint: ["/usr/bin/axis-worker"]
+    profiles: ["worker"]
+    restart: unless-stopped
+
+    # As locked down as axis.  Besides /tmp (its scratch and state
+    # directories) the worker writes only in .axis-work at the top of a
+    # disk, and only when it converts a file.
+    user: "${PUID:-1000}:${PGID:-1000}"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 512
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=256m,mode=1777
+
+    environment:
+      AXIS_WORKER_URL: http://127.0.0.1:7800
+      # The token the Workers page showed, from a file (a secret): never
+      # from the environment or the command line.
+      AXIS_WORKER_TOKEN_FILE: /run/secrets/axis_worker_token
+      # EDIT: the disks, at the same paths as in axis, comma-separated.
+      AXIS_WORKER_VOLUMES: /media/disk1,/media/disk2
+      # software only.  To let it use a GPU as well, add nvenc or vaapi
+      # here and give it the device (the lines below); a family not listed
+      # is never run, not even to measure it.
+      AXIS_WORKER_ENCODER_FAMILIES: software
+      AXIS_WORKER_LOG_LEVEL: info
+    secrets:
+      - axis_worker_token
+
+    # EDIT: the same disks as axis.  Read-only, as here, the worker can
+    # measure and estimate but not convert: to run conversions remove
+    # ":ro" here and on axis's disks, and switch storage.read_only off.
+    volumes:
+      - /path/to/disk1:/media/disk1:ro
+      - /path/to/disk2:/media/disk2:ro
+
+    # For VA-API (Intel, AMD), the render node; the group that owns it on
+    # the host must be one of the worker's (group_add):
+    # devices:
+    #   - /dev/dri/renderD128:/dev/dri/renderD128
+    # group_add:
+    #   - "105"
+    # For NVENC, the NVIDIA Container Toolkit, and:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu, video]
+
+    network_mode: "service:axis"
+    depends_on:
+      axis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/usr/bin/axis-worker", "--healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 120s
+    # A worker gives its jobs back (at most a minute), then exits.
+    stop_grace_period: 75s
+
+  postgres:
+    # Use your own PostgreSQL (15 or newer) if you have one: point
+    # axis_database_url at it and remove this service.
+    image: docker.io/library/postgres:17
+    restart: unless-stopped
+
+    # The image's own user, started directly: the usual start-as-root-then-
+    # drop dance needs capabilities that are dropped here.
+    user: "999:999"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 512
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,mode=1777
+      - /var/run/postgresql:rw,noexec,nosuid,size=1m,mode=1777
+
+    environment:
+      POSTGRES_USER: axis
+      POSTGRES_DB: axis
+      POSTGRES_PASSWORD_FILE: /run/secrets/axis_db_password
+      # Page checksums, so PostgreSQL notices a page the disk damaged.  This
+      # applies only when the database is first created; see
+      # docs/14-back-up-restore-and-repair-the-database.md.
+      POSTGRES_INITDB_ARGS: --data-checksums
+    secrets:
+      - axis_db_password
+
+    # Named volume: the database survives `down` and `up`.  No port is
+    # published, and the only network is the private one below.
+    volumes:
+      - axis-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "--username=axis", "--dbname=axis"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+    networks:
+      - private
+
+networks:
+  # A network of this project's own: only axis and postgres are on it, so
+  # nothing else can reach the database, and the database is on no other
+  # network.  It is not "internal: true" on purpose: an internal network
+  # cannot also carry the published web port, so axis would need a second
+  # network, and then podman's DNS answers "postgres" with "no such host"
+  # (it asks the other network's resolver first).
+  private: {}
+
+volumes:
+  axis-db:
+  # The daemon's data directory: derived data only (losing it loses nothing
+  # that cannot be fetched again), so it needs no backup.
+  axis-data:
+
+# The secret files, made as README.md says: the database password, the URL
+# that contains it, and the worker's token (empty until there is a worker).
+# ./secrets is relative to this file.
+secrets:
+  axis_db_password:
+    file: ./secrets/axis_db_password
+  axis_database_url:
+    file: ./secrets/axis_database_url
+  axis_worker_token:
+    file: ./secrets/axis_worker_token
+  # axis_admin_password:
+  #   file: ./secrets/axis_admin_password

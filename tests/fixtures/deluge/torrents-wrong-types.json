@@ -1,0 +1,19 @@
+{"result": {
+  "1010101010101010101010101010101010101010": {"name": "Numbers.As.Strings", "state": "Downloading", "progress": "50", "total_wanted": "2000", "total_done": "1000", "download_payload_rate": "300", "eta": "60", "download_location": "/downloads", "is_finished": "false", "label": "axis"},
+  "1111111111111111111111111111111111111111": {"name": "Garbage.Figures", "state": "Downloading", "progress": "lots", "total_wanted": "N/A", "total_done": [], "download_payload_rate": {}, "eta": true, "download_location": 12, "is_finished": null, "label": "axis"},
+  "1212121212121212121212121212121212121212": {"name": "Out.Of.Range", "state": "Downloading", "progress": 250.5, "total_wanted": 9999999999999999999, "total_done": -5, "download_payload_rate": -1, "eta": 99999999999, "is_finished": false, "label": "axis"},
+  "1313131313131313131313131313131313131313": {"name": "More.Done.Than.All", "state": "Downloading", "progress": 100.0, "total_wanted": 1000, "total_done": 5000, "download_payload_rate": 0, "eta": 5, "is_finished": false, "label": "axis"},
+  "1414141414141414141414141414141414141414": {"name": "Progress.Only", "state": "Downloading", "progress": 25.0, "total_wanted": 4000, "is_finished": false, "label": "axis"},
+  "1515151515151515151515151515151515151515": {"name": 42, "state": "Downloading", "label": "axis"},
+  "1616161616161616161616161616161616161616": {"state": "Downloading", "label": "axis"},
+  "1717171717171717171717171717171717171717": {"name": "No.Label", "state": "Downloading"},
+  "1818181818181818181818181818181818181818": {"name": "Label.Is.Null", "state": "Downloading", "label": null},
+  "1919191919191919191919191919191919191919": "not an object",
+  "1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a": ["not", "an", "object"],
+  "short": {"name": "Hash.Too.Short", "state": "Downloading", "label": "axis"},
+  "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz": {"name": "Hash.Not.Hex", "state": "Downloading", "label": "axis"},
+  "1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b": {"name": "State.Is.A.Number", "state": 3, "label": "axis"},
+  "1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c": {"name": "Error.With.No.Words", "state": "Error", "label": "axis", "is_finished": false},
+  "1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d": {"name": "Same.Hash.Again", "state": "Downloading", "label": "axis"},
+  "1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D": {"name": "Same.Hash.Again.Upper", "state": "Downloading", "label": "axis"}
+}, "error": null, "id": 1}

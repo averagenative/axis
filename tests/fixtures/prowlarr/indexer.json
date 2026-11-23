@@ -1,0 +1,64 @@
+[
+  {
+    "id": 3,
+    "name": "NewsOwl",
+    "implementation": "Newznab",
+    "protocol": "usenet",
+    "enable": true,
+    "priority": 25,
+    "capabilities": {
+      "supportsRawSearch": true,
+      "searchParams": ["q"],
+      "tvSearchParams": ["q", "season", "ep", "tvdbId", "imdbId"],
+      "movieSearchParams": ["q", "imdbId", "tmdbId"],
+      "musicSearchParams": ["q"],
+      "bookSearchParams": ["q"],
+      "categories": [
+        { "id": 2000, "name": "Movies", "subCategories": [{ "id": 2040, "name": "Movies/HD", "subCategories": [] }] },
+        { "id": 5000, "name": "TV", "subCategories": [] }
+      ]
+    }
+  },
+  {
+    "id": 5,
+    "name": "Tracker One",
+    "implementation": "Cardigann",
+    "protocol": "torrent",
+    "enable": true,
+    "priority": 25,
+    "capabilities": {
+      "supportsRawSearch": false,
+      "searchParams": ["q"],
+      "tvSearchParams": ["q", "season", "ep"],
+      "movieSearchParams": ["q", "imdbId"],
+      "categories": []
+    }
+  },
+  {
+    "id": 7,
+    "name": "Slow <b>Tracker</b> & Co",
+    "implementation": "Torznab",
+    "protocol": "torrent",
+    "enable": true,
+    "priority": 30,
+    "capabilities": {
+      "tvSearchParams": ["q", "tvdbId"],
+      "movieSearchParams": ["q", "tmdbId"]
+    }
+  },
+  {
+    "id": 9,
+    "name": "Switched Off",
+    "implementation": "Newznab",
+    "protocol": "usenet",
+    "enable": false,
+    "priority": 25
+  },
+  {
+    "id": 11,
+    "name": "Of A Kind Nobody Knows",
+    "protocol": "ftp",
+    "enable": true
+  },
+  "not an indexer"
+]

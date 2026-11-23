@@ -1,0 +1,65 @@
+---
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# A hand-written definition of a made-up public site with an RSS feed, for
+# Axis's tests (see README.md).  Not a real site.
+id: example-rss
+name: Example RSS
+description: "A made-up public site whose search answers with an RSS feed"
+language: en-US
+type: public
+encoding: UTF-8
+links:
+  - https://feed.example-rss.invalid/
+
+caps:
+  categorymappings:
+    - {id: tv, cat: TV, desc: "Television"}
+    - {id: tvhd, cat: TV/HD, desc: "Television in HD"}
+  modes:
+    search: [q]
+    tv-search: [q, season, ep]
+
+search:
+  paths:
+    - path: rss/search.xml
+      categories: [tv, tvhd]
+      response:
+        type: xml
+  inputs:
+    q: "{{ .Keywords }}"
+    "$raw": "{{ range .Categories }}&c[]={{ . }}{{ end }}"
+  rows:
+    selector: rss > channel > item
+  fields:
+    category:
+      selector: category
+      case:
+        ":contains(\"HD\")": tvhd
+        "*": tv
+    title:
+      selector: title
+    details:
+      selector: link
+    download:
+      selector: enclosure
+      attribute: url
+    size:
+      selector: "[name=size]"
+      attribute: value
+    seeders:
+      selector: "[name=seeders]"
+      attribute: value
+    leechers:
+      selector: "[name=peers]"
+      attribute: value
+    date:
+      selector: pubDate
+      filters:
+        - name: replace
+          args: ["GMT", "+00:00"]
+        - name: dateparse
+          args: "ddd, dd MMM yyyy HH:mm:ss zzz"
+    downloadvolumefactor:
+      text: 0
+    uploadvolumefactor:
+      text: 1

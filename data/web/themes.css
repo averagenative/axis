@@ -1,0 +1,474 @@
+/*
+ * themes.css - the colour themes of the Axis web interface
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ *
+ * A theme is a block of custom properties selected by the data-theme
+ * attribute the server writes (on the root element of a page, and on a
+ * picker preview, so a preview of one theme can sit inside a page of
+ * another).  This file holds every colour value there is: axis.css has
+ * none, and the tests scan for that.  The tests also compute the contrast
+ * of the pairs below for every theme, the distance between every two
+ * themes' page backgrounds, and check that the "auto" blocks repeat
+ * oxblood and linen exactly.
+ *
+ * The properties (a theme sets all of them):
+ *
+ *   --bg, --surface, --surface-alt   page, cards and header, raised parts
+ *   --code-bg                        code and preformatted text
+ *   --border                         rules between things
+ *   --control-border                 the edge of an input or a button
+ *   --text, --text-muted             body text and quieter text
+ *   --link, --focus                  links and focus ring: the action colour
+ *   --accent, --accent-text          filled actions: the primary button,
+ *                                    and the label on it
+ *   --logo-step-1 .. --logo-step-3,  the mark's sweep (furthest from the
+ *   --logo-line                      line to nearest) and its line
+ *   --ok, --warn, --danger,          a status label and its filled badge
+ *   --offline and each with -bg
+ *   --series-1 .. --series-6         chart series
+ *
+ * Red is the brand in oxblood and linen and never a control; the action
+ * colour is teal there.  Errors use a red-orange on a filled badge.  In the
+ * tinted dark themes (dusk, forest, ember, plum) the page and the cards
+ * carry the theme's hue, and the action colour is chosen to stand apart
+ * from it.
+ *
+ * Keep each value a six-digit hex colour: the contrast test reads them.
+ */
+
+/* ── oxblood: near-black with a faint red cast. ───── */
+
+[data-theme="oxblood"] {
+	color-scheme: dark;
+	--bg: #0d0707;
+	--surface: #170b0b;
+	--surface-alt: #211212;
+	--code-bg: #1c0f0f;
+	--border: #3a1c1c;
+	--control-border: #7d6663;
+	--text: #efe7e4;
+	--text-muted: #b3a3a0;
+	--link: #35c7c7;
+	--focus: #4fd8d8;
+	--accent: #006868;
+	--accent-text: #f4fbfb;
+	--logo-step-1: #4a0000;
+	--logo-step-2: #7d0000;
+	--logo-step-3: #b00000;
+	--logo-line: #e30000;
+	--ok: #7fd69a;
+	--ok-bg: #10261a;
+	--warn: #f0b23c;
+	--warn-bg: #2e2208;
+	--danger: #ff8f6b;
+	--danger-bg: #3d150a;
+	--offline: #f4a58a;
+	--offline-bg: #2b1612;
+	--series-1: #35c7c7;
+	--series-2: #e0a63c;
+	--series-3: #8aa7e0;
+	--series-4: #b58fd9;
+	--series-5: #8fcf8a;
+	--series-6: #d98c5f;
+}
+
+/* ── dusk: deep navy page, lighter navy cards, a sky-blue action. ── */
+
+[data-theme="dusk"] {
+	color-scheme: dark;
+	--bg: #0a1426;
+	--surface: #101e37;
+	--surface-alt: #172943;
+	--code-bg: #13233e;
+	--border: #233a60;
+	--control-border: #5f7aa3;
+	--text: #e4eaf4;
+	--text-muted: #a5b4cc;
+	--link: #7fb8ff;
+	--focus: #a9ceff;
+	--accent: #1d4f9e;
+	--accent-text: #ffffff;
+	--logo-step-1: #1c3d70;
+	--logo-step-2: #2a5cae;
+	--logo-step-3: #3f87ec;
+	--logo-line: #8ec1ff;
+	--ok: #86d9a0;
+	--ok-bg: #0f2a1d;
+	--warn: #f0b23c;
+	--warn-bg: #2e2408;
+	--danger: #ff9070;
+	--danger-bg: #3d1a12;
+	--offline: #f2a890;
+	--offline-bg: #2a1a16;
+	--series-1: #7fb8ff;
+	--series-2: #e0a63c;
+	--series-3: #7fd6a0;
+	--series-4: #c49af0;
+	--series-5: #e08a8a;
+	--series-6: #5fd0d0;
+}
+
+/* ── forest: green page and cards, a pale sky action. ──────────── */
+
+[data-theme="forest"] {
+	color-scheme: dark;
+	--bg: #061b0f;
+	--surface: #0b2918;
+	--surface-alt: #123421;
+	--code-bg: #0e2e1c;
+	--border: #204b31;
+	--control-border: #5c8a6e;
+	--text: #e0ede4;
+	--text-muted: #a2bba9;
+	--link: #8dd2f2;
+	--focus: #b5e3f8;
+	--accent: #1e5d7e;
+	--accent-text: #ffffff;
+	--logo-step-1: #164a2c;
+	--logo-step-2: #1f6b3e;
+	--logo-step-3: #2f9a5a;
+	--logo-line: #7fd6a0;
+	--ok: #b2e98a;
+	--ok-bg: #1b2e0e;
+	--warn: #f0b23c;
+	--warn-bg: #2e2208;
+	--danger: #ff8f6b;
+	--danger-bg: #3b160c;
+	--offline: #f0a088;
+	--offline-bg: #2a1814;
+	--series-1: #8dd2f2;
+	--series-2: #e0a63c;
+	--series-3: #a6e37a;
+	--series-4: #c49af0;
+	--series-5: #f09a7a;
+	--series-6: #e8d27a;
+}
+
+/* ── ember: warm brown page and cards, an orange action. ───────── */
+
+[data-theme="ember"] {
+	color-scheme: dark;
+	--bg: #1e0f06;
+	--surface: #2a170b;
+	--surface-alt: #362012;
+	--code-bg: #301c0e;
+	--border: #55351f;
+	--control-border: #937159;
+	--text: #f3e8dd;
+	--text-muted: #c0aa96;
+	--link: #ffa762;
+	--focus: #ffc28f;
+	--accent: #a1460c;
+	--accent-text: #ffffff;
+	--logo-step-1: #602d09;
+	--logo-step-2: #93450f;
+	--logo-step-3: #d06a1b;
+	--logo-line: #ffa05a;
+	--ok: #8fd69a;
+	--ok-bg: #112614;
+	--warn: #e8c35a;
+	--warn-bg: #2b2308;
+	--danger: #ff7a68;
+	--danger-bg: #3d1410;
+	--offline: #f09a88;
+	--offline-bg: #2a1612;
+	--series-1: #ffa762;
+	--series-2: #7fc8e8;
+	--series-3: #8fd49a;
+	--series-4: #c49af0;
+	--series-5: #e8c35a;
+	--series-6: #f08f9a;
+}
+
+/* ── plum: violet page and cards, a pink-violet action. ────────── */
+
+[data-theme="plum"] {
+	color-scheme: dark;
+	--bg: #150b20;
+	--surface: #1f122d;
+	--surface-alt: #2a1a3a;
+	--code-bg: #241634;
+	--border: #422a5a;
+	--control-border: #8a72a6;
+	--text: #f0e7f7;
+	--text-muted: #bcaacd;
+	--link: #f28fdc;
+	--focus: #f8b6e9;
+	--accent: #8a2c78;
+	--accent-text: #ffffff;
+	--logo-step-1: #43215f;
+	--logo-step-2: #66338f;
+	--logo-step-3: #934fc6;
+	--logo-line: #e391e6;
+	--ok: #8fd9a6;
+	--ok-bg: #0f2a1d;
+	--warn: #f0b23c;
+	--warn-bg: #2e2208;
+	--danger: #ff8f78;
+	--danger-bg: #3d1517;
+	--offline: #f4a89a;
+	--offline-bg: #2b1620;
+	--series-1: #f28fdc;
+	--series-2: #e0a63c;
+	--series-3: #8fd49a;
+	--series-4: #8ab4f0;
+	--series-5: #f0a07a;
+	--series-6: #6fd0cc;
+}
+
+/* ── midnight: the default.  True black for OLED screens, cool accent.
+ * It is also what a page with no data-theme attribute gets. ─────── */
+
+:root:not([data-theme]),
+[data-theme="midnight"] {
+	color-scheme: dark;
+	--bg: #000000;
+	--surface: #080b0e;
+	--surface-alt: #10151b;
+	--code-bg: #0c1116;
+	--border: #1e2832;
+	--control-border: #5f7183;
+	--text: #e8edf3;
+	--text-muted: #9fadbb;
+	--link: #5ec8ff;
+	--focus: #8bd8ff;
+	--accent: #0b5a7a;
+	--accent-text: #ffffff;
+	--logo-step-1: #06303f;
+	--logo-step-2: #0b5a7a;
+	--logo-step-3: #1590b8;
+	--logo-line: #5ec8ff;
+	--ok: #86d9a0;
+	--ok-bg: #0b2216;
+	--warn: #f0b23c;
+	--warn-bg: #261c05;
+	--danger: #ff9070;
+	--danger-bg: #351510;
+	--offline: #f2a890;
+	--offline-bg: #251512;
+	--series-1: #5ec8ff;
+	--series-2: #f0b23c;
+	--series-3: #8fe0a8;
+	--series-4: #c39bf0;
+	--series-5: #ff9a8a;
+	--series-6: #e0d27a;
+}
+
+/* ── graphite: neutral greys, no colour cast, amber accent. ─────── */
+
+[data-theme="graphite"] {
+	color-scheme: dark;
+	--bg: #161616;
+	--surface: #1e1e1e;
+	--surface-alt: #292929;
+	--code-bg: #232323;
+	--border: #3a3a3a;
+	--control-border: #787878;
+	--text: #ececec;
+	--text-muted: #ababab;
+	--link: #f0b040;
+	--focus: #ffc766;
+	--accent: #8a5a00;
+	--accent-text: #ffffff;
+	--logo-step-1: #4a3306;
+	--logo-step-2: #7a5410;
+	--logo-step-3: #b07d1c;
+	--logo-line: #f0b040;
+	--ok: #86d9a0;
+	--ok-bg: #102618;
+	--warn: #e8c35a;
+	--warn-bg: #2e2608;
+	--danger: #ff8f6b;
+	--danger-bg: #3b160c;
+	--offline: #f0a088;
+	--offline-bg: #2a1814;
+	--series-1: #f0b040;
+	--series-2: #7fb8e8;
+	--series-3: #8fd49a;
+	--series-4: #c49af0;
+	--series-5: #f08f8f;
+	--series-6: #6fd0cc;
+}
+
+/* ── contrast: maximum contrast, for accessibility.  Its page is the
+ * near-black of an unlit screen, not midnight's true black. ──────── */
+
+[data-theme="contrast"] {
+	color-scheme: dark;
+	--bg: #07090e;
+	--surface: #101318;
+	--surface-alt: #1a1d23;
+	--code-bg: #15181d;
+	--border: #727278;
+	--control-border: #ffffff;
+	--text: #ffffff;
+	--text-muted: #d6d6d6;
+	--link: #6ff0f0;
+	--focus: #ffe14d;
+	--accent: #1fc5c5;
+	--accent-text: #000000;
+	--logo-step-1: #5c5c5c;
+	--logo-step-2: #9a9a9a;
+	--logo-step-3: #d2d2d2;
+	--logo-line: #ffffff;
+	--ok: #8dff9d;
+	--ok-bg: #002a10;
+	--warn: #ffd23f;
+	--warn-bg: #2a2000;
+	--danger: #ffa088;
+	--danger-bg: #330a00;
+	--offline: #ffb8a3;
+	--offline-bg: #1f0a00;
+	--series-1: #6ff0f0;
+	--series-2: #ffd23f;
+	--series-3: #8dff9d;
+	--series-4: #d6a8ff;
+	--series-5: #ff9f8a;
+	--series-6: #9ac2ff;
+}
+
+/* ── paper: light, a plain white, teal accent. ──────────────────── */
+
+[data-theme="paper"] {
+	color-scheme: light;
+	--bg: #f5f4f0;
+	--surface: #fdfcf9;
+	--surface-alt: #ebe8e1;
+	--code-bg: #efece5;
+	--border: #d9d4c8;
+	--control-border: #7d776b;
+	--text: #1f1a17;
+	--text-muted: #5a534c;
+	--link: #006266;
+	--focus: #006266;
+	--accent: #00686b;
+	--accent-text: #ffffff;
+	--logo-step-1: #e4c6c2;
+	--logo-step-2: #cc8c85;
+	--logo-step-3: #a8433b;
+	--logo-line: #6a0000;
+	--ok: #14602c;
+	--ok-bg: #dff3e4;
+	--warn: #6b4700;
+	--warn-bg: #fbeccb;
+	--danger: #9b2c0e;
+	--danger-bg: #fde3d8;
+	--offline: #7a2e1a;
+	--offline-bg: #efddd5;
+	--series-1: #00797c;
+	--series-2: #a35f00;
+	--series-3: #3a5fb0;
+	--series-4: #7d4aa8;
+	--series-5: #2f7a3a;
+	--series-6: #a8433b;
+}
+
+/* ── linen: light, warm off-white, the oxblood brand and a deep teal
+ * action: the light counterpart of the default. ─────────────────── */
+
+[data-theme="linen"] {
+	color-scheme: light;
+	--bg: #f5efe4;
+	--surface: #fcf8f1;
+	--surface-alt: #ebe2d3;
+	--code-bg: #efe7d9;
+	--border: #dccfbb;
+	--control-border: #857865;
+	--text: #241a14;
+	--text-muted: #5e5248;
+	--link: #005c5c;
+	--focus: #005c5c;
+	--accent: #005f5e;
+	--accent-text: #ffffff;
+	--logo-step-1: #e8c4b8;
+	--logo-step-2: #cf8577;
+	--logo-step-3: #a3342a;
+	--logo-line: #6e0000;
+	--ok: #14602c;
+	--ok-bg: #dff1df;
+	--warn: #6b4700;
+	--warn-bg: #f8e7c2;
+	--danger: #9b2c0e;
+	--danger-bg: #fadfd2;
+	--offline: #7a2e1a;
+	--offline-bg: #edd8cd;
+	--series-1: #00797c;
+	--series-2: #a35f00;
+	--series-3: #3a5fb0;
+	--series-4: #7d4aa8;
+	--series-5: #2f7a3a;
+	--series-6: #a3342a;
+}
+
+/* ── auto: oxblood on a dark device, linen on a light one.  These two
+ * blocks repeat the values above exactly; a test checks that. ─────── */
+
+[data-theme="auto"] {
+	color-scheme: dark;
+	--bg: #0d0707;
+	--surface: #170b0b;
+	--surface-alt: #211212;
+	--code-bg: #1c0f0f;
+	--border: #3a1c1c;
+	--control-border: #7d6663;
+	--text: #efe7e4;
+	--text-muted: #b3a3a0;
+	--link: #35c7c7;
+	--focus: #4fd8d8;
+	--accent: #006868;
+	--accent-text: #f4fbfb;
+	--logo-step-1: #4a0000;
+	--logo-step-2: #7d0000;
+	--logo-step-3: #b00000;
+	--logo-line: #e30000;
+	--ok: #7fd69a;
+	--ok-bg: #10261a;
+	--warn: #f0b23c;
+	--warn-bg: #2e2208;
+	--danger: #ff8f6b;
+	--danger-bg: #3d150a;
+	--offline: #f4a58a;
+	--offline-bg: #2b1612;
+	--series-1: #35c7c7;
+	--series-2: #e0a63c;
+	--series-3: #8aa7e0;
+	--series-4: #b58fd9;
+	--series-5: #8fcf8a;
+	--series-6: #d98c5f;
+}
+
+@media (prefers-color-scheme: light) {
+	[data-theme="auto"] {
+		color-scheme: light;
+		--bg: #f5efe4;
+		--surface: #fcf8f1;
+		--surface-alt: #ebe2d3;
+		--code-bg: #efe7d9;
+		--border: #dccfbb;
+		--control-border: #857865;
+		--text: #241a14;
+		--text-muted: #5e5248;
+		--link: #005c5c;
+		--focus: #005c5c;
+		--accent: #005f5e;
+		--accent-text: #ffffff;
+		--logo-step-1: #e8c4b8;
+		--logo-step-2: #cf8577;
+		--logo-step-3: #a3342a;
+		--logo-line: #6e0000;
+		--ok: #14602c;
+		--ok-bg: #dff1df;
+		--warn: #6b4700;
+		--warn-bg: #f8e7c2;
+		--danger: #9b2c0e;
+		--danger-bg: #fadfd2;
+		--offline: #7a2e1a;
+		--offline-bg: #edd8cd;
+		--series-1: #00797c;
+		--series-2: #a35f00;
+		--series-3: #3a5fb0;
+		--series-4: #7d4aa8;
+		--series-5: #2f7a3a;
+		--series-6: #a3342a;
+	}
+}

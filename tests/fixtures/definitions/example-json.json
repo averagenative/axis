@@ -1,0 +1,38 @@
+{
+  "status": "ok",
+  "data": {
+    "total": 4,
+    "results": [
+      {
+        "id": 5,
+        "kind": "movies",
+        "name": "Hearth 1995 2160p WEB-DL DDP5.1 HEVC",
+        "hash": "ABCDEFABCDEFABCDEFABCDEFABCDEFABCDEFABCD",
+        "bytes": 12345678901,
+        "stats": {"seeders": 10, "leechers": "2"},
+        "added_unix": 1690000000,
+        "imdb": "tt0600001",
+        "files": [{"count": 3}]
+      },
+      {
+        "id": 6,
+        "kind": "movies",
+        "name": "Hearth 1995 without a hash",
+        "bytes": 1,
+        "stats": {"seeders": 1, "leechers": 1},
+        "added_unix": 1690000000
+      },
+      "not an object",
+      {
+        "id": 7,
+        "kind": "shows",
+        "name": "Hearth 1995 \u0000 ‮ odd text\n",
+        "hash": "1111111111111111111111111111111111111111",
+        "bytes": "not a size",
+        "stats": {"seeders": -5, "leechers": 0},
+        "added_unix": 99999999999,
+        "imdb": "nonsense"
+      }
+    ]
+  }
+}

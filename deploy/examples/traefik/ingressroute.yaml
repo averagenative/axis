@@ -1,0 +1,50 @@
+# ingressroute.yaml - Axis behind Traefik in Kubernetes
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# For a cluster whose ingress is Traefik (v3, the traefik.io API group; with
+# Traefik v2 the group is traefik.containo.us).  Use it instead of
+# ../kubernetes/ingress.yaml, next to the other manifests there:
+#
+#   kubectl apply -n axis -f ingressroute.yaml
+#
+# Then set AXIS_TRUSTED_PROXIES in ../kubernetes/axisd.yaml to the addresses
+# Traefik's pods have (the cluster's pod network: 10.42.0.0/16 on k3s,
+# 10.244.0.0/16 on kind and kubeadm's default; `kubectl get pods -A -o wide`
+# shows them).  Axis believes X-Forwarded-For, -Proto and -Host from those
+# addresses only.  Every pod on that network could send them, so the
+# NetworkPolicy in ../kubernetes/networkpolicy.yaml lets only Traefik's
+# namespace reach Axis's web port.
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: axisd
+  labels:
+    app.kubernetes.io/name: axis
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    # EDIT: the name Axis is reached by.
+    - match: Host(`axis.example.com`)
+      kind: Rule
+      services:
+        - name: axisd
+          port: 7800
+      middlewares:
+        - name: axis-headers
+  tls:
+    # EDIT: a TLS secret in this namespace (cert-manager, or
+    # `kubectl create secret tls axis-tls --cert=... --key=...`), or replace
+    # with certResolver: <your resolver>.
+    secretName: axis-tls
+---
+# HSTS, which Axis does not send itself.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: axis-headers
+  labels:
+    app.kubernetes.io/name: axis
+spec:
+  headers:
+    stsSeconds: 31536000

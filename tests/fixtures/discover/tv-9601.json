@@ -1,0 +1,32 @@
+{
+  "adult": false,
+  "backdrop_path": "/c9601.jpg",
+  "first_air_date": "2024-09-12",
+  "genres": [
+    { "id": 18, "name": "Drama" },
+    { "id": 9648, "name": "Mystery" }
+  ],
+  "id": 9601,
+  "last_air_date": "2025-10-30",
+  "name": "The Tidewater Archive",
+  "number_of_episodes": 2,
+  "number_of_seasons": 1,
+  "original_language": "en",
+  "original_name": "The Tidewater Archive",
+  "overview": "Archivists in a flooded city keep the records dry, and the secrets wet.",
+  "poster_path": "/s9601.jpg",
+  "seasons": [
+    {
+      "air_date": "2024-09-12",
+      "episode_count": 2,
+      "id": 96011,
+      "name": "Season 1",
+      "overview": "",
+      "season_number": 1
+    }
+  ],
+  "status": "Returning Series",
+  "episode_run_time": [52],
+  "alternative_titles": { "results": [] },
+  "external_ids": { "imdb_id": null, "tvdb_id": null }
+}

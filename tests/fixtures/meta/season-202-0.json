@@ -1,0 +1,8 @@
+{
+  "number": 0,
+  "name": "Specials",
+  "air_date": "2025-01-01",
+  "episodes": [
+    { "number": 1, "id": "9001", "name": "Behind the Harbour", "air_date": "2025-01-01" }
+  ]
+}

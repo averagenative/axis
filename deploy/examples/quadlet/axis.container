@@ -1,0 +1,54 @@
+# axis.container - the Axis daemon, as a systemd service
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Quadlet turns this into axis.service.  Lines to change are marked EDIT.
+[Unit]
+Description=Axis media engine
+# Ordered after the database, though Axis would wait for it anyway.
+Wants=axis-postgres.service
+After=axis-postgres.service
+
+[Container]
+ContainerName=axis
+# EDIT: the published image, or localhost/axis:latest from `make container`.
+Image=ghcr.io/averagenative/axis:0.1.0-rc1
+Network=axis.network
+# The web interface on this machine only; 0.0.0.0:7800:7800 offers it to
+# the network once the first administrator exists.
+PublishPort=127.0.0.1:7800:7800
+Volume=axis-data.volume:/var/lib/axis
+# EDIT: your disks, each mounted whole, read-only.
+Volume=/path/to/disk1:/media/disk1:ro
+# SELinux enforcing (Fedora): a bind mount is refused to the container unless
+# you uncomment this (../../README.md, "SELinux").
+# SecurityLabelDisable=true
+Secret=axis_database_url,type=mount,target=/run/secrets/axis_database_url
+Environment=AXIS_DATABASE_URL_FILE=/run/secrets/axis_database_url
+Environment=AXIS_LOG_LEVEL=info
+# The first administrator from a secret, instead of the setup token in the
+# journal (README.md, step 1):
+# Secret=axis_admin_password,type=mount,target=/run/secrets/axis_admin_password
+# Environment=AXIS_ADMIN_USERNAME=admin AXIS_ADMIN_PASSWORD_FILE=/run/secrets/axis_admin_password
+# EDIT: the user and group that may read your media (any numeric ids).
+User=1000
+Group=1000
+ReadOnly=true
+Tmpfs=/tmp:rw,noexec,nosuid,size=64m,mode=1777
+DropCapability=all
+NoNewPrivileges=true
+PodmanArgs=--pids-limit=512
+HealthCmd=/usr/bin/axisd --healthcheck
+HealthInterval=15s
+HealthTimeout=5s
+HealthRetries=3
+HealthStartPeriod=60s
+Notify=healthy
+# axisd gives running jobs 30 seconds, then exits.
+StopTimeout=45
+
+[Service]
+Restart=always
+TimeoutStartSec=600
+
+[Install]
+WantedBy=default.target

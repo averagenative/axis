@@ -1,0 +1,13 @@
+<html>
+<!-- A hand-written search page for hostile-links.yml: @OTHER@ (another
+     stand-in) and @SELF@ (the site's own stand-in) are put in by the test. -->
+<body>
+<table>
+<tr class="row"><td class="name">Hearth 1995 Elsewhere</td><td><a class="get" href="@OTHER@/file.torrent">get</a></td><td class="size">1 GB</td><td class="seeds">1</td></tr>
+<tr class="row"><td class="name">Hearth 1995 Scheme Relative</td><td><a class="get" href="//elsewhere.invalid/file.torrent">get</a></td><td class="size">1 GB</td><td class="seeds">1</td></tr>
+<tr class="row"><td class="name">Hearth 1995 Script</td><td><a class="get" href="javascript:fetch('@OTHER@')">get</a></td><td class="size">1 GB</td><td class="seeds">1</td></tr>
+<tr class="row"><td class="name">Hearth 1995 Own Page</td><td><a class="get" href="@SELF@/release/1">get</a></td><td class="size">1 GB</td><td class="seeds">1</td></tr>
+<tr class="row"><td class="name">Hearth 1995 Relative Page</td><td><a class="get" href="release/2">get</a></td><td class="size">2 GB</td><td class="seeds">2</td></tr>
+</table>
+</body>
+</html>

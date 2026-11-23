@@ -1,0 +1,2 @@
+-- axis:no-transaction
+CREATE INDEX CONCURRENTLY t_x ON t (x);

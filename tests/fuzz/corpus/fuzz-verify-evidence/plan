@@ -1,0 +1,1 @@
+1{"picture":{"source":0,"output":0},"tracks":[{"source":1,"output":1,"aac":true},{"source":3,"output":2,"aac":false}],"points":[{"start_ms":500,"length_ms":1000},{"start_ms":2500,"length_ms":1000}],"timeout_ms":600000}

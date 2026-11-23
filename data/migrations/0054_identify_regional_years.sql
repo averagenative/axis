@@ -1,0 +1,22 @@
+-- 0054_identify_regional_years.sql - what fix-identify-regional-years
+-- records
+-- SPDX-License-Identifier: AGPL-3.0-or-later
+--
+-- TMDb's movie search was asked with region=US, and TMDb's answers to a
+-- search with a region give the release date in that region: a film first
+-- released abroad came back with its date in the United States, often
+-- years after its first release, and that year was stored with the answer's
+-- titles.  The search sends no region now (the answers give the primary
+-- release date).  Every stored answer of a TMDb film search, both pages, is
+-- dropped here, so that the next search of each name asks TMDb again; the
+-- store writes the new answer's year and date over those of every title of
+-- it whose full record was never read (a full record's are kept, as
+-- before).  Nothing else refers to a stored search: the refresh job drops
+-- old ones the same way.  Searches for series never sent a region and are
+-- kept.
+--
+-- Units held for review by the rules before version 3
+-- (library_identity.rules, AXIS_IDENTIFY_RULES_VERSION) are looked at again
+-- once by the build itself; nothing here changes them.
+
+DELETE FROM meta_search WHERE provider = 'tmdb' AND kind = 'film' AND lookup IN ('search', 'search2');

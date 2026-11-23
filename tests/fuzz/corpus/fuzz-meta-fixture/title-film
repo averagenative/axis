@@ -1,0 +1,21 @@
+2{
+  "id": "101",
+  "kind": "film",
+  "title": "The Mazework",
+  "original_title": "The Mazework",
+  "year": 1999,
+  "overview": "A cartographer maps a hedge maze that grows a new corridor every night, until one of them leads back to the day before.",
+  "runtime": 136,
+  "status": "released",
+  "genres": ["Action", "Science Fiction"],
+  "language": "en",
+  "release_date": "1999-03-31",
+  "poster": "/p101.png",
+  "backdrop": "/b101.png",
+  "ids": { "imdb": "tt0600003" },
+  "alt_titles": [
+    { "title": "Mazework", "country": "DE", "language": "de" },
+    { "title": "Мазеворк", "country": "RU" },
+    { "title": "  ", "country": "FR" }
+  ]
+}

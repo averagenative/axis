@@ -1,0 +1,11 @@
+{"_constructed":"a remote H.264 to H.264 conversion at a lower resolution, bandwidth below the source bitrate","MediaContainer":{"size":1,"Metadata":[{
+"ratingKey":"604","librarySectionID":"1","type":"movie","title":"Invented Remote Film",
+"Media":[{"id":5,"bitrate":12000,"width":1920,"height":1080,"audioCodec":"aac","videoCodec":"h264","container":"mkv","Part":[{"id":5,"file":"/data/movies/Invented Remote (2017)/Invented Remote (2017).mkv","container":"mkv","decision":"transcode","protocol":"hls","Stream":[
+{"id":40,"streamType":1,"decision":"transcode","codec":"h264","profile":"high","bitDepth":8,"width":1920,"height":1080,"colorTrc":"bt709"},
+{"id":41,"streamType":2,"decision":"copy","codec":"aac","channels":2,"selected":true}
+]}]}],
+"Player":{"machineIdentifier":"client-android-1","platform":"Android","product":"Plex for Android","state":"playing","title":"Pixel","local":false,"relayed":false},
+"Session":{"id":"sess-bandwidth-1","bandwidth":2000,"location":"wan"},
+"TranscodeSession":{"sourceVideoCodec":"h264","sourceAudioCodec":"aac","videoDecision":"transcode","audioDecision":"copy","protocol":"hls","container":"mkv","videoCodec":"h264","audioCodec":"aac","width":1280,"height":720},
+"User":{"id":"2","title":"Bob Example"}
+}]}}

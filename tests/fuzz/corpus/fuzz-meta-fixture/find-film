@@ -1,0 +1,12 @@
+0{
+  "results": [
+    {
+      "id": "101",
+      "kind": "film",
+      "title": "The Mazework",
+      "year": 1999,
+      "poster": "/p101.png",
+      "ids": { "imdb": "tt0600003" }
+    }
+  ]
+}

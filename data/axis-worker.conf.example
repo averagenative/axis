@@ -1,0 +1,62 @@
+# axis-worker.conf.example - axis-worker's configuration
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Copy it, change what is marked, and start the worker with
+#
+#   axis-worker --config /etc/axis/axis-worker.conf
+#
+# Every setting can also come from the environment (AXIS_WORKER_URL,
+# AXIS_WORKER_TOKEN_FILE, AXIS_WORKER_VOLUMES with commas, ...), which wins
+# over this file.  The token is never given on the command line.
+
+[worker]
+# The daemon.  Over a network, https (a reverse proxy with TLS in front of
+# axisd): plain http is refused for any address but this machine's own.
+url = https://axis.example.lan
+
+# The token the Workers page showed when the worker was added, in a file
+# only this worker's user can read.
+token_file = /etc/axis/worker-token
+
+# Certificates to trust instead of the system's (a private CA).
+# ca_file = /etc/axis/ca.pem
+
+# Only if the network between this machine and the daemon is trusted: the
+# token then crosses it unencrypted.
+# allow_insecure_http = false
+
+# Where each volume is mounted on this machine.  The worker reads each
+# directory's volume marker and is only given work on the volumes whose
+# marker it found where it was told.
+volumes = /media/disk1;/media/disk2
+
+# Those of the volumes above that this machine sees through a network mount
+# that does not keep file identities: sshfs and SMB/CIFS show inode numbers
+# and sub-second times that are not the server's (NFS keeps them; a local
+# disk does).  A source there is checked by its size, its time to the second
+# and samples of its content instead of its inode and nanoseconds.  Leave it
+# out for NFS: the default checks everything.  Written as in volumes.
+# (deploy/examples/remote-worker/README.md)
+# volumes_without_file_identity = /media/disk2
+
+# Where encoders may write (never on a volume), and where the worker keeps
+# its capability measurement and its health file.
+# scratch = /var/tmp/axis-worker
+# state = /var/lib/axis-worker
+
+# How many jobs at once.
+# max_jobs = 1
+
+# Which encoders it may run: software, nvenc, vaapi.  A family left out is
+# never run, not even to measure it.
+# encoder_families = software, nvenc, vaapi
+
+# The programs (default: found on PATH).
+# ffmpeg = /usr/bin/ffmpeg
+# ffprobe = /usr/bin/ffprobe
+
+# Seconds between proofs of the volumes, and per request to the daemon.
+# volume_check_interval = 60
+# request_timeout = 30
+
+# log_level = info

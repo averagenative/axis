@@ -1,0 +1,53 @@
+{
+  "status": "success",
+  "data": [
+    {
+      "objectID": "series-81001",
+      "id": "series-81001",
+      "tvdb_id": "81001",
+      "type": "series",
+      "name": "Wobbly Lighthouse",
+      "slug": "wobbly-lighthouse",
+      "year": "2023",
+      "first_air_time": "2023-09-01",
+      "primary_language": "eng",
+      "overview": "A lighthouse that will not stand still.",
+      "translations": {"eng": "Wobbly Lighthouse", "fra": "Le Phare Bancal"},
+      "overviews": {"eng": "A lighthouse that leans with the tide.", "fra": "Un phare qui penche."},
+      "aliases": ["The Wobbly Lighthouse"],
+      "image_url": "https://artworks.thetvdb.com/banners/posters/81001-1.jpg",
+      "status": "Continuing",
+      "remote_ids": [{"id": "tt9000081", "type": 2, "sourceName": "IMDB"}]
+    },
+    {
+      "tvdb_id": "81002",
+      "type": "series",
+      "name": "Wobbly Lighthouse Tales",
+      "year": "2025",
+      "first_air_time": "2025-02-14",
+      "primary_language": "eng",
+      "image_url": "https://images.example/banners/posters/81002-1.jpg"
+    },
+    {
+      "tvdb_id": "81003",
+      "type": "movie",
+      "name": "Wobbly Lighthouse: The Film"
+    },
+    {
+      "type": "series",
+      "name": "No Identifier At All"
+    },
+    {
+      "tvdb_id": "81001",
+      "type": "series",
+      "name": "Wobbly Lighthouse Again"
+    },
+    {
+      "tvdb_id": 81004,
+      "type": "series",
+      "name": "Wobbly Lighthouse Shorts",
+      "year": 2024,
+      "image_url": "https://artworks.thetvdb.com/banners/../posters/x.jpg"
+    }
+  ]
+}

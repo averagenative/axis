@@ -1,0 +1,3 @@
+[submodule "deps/htmx-glib"]
+	path = deps/htmx-glib
+	url = https://git.podbielniak.com/zachpodbielniak/htmx-glib.git

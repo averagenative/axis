@@ -1,0 +1,4 @@
+{"queue": {"version": "4.3.3", "paused": false, "noofslots": 2, "slots": [
+  {"status": "Wibbling", "index": 0, "mb": "1000.00", "mbleft": "250.00", "filename": "Some.Film.2020.1080p.WEB-DL", "cat": "axis", "timeleft": "0:01:00", "percentage": "75", "nzo_id": "SABnzbd_nzo_dl0001"},
+  {"status": "Wobbling", "index": 1, "mb": "10.00", "mbleft": "10.00", "filename": "Never.Seen.Before", "cat": "axis", "timeleft": "0:00:00", "percentage": "0", "nzo_id": "SABnzbd_nzo_nw0002"}
+]}}

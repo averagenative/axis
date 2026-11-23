@@ -1,0 +1,43 @@
+{
+  "page": 1,
+  "results": [
+    {
+      "adult": false,
+      "backdrop_path": "/madeUpBackdrop0000000007101.jpg",
+      "genre_ids": [18, 80],
+      "id": 7101,
+      "origin_country": ["US"],
+      "original_language": "en",
+      "original_name": "Cracking Slate",
+      "overview": "When Walden Grey, a quarry surveyor in a small hill town, finds that the slate under his own house is worth a fortune, he starts to dig at night and cannot stop.",
+      "popularity": 130.5,
+      "poster_path": "/madeUpPoster000000000007101.jpg",
+      "first_air_date": "2008-01-20",
+      "name": "Cracking Slate",
+      "vote_average": 8.9,
+      "vote_count": 12500
+    },
+    {
+      "adult": false,
+      "backdrop_path": "/madeUpBackdrop0000000007103.jpg",
+      "genre_ids": [18],
+      "id": 7103,
+      "origin_country": ["US"],
+      "original_language": "en",
+      "original_name": "Cracking Slate: The Movie Night",
+      "overview": "A fan tribute.",
+      "poster_path": "/ab12CD34ef56GH78ij90KL12mn34.webp",
+      "first_air_date": "2015-02-03",
+      "name": "Cracking Slate: The Movie Night"
+    },
+    {
+      "adult": false,
+      "id": 777,
+      "media_type": "movie",
+      "title": "A film among the series",
+      "release_date": "2001-01-01"
+    }
+  ],
+  "total_pages": 1,
+  "total_results": 3
+}

@@ -1,0 +1,126 @@
+{
+  "Items": [
+    {
+      "Name": "Kitchen Speaker",
+      "Id": "axis-test-speaker",
+      "LastUserName": "axis-test",
+      "AppName": "AxisTestSpeaker",
+      "AppVersion": "1.0",
+      "LastUserId": "00a92bb1464e4f77bd70b5f880fdd6ef",
+      "DateLastActivity": "2026-11-13T06:24:16.4395672Z",
+      "Capabilities": {
+        "PlayableMediaTypes": [],
+        "SupportedCommands": [],
+        "SupportsMediaControl": false,
+        "SupportsPersistentIdentifier": true
+      }
+    },
+    {
+      "Name": "Hotel TV",
+      "Id": "axis-test-hotel",
+      "LastUserName": "axis-test",
+      "AppName": "AxisTestHotel",
+      "AppVersion": "1.0",
+      "LastUserId": "00a92bb1464e4f77bd70b5f880fdd6ef",
+      "DateLastActivity": "2026-11-13T06:24:16.1090056Z",
+      "Capabilities": {
+        "PlayableMediaTypes": [],
+        "SupportedCommands": [],
+        "SupportsMediaControl": false,
+        "SupportsPersistentIdentifier": true
+      }
+    },
+    {
+      "Name": "Games Console",
+      "Id": "axis-test-console",
+      "LastUserName": "axis-test",
+      "AppName": "AxisTestConsole",
+      "AppVersion": "1.0",
+      "LastUserId": "00a92bb1464e4f77bd70b5f880fdd6ef",
+      "DateLastActivity": "2026-11-13T06:24:15.6447052Z",
+      "Capabilities": {
+        "PlayableMediaTypes": [],
+        "SupportedCommands": [],
+        "SupportsMediaControl": false,
+        "SupportsPersistentIdentifier": true
+      }
+    },
+    {
+      "Name": "Tablet",
+      "Id": "axis-test-tablet",
+      "LastUserName": "axis-test",
+      "AppName": "AxisTestTablet",
+      "AppVersion": "1.0",
+      "LastUserId": "00a92bb1464e4f77bd70b5f880fdd6ef",
+      "DateLastActivity": "2026-11-13T06:24:15.2947926Z",
+      "Capabilities": {
+        "PlayableMediaTypes": [],
+        "SupportedCommands": [],
+        "SupportsMediaControl": false,
+        "SupportsPersistentIdentifier": true
+      }
+    },
+    {
+      "Name": "Bedroom Stick",
+      "Id": "axis-test-stick",
+      "LastUserName": "axis-test",
+      "AppName": "AxisTestStick",
+      "AppVersion": "1.0",
+      "LastUserId": "00a92bb1464e4f77bd70b5f880fdd6ef",
+      "DateLastActivity": "2026-11-13T06:24:14.9239918Z",
+      "Capabilities": {
+        "PlayableMediaTypes": [],
+        "SupportedCommands": [],
+        "SupportsMediaControl": false,
+        "SupportsPersistentIdentifier": true
+      }
+    },
+    {
+      "Name": "Pixel Phone",
+      "Id": "axis-test-phone",
+      "LastUserName": "axis-test",
+      "AppName": "AxisTestPhone",
+      "AppVersion": "1.0",
+      "LastUserId": "00a92bb1464e4f77bd70b5f880fdd6ef",
+      "DateLastActivity": "2026-11-13T06:24:14.485913Z",
+      "Capabilities": {
+        "PlayableMediaTypes": [],
+        "SupportedCommands": [],
+        "SupportsMediaControl": false,
+        "SupportsPersistentIdentifier": true
+      }
+    },
+    {
+      "Name": "Living Room TV",
+      "Id": "axis-test-tv",
+      "LastUserName": "axis-test",
+      "AppName": "AxisTestPlayer",
+      "AppVersion": "1.0",
+      "LastUserId": "00a92bb1464e4f77bd70b5f880fdd6ef",
+      "DateLastActivity": "2026-11-13T06:24:14.1642082Z",
+      "Capabilities": {
+        "PlayableMediaTypes": [],
+        "SupportedCommands": [],
+        "SupportsMediaControl": false,
+        "SupportsPersistentIdentifier": true
+      }
+    },
+    {
+      "Name": "axis-test-setup",
+      "Id": "axis-test-setup",
+      "LastUserName": "axis-test",
+      "AppName": "axis-test-setup",
+      "AppVersion": "1.0",
+      "LastUserId": "00a92bb1464e4f77bd70b5f880fdd6ef",
+      "DateLastActivity": "2026-11-13T06:24:10.5829617Z",
+      "Capabilities": {
+        "PlayableMediaTypes": [],
+        "SupportedCommands": [],
+        "SupportsMediaControl": false,
+        "SupportsPersistentIdentifier": true
+      }
+    }
+  ],
+  "TotalRecordCount": 8,
+  "StartIndex": 0
+}

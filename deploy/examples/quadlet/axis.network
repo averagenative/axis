@@ -1,0 +1,10 @@
+# axis.network - the network Axis and its database share
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Quadlet makes the network axis-network.service from this file.  Only the
+# two containers below are on it; the database publishes no port.
+[Unit]
+Description=Axis's private network
+
+[Network]
+NetworkName=axis
