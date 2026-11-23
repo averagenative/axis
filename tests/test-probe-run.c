@@ -17,6 +17,7 @@
 #include <glib/gstdio.h>
 #include <signal.h>
 #include <string.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -548,6 +549,47 @@ limit_of(
 	}
 }
 
+/* Whether this platform keeps a limit on the address space where
+ * /proc/PID/limits shows it.  Under user-mode emulation of another
+ * architecture (an image built for arm64 on an amd64 machine) the emulator
+ * takes that limit for itself and the kernel never sees it, so the file says
+ * "unlimited"; on a real machine of either architecture it is kept.  A child
+ * sets the limit on itself and reads its own file, with nothing allocated in
+ * between. */
+static gboolean
+address_space_limit_is_kept(void)
+{
+	pid_t pid = fork();
+	int status = 0;
+
+	g_assert_cmpint(pid, >=, 0);
+	if (pid == 0) {
+		struct rlimit limit = { 1073741824, 1073741824 };
+		char text[4096];
+		const char *line;
+		ssize_t n;
+		int fd;
+
+		if (setrlimit(RLIMIT_AS, &limit) != 0)
+			_exit(0);
+		fd = open("/proc/self/limits", O_RDONLY);
+		if (fd < 0)
+			_exit(0);
+		n = read(fd, text, sizeof text - 1);
+		if (n <= 0)
+			_exit(0);
+		text[n] = '\0';
+		line = strstr(text, "Max address space");
+		if (line == NULL)
+			_exit(0);
+		if (strchr(line, '\n') != NULL)
+			*strchr(line, '\n') = '\0';
+		_exit(strstr(line, "1073741824") == NULL ? 1 : 0);
+	}
+	g_assert_cmpint(waitpid(pid, &status, 0), ==, pid);
+	return !(WIFEXITED(status) && WEXITSTATUS(status) == 1);
+}
+
 static void
 test_limits_and_priority(Fixture *fx, gconstpointer data)
 {
@@ -563,7 +605,11 @@ test_limits_and_priority(Fixture *fx, gconstpointer data)
 	g_assert_cmpint(result.status, ==, AXIS_PROBE_RUN_OK);
 	out = output_text(&result);
 	value = limit_of(out, "Max address space");
-	g_assert_cmpstr(value, ==, "1073741824 1073741824");
+	if (address_space_limit_is_kept())
+		g_assert_cmpstr(value, ==, "1073741824 1073741824");
+	else
+		g_test_message("the address-space limit is not checked: this platform does not show one "
+			"(user-mode emulation); it said: %s", value);
 	g_free(value);
 	/* 1, not 0: see child_setup() in src/probe/axis-probe-run.c. */
 	value = limit_of(out, "Max core file size");
