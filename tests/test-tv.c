@@ -1113,6 +1113,249 @@ test_add(Fixture *fx, gconstpointer data)
 	g_assert_error(error, AXIS_TV_ERROR, AXIS_TV_ERROR_NOT_FOUND);
 }
 
+/* ── The monitoring of a whole series (series-monitoring-control) ── */
+
+/* A file of the library on every episode of @series that @where chooses
+ * ("e.season_number > 0"), at the cutoff of its profile. */
+static void
+files_on(
+	Fixture     *fx,
+	gint64       series,
+	const gchar *where
+){
+	exec(fx, "WITH lf AS (INSERT INTO library_file (root_id, volume_id, rel_path, kind, size, mtime_sec, mtime_nsec,"
+		" ctime_sec, ctime_nsec, inode, nlink, pinned, pinned_links, pinned_downloads, first_seen_generation,"
+		" last_seen_generation, changed_generation) SELECT %" G_GINT64_FORMAT ", %" G_GINT64_FORMAT ","
+		" 'Harbour Lights (2024)/whole/' || e.id || '.mkv', 'video', 700000000 + e.id, 1, 0, 1, 0, 7000000 + e.id, 1,"
+		" false, false, false, 1, 1, 1 FROM series_episode e WHERE e.series_id = %" G_GINT64_FORMAT " AND %s"
+		" RETURNING id, rel_path),"
+		" m AS (SELECT lf.id AS file_id, split_part(split_part(lf.rel_path, '/', 3), '.', 1)::bigint AS episode_id FROM lf),"
+		" sf AS (INSERT INTO series_file (file_id, series_id, quality, release_name) SELECT m.file_id, %" G_GINT64_FORMAT ","
+		" 'bluray_1080p', 'Harbour.Lights.S01E01.1080p.BluRay-GRP' FROM m RETURNING file_id)"
+		" INSERT INTO series_file_episode (file_id, episode_id) SELECT m.file_id, m.episode_id FROM m", fx->root_id,
+		fx->volume_id, series, where, series);
+}
+
+/* The files of the library and which episode each is linked to. */
+static gchar *
+links_fingerprint(Fixture *fx)
+{
+	return q(fx, "SELECT (SELECT count(*) FROM library_file) || '|' || (SELECT count(*) FROM series_file) || '|' ||"
+		" (SELECT string_agg(file_id || ':' || episode_id, ',' ORDER BY file_id, episode_id) FROM series_file_episode)");
+}
+
+/* The one series' state and sentence, which the list counted by the
+ * database and the one from every episode's facts must both give. */
+static AxisTvState
+whole_state(
+	Fixture  *fx,
+	gchar   **reason
+){
+	g_autoptr(GPtrArray) derived = NULL;
+	g_autoptr(GPtrArray) counted = NULL;
+	g_autoptr(GError) error = NULL;
+	const AxisTvSummary *d;
+	const AxisTvSummary *c;
+
+	g_assert_true(axis_tv_list(fx->tv, &derived, &error));
+	g_assert_no_error(error);
+	g_assert_true(axis_tv_list_counted(fx->tv, TRUE, &counted, &error));
+	g_assert_no_error(error);
+	g_assert_cmpuint(derived->len, ==, 1);
+	g_assert_cmpuint(counted->len, ==, 1);
+	d = g_ptr_array_index(derived, 0);
+	c = g_ptr_array_index(counted, 0);
+	g_assert_cmpint(c->state, ==, d->state);
+	g_assert_cmpstr(c->reason, ==, d->reason);
+	g_assert_cmpuint(c->monitored, ==, d->monitored);
+	if (reason != NULL)
+		*reason = g_strdup(d->reason);
+	return d->state;
+}
+
+static gboolean
+whole_change(
+	Fixture              *fx,
+	gint64                series,
+	gboolean              seasons,
+	AxisTvMonitor         monitor,
+	gboolean              specials,
+	gboolean              monitor_new,
+	AxisTvWholeMonitored *done
+){
+	g_autoptr(GError) error = NULL;
+	AxisTvWholeMonitoring change;
+
+	memset(&change, 0, sizeof(change));
+	change.seasons = seasons;
+	change.monitor = monitor;
+	change.specials = specials;
+	change.monitor_new = monitor_new;
+	change.user = "root";
+	g_assert_true(axis_tv_set_series_monitoring(fx->tv, series, &change, done, &error));
+	g_assert_no_error(error);
+	return done->changed;
+}
+
+/*
+ * Spec (tv, series-monitoring-control): the series' own state, and the
+ * monitoring of a whole series in one change.  The series that read "Not
+ * monitored": every season monitored and in the library, the specials not
+ * monitored, new seasons monitored.
+ */
+static void
+test_whole_monitoring(Fixture *fx, gconstpointer data)
+{
+	g_autoptr(GError) error = NULL;
+	g_autofree gchar *links = NULL;
+	g_autofree gchar *reason = NULL;
+	g_autofree gchar *on = NULL;
+	g_autofree gchar *now = NULL;
+	gint64 series = add_series(fx);
+	AxisTvWholeMonitoring change;
+	AxisTvWholeMonitored done;
+
+	/* Every episode of the two seasons has aired and is in the library; the
+	 * one special has no file and is not monitored. */
+	exec(fx, "UPDATE series_episode SET air_date = DATE '2024-05-01' WHERE series_id = %" G_GINT64_FORMAT
+		" AND season_number = 2 AND number > 2", series);
+	files_on(fx, series, "e.season_number > 0");
+	links = links_fingerprint(fx);
+	assert_qf(fx, "all|true", "SELECT monitor_choice || '|' || monitor_new FROM series WHERE id = %" G_GINT64_FORMAT,
+		series);
+	assert_ep(fx, series, 0, 1, AXIS_TV_UNMONITORED, NULL);
+	g_assert_cmpint(whole_state(fx, &reason), ==, AXIS_TV_IN_LIBRARY);
+	assert_contains(reason, "Every monitored episode that has aired is in the library.");
+	assert_contains(reason, "New seasons and episodes are monitored as they are announced.");
+	g_clear_pointer(&reason, g_free);
+
+	/* One season left out, the rest complete: in the library still. */
+	g_assert_true(axis_tv_set_season_monitored(fx->tv, series, 1, FALSE, "root", &error));
+	g_assert_no_error(error);
+	g_assert_cmpint(whole_state(fx, &reason), ==, AXIS_TV_IN_LIBRARY);
+	assert_contains(reason, "is in the library.");
+	g_clear_pointer(&reason, g_free);
+
+	/* No season, and new seasons neither: only then is it not monitored.
+	 * Its files stay, each on its episode. */
+	g_assert_true(whole_change(fx, series, TRUE, AXIS_TV_MONITOR_NONE, FALSE, FALSE, &done));
+	g_assert_cmpuint(done.seasons, ==, 1);
+	g_assert_cmpuint(done.episodes, ==, 4);
+	g_assert_true(done.new_changed);
+	on = monitored(fx, series);
+	g_assert_null(on);
+	assert_qf(fx, "0", "SELECT count(*) FROM series_season WHERE series_id = %" G_GINT64_FORMAT " AND monitored", series);
+	assert_qf(fx, "none|false", "SELECT monitor_choice || '|' || monitor_new FROM series WHERE id = %" G_GINT64_FORMAT,
+		series);
+	g_assert_cmpint(whole_state(fx, &reason), ==, AXIS_TV_UNMONITORED);
+	assert_contains(reason, "No season is monitored, and new seasons are not");
+	assert_contains(reason, "8 episodes are in the library.");
+	g_clear_pointer(&reason, g_free);
+	now = links_fingerprint(fx);
+	g_assert_cmpstr(now, ==, links);
+	g_clear_pointer(&now, g_free);
+	/* The history says who, what, and that no file was touched. */
+	assert_qf(fx, "root", "SELECT by_user FROM series_event WHERE series_id = %" G_GINT64_FORMAT " AND kind = 'monitored'"
+		" AND text LIKE 'No season monitored any more, the specials neither by root (1 season and 4 episodes changed).%%'"
+		" AND text LIKE '%%What to monitor was \"Every episode\" until now.%%'"
+		" AND text LIKE '%%New seasons are no longer monitored when they are announced.%%'"
+		" AND text LIKE '%%No file was touched, and nothing was searched for at once.'", series);
+
+	/* New seasons alone: the seasons, the episodes and the choice stay; a
+	 * series that will monitor what comes is not "not monitored". */
+	g_assert_true(whole_change(fx, series, FALSE, AXIS_TV_MONITOR_ALL, TRUE, TRUE, &done));
+	g_assert_cmpuint(done.seasons, ==, 0);
+	g_assert_cmpuint(done.episodes, ==, 0);
+	g_assert_true(done.new_changed);
+	assert_qf(fx, "none|true", "SELECT monitor_choice || '|' || monitor_new FROM series WHERE id = %" G_GINT64_FORMAT,
+		series);
+	assert_qf(fx, "0", "SELECT count(*) FROM series_episode WHERE series_id = %" G_GINT64_FORMAT " AND monitored", series);
+	g_assert_cmpint(whole_state(fx, &reason), ==, AXIS_TV_IN_LIBRARY);
+	assert_contains(reason, "New seasons and episodes are monitored as they are announced.");
+	g_clear_pointer(&reason, g_free);
+	assert_qf(fx, "1", "SELECT count(*) FROM series_event WHERE series_id = %" G_GINT64_FORMAT " AND kind = 'monitored'"
+		" AND text LIKE 'New seasons are monitored when they are announced from now on by root.%%'", series);
+	/* The same again: nothing changed, and nothing is written. */
+	{
+		gint64 events = qi(fx, "SELECT count(*) FROM series_event WHERE series_id = %" G_GINT64_FORMAT, series);
+
+		g_assert_false(whole_change(fx, series, FALSE, AXIS_TV_MONITOR_ALL, FALSE, TRUE, &done));
+		g_assert_cmpint(qi(fx, "SELECT count(*) FROM series_event WHERE series_id = %" G_GINT64_FORMAT, series), ==,
+			events);
+	}
+
+	/* The latest season only, as the Add form's choice. */
+	g_assert_true(whole_change(fx, series, TRUE, AXIS_TV_MONITOR_LATEST, FALSE, TRUE, &done));
+	g_assert_cmpuint(done.seasons, ==, 1);
+	g_assert_cmpuint(done.episodes, ==, 4);
+	g_assert_false(done.new_changed);
+	on = monitored(fx, series);
+	g_assert_cmpstr(on, ==, "S02E01,S02E02,S02E03,S02E04");
+	g_clear_pointer(&on, g_free);
+	assert_qf(fx, "2", "SELECT string_agg(number::text, ',' ORDER BY number) FROM series_season WHERE series_id = %"
+		G_GINT64_FORMAT " AND monitored", series);
+	assert_qf(fx, "latest", "SELECT monitor_choice FROM series WHERE id = %" G_GINT64_FORMAT, series);
+	assert_qf(fx, "1", "SELECT count(*) FROM series_event WHERE series_id = %" G_GINT64_FORMAT " AND kind = 'monitored'"
+		" AND text LIKE 'Only the latest season (season 2) monitored by root (1 season and 4 episodes changed).%%'", series);
+	g_assert_cmpint(whole_state(fx, NULL), ==, AXIS_TV_IN_LIBRARY);
+
+	/* Every season: the specials stay as they are; a series brought over
+	 * says what a person chose from then on. */
+	exec(fx, "UPDATE series SET monitor_choice = 'brought' WHERE id = %" G_GINT64_FORMAT, series);
+	g_assert_true(whole_change(fx, series, TRUE, AXIS_TV_MONITOR_ALL, FALSE, TRUE, &done));
+	g_assert_cmpuint(done.seasons, ==, 1);
+	g_assert_cmpuint(done.episodes, ==, 4);
+	on = monitored(fx, series);
+	g_assert_cmpstr(on, ==, ALL_REGULAR);
+	g_clear_pointer(&on, g_free);
+	assert_qf(fx, "all", "SELECT monitor_choice FROM series WHERE id = %" G_GINT64_FORMAT, series);
+	assert_qf(fx, "1", "SELECT count(*) FROM series_event WHERE series_id = %" G_GINT64_FORMAT " AND kind = 'monitored'"
+		" AND text LIKE 'Every season monitored, the specials left as they were by root (1 season and 4 episodes"
+		" changed).%%' AND text LIKE '%%What to monitor was \"As in Sonarr\" until now.%%'", series);
+	g_assert_cmpint(whole_state(fx, NULL), ==, AXIS_TV_IN_LIBRARY);
+
+	/* With the specials: the one without a file is wanted from now on, its
+	 * wait cleared for the next automatic search; nothing is queued at once. */
+	exec(fx, "UPDATE series_episode SET air_date = DATE '2024-02-01', next_search_at = now() + interval '1 day'"
+		" WHERE series_id = %" G_GINT64_FORMAT " AND season_number = 0", series);
+	g_assert_true(whole_change(fx, series, TRUE, AXIS_TV_MONITOR_ALL, TRUE, TRUE, &done));
+	g_assert_cmpuint(done.seasons, ==, 1);
+	g_assert_cmpuint(done.episodes, ==, 1);
+	on = monitored(fx, series);
+	g_assert_cmpstr(on, ==, "S00E01," ALL_REGULAR);
+	g_clear_pointer(&on, g_free);
+	assert_qf(fx, "0", "SELECT count(*) FROM series_episode WHERE series_id = %" G_GINT64_FORMAT
+		" AND next_search_at IS NOT NULL", series);
+	assert_ep(fx, series, 0, 1, AXIS_TV_WANTED, NULL);
+	g_assert_cmpint(whole_state(fx, NULL), ==, AXIS_TV_WANTED);
+	on = queued_searches(fx, series);
+	g_assert_null(on);
+	/* Every season again, without the specials' box: they are left monitored. */
+	g_assert_false(whole_change(fx, series, TRUE, AXIS_TV_MONITOR_ALL, FALSE, TRUE, &done));
+	assert_qf(fx, "0,1,2", "SELECT string_agg(number::text, ',' ORDER BY number) FROM series_season WHERE series_id = %"
+		G_GINT64_FORMAT " AND monitored", series);
+
+	/* Through all of it, not one file or link changed. */
+	now = links_fingerprint(fx);
+	g_assert_cmpstr(now, ==, links);
+
+	/* A choice that is not a whole series' (the episodes not aired yet), and
+	 * a series that is not there: refused, nothing written. */
+	memset(&change, 0, sizeof(change));
+	change.seasons = TRUE;
+	change.monitor = AXIS_TV_MONITOR_FUTURE;
+	change.user = "root";
+	g_assert_false(axis_tv_set_series_monitoring(fx->tv, series, &change, &done, &error));
+	g_assert_error(error, AXIS_TV_ERROR, AXIS_TV_ERROR_INVALID);
+	g_clear_error(&error);
+	change.monitor = AXIS_TV_MONITOR_NONE;
+	g_assert_false(axis_tv_set_series_monitoring(fx->tv, series + 4242, &change, &done, &error));
+	g_assert_error(error, AXIS_TV_ERROR, AXIS_TV_ERROR_NOT_FOUND);
+	g_clear_error(&error);
+	on = monitored(fx, series);
+	g_assert_cmpstr(on, ==, "S00E01," ALL_REGULAR);
+}
+
 /* ── 6.2 Following the metadata ─────────────────────────────────── */
 
 static void
@@ -5819,6 +6062,7 @@ main(int argc, char **argv)
 	ADD("/tv/assign-clears-overrides", test_assign_clears_overrides);
 	ADD("/tv/assign-again-keeps-published", test_assign_again_keeps_published);
 	ADD("/tv/add", test_add);
+	ADD("/tv/whole-monitoring", test_whole_monitoring);
 	ADD("/tv/metadata", test_metadata);
 	ADD("/tv/end-to-end", test_end_to_end);
 	AXIS_TEST_ADD_DB_CASE("/tv/end-to-end-native", Fixture, GUINT_TO_POINTER(NATIVE_ONLY), test_end_to_end_native);

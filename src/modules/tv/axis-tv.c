@@ -1209,6 +1209,181 @@ axis_tv_set_episode_monitored(
 	return in_transaction(self, episode_one, &change, error);
 }
 
+/* ── The monitoring of a whole series ───────────────────────────── */
+
+typedef struct
+{
+	gint64                        series_id;
+	const AxisTvWholeMonitoring  *change;
+	AxisTvWholeMonitored          done;
+} Whole;
+
+/* The seasons of @numbers ("{1,2}") monitored or not, each with its
+ * episodes, as season_one() changes one: only what differs is written, and
+ * an episode monitored now has its wait cleared, so that the next automatic
+ * search takes it.  No file, link, grab or download is read or written. */
+static gboolean
+whole_set(
+	AxisDbConn   *conn,
+	const gchar  *series_id,
+	const gchar  *numbers,
+	gboolean      on,
+	Whole        *whole,
+	GError      **error
+){
+	g_autoptr(AxisDbResult) seasons = NULL;
+	g_autoptr(AxisDbResult) episodes = NULL;
+	const gchar *params[3];
+
+	params[0] = series_id;
+	params[1] = numbers;
+	params[2] = on ? "true" : "false";
+	if (!axis_db_conn_exec(conn, "UPDATE series_season SET monitored = $3::boolean WHERE series_id = $1::bigint"
+	        " AND number = ANY ($2::integer[]) AND monitored IS DISTINCT FROM $3::boolean RETURNING id", 3, params,
+	        &seasons, error) ||
+	    !axis_db_conn_exec(conn, "UPDATE series_episode SET monitored = $3::boolean,"
+	        " next_search_at = CASE WHEN $3::boolean THEN NULL ELSE next_search_at END"
+	        " WHERE series_id = $1::bigint AND season_number = ANY ($2::integer[]) AND gone_at IS NULL"
+	        " AND monitored IS DISTINCT FROM $3::boolean RETURNING id", 3, params, &episodes, error))
+		return FALSE;
+	whole->done.seasons += axis_db_result_get_n_rows(seasons);
+	whole->done.episodes += axis_db_result_get_n_rows(episodes);
+	return TRUE;
+}
+
+static gboolean
+whole_one(
+	AxisTv      *self,
+	AxisDbConn  *conn,
+	gpointer     data,
+	GError     **error
+){
+	Whole *whole = data;
+	const AxisTvWholeMonitoring *change = whole->change;
+	g_autoptr(AxisTvSeries) series = NULL;
+	g_autoptr(GString) text = g_string_new(NULL);
+	g_autofree gchar *id = axis_tv_int_text(whole->series_id);
+	const gchar *by = change->user != NULL ? " by " : "";
+	const gchar *user = change->user != NULL ? change->user : "";
+	const gchar *params[3];
+	gboolean choice_changed;
+	gint latest = -1;
+
+	if (change->seasons && change->monitor != AXIS_TV_MONITOR_ALL && change->monitor != AXIS_TV_MONITOR_LATEST &&
+	    change->monitor != AXIS_TV_MONITOR_NONE) {
+		g_set_error_literal(error, AXIS_TV_ERROR, AXIS_TV_ERROR_INVALID,
+			"choose every season, the latest season only or no season");
+		return FALSE;
+	}
+	if (!locked_series(conn, whole->series_id, &series, error))
+		return FALSE;
+	if (change->seasons) {
+		g_autoptr(AxisDbResult) seasons = NULL;
+		g_autoptr(GString) on = g_string_new("{");
+		g_autoptr(GString) off = g_string_new("{");
+		gint first = G_MAXINT;
+		guint i;
+
+		params[0] = id;
+		if (!axis_db_conn_exec(conn, "SELECT number FROM series_season WHERE series_id = $1::bigint ORDER BY number", 1,
+		        params, &seasons, error))
+			return FALSE;
+		for (i = 0; i < axis_db_result_get_n_rows(seasons); i++) {
+			gint64 number = 0;
+
+			axis_db_result_get_int64(seasons, i, 0, &number);
+			if (number > 0) {
+				first = MIN(first, (gint)number);
+				latest = MAX(latest, (gint)number);
+			}
+		}
+		for (i = 0; i < axis_db_result_get_n_rows(seasons); i++) {
+			GString *side;
+			gint64 number = 0;
+
+			axis_db_result_get_int64(seasons, i, 0, &number);
+			/* "Every season" leaves the specials as they are unless they
+			 * were asked for with it. */
+			if (number == 0 && change->monitor == AXIS_TV_MONITOR_ALL && !change->specials)
+				continue;
+			side = axis_tv_monitor_takes_season(change->monitor, change->specials, (gint)number, first, latest) ?
+				on : off;
+			g_string_append_printf(side, "%s%" G_GINT64_FORMAT, side->len > 1 ? "," : "", number);
+		}
+		g_string_append_c(on, '}');
+		g_string_append_c(off, '}');
+		if ((on->len > 2 && !whole_set(conn, id, on->str, TRUE, whole, error)) ||
+		    (off->len > 2 && !whole_set(conn, id, off->str, FALSE, whole, error)))
+			return FALSE;
+	}
+	whole->done.new_changed = series->monitor_new != change->monitor_new;
+	choice_changed = change->seasons && series->monitor_choice != change->monitor;
+	whole->done.changed = whole->done.new_changed || choice_changed || whole->done.seasons > 0 ||
+		whole->done.episodes > 0;
+	if (!whole->done.changed)
+		return TRUE;
+	params[0] = id;
+	params[1] = change->monitor_new ? "true" : "false";
+	params[2] = change->seasons ? axis_tv_monitor_name(change->monitor) : NULL;
+	if (!axis_db_conn_exec(conn, "UPDATE series SET monitor_new = $2::boolean,"
+	        " monitor_choice = coalesce($3, monitor_choice), updated_at = now() WHERE id = $1::bigint", 3, params, NULL,
+	        error))
+		return FALSE;
+	if (change->seasons) {
+		switch (change->monitor) {
+		case AXIS_TV_MONITOR_ALL:
+			g_string_append_printf(text, "Every season monitored%s", change->specials ? ", the specials too" :
+				series->has_specials ? ", the specials left as they were" : "");
+			break;
+		case AXIS_TV_MONITOR_LATEST:
+			if (latest > 0)
+				g_string_append_printf(text, "Only the latest season (season %d) monitored", latest);
+			else
+				g_string_append(text, "No season monitored (none is known yet)");
+			break;
+		default:
+			g_string_append(text, "No season monitored any more, the specials neither");
+			break;
+		}
+		g_string_append_printf(text, "%s%s (%u %s and %u %s changed).", by, user, whole->done.seasons,
+			whole->done.seasons == 1 ? "season" : "seasons", whole->done.episodes,
+			whole->done.episodes == 1 ? "episode" : "episodes");
+		if (choice_changed)
+			g_string_append_printf(text, " What to monitor was \"%s\" until now.",
+				axis_tv_monitor_label(series->monitor_choice));
+		if (whole->done.new_changed)
+			g_string_append(text, change->monitor_new ? " New seasons are monitored when they are announced from now on." :
+				" New seasons are no longer monitored when they are announced.");
+	} else {
+		g_string_append_printf(text, change->monitor_new ? "New seasons are monitored when they are announced from now "
+			"on%s%s." : "New seasons are no longer monitored when they are announced%s%s.", by, user);
+	}
+	g_string_append(text, " No file was touched, and nothing was searched for at once.");
+	return axis_tv_store_eventf(conn, series, 0, "monitored", change->user, error, "%s", text->str);
+}
+
+gboolean
+axis_tv_set_series_monitoring(
+	AxisTv                       *self,
+	gint64                        series_id,
+	const AxisTvWholeMonitoring  *change,
+	AxisTvWholeMonitored         *done,
+	GError                      **error
+){
+	Whole whole;
+
+	memset(&whole, 0, sizeof(whole));
+	whole.series_id = series_id;
+	whole.change = change;
+	if (done != NULL)
+		memset(done, 0, sizeof(*done));
+	if (!in_transaction(self, whole_one, &whole, error))
+		return FALSE;
+	if (done != NULL)
+		*done = whole.done;
+	return TRUE;
+}
+
 /* ── Asking for a search ────────────────────────────────────────── */
 
 gboolean

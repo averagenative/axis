@@ -374,6 +374,20 @@ axis_tv_store_end_hold(
 
 /* ── Sync (axis-tv-sync.c) ──────────────────────────────────────── */
 
+/* Whether the choice @monitor monitors the season @number (0: the specials,
+ * only for "every episode" with @specials), of a series whose @first and
+ * @latest seasons are those: the one rule, for a series being added and for
+ * the monitoring of a whole series changed later
+ * (axis_tv_set_series_monitoring()). */
+gboolean
+axis_tv_monitor_takes_season(
+	AxisTvMonitor monitor,
+	gboolean      specials,
+	gint          number,
+	gint          first,
+	gint          latest
+);
+
 /* In the caller's transaction, the series' row locked: its seasons and
  * episodes as the metadata store has them now (see axis_tv_sync()); new
  * seasons and episodes take @new_monitored when the series is being added

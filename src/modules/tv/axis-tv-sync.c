@@ -76,6 +76,28 @@ get_int(
 	return value;
 }
 
+gboolean
+axis_tv_monitor_takes_season(
+	AxisTvMonitor monitor,
+	gboolean      specials,
+	gint          number,
+	gint          first,
+	gint          latest
+){
+	switch (monitor) {
+	case AXIS_TV_MONITOR_ALL:
+		return number > 0 || specials;
+	case AXIS_TV_MONITOR_FUTURE:
+		return number > 0;
+	case AXIS_TV_MONITOR_LATEST:
+		return number > 0 && number == latest;
+	case AXIS_TV_MONITOR_FIRST:
+		return number > 0 && number == first;
+	default:
+		return FALSE;
+	}
+}
+
 /* Whether a season is monitored when it is first known. */
 static gboolean
 season_monitored(
@@ -87,18 +109,7 @@ season_monitored(
 ){
 	if (adding == NULL)
 		return series->monitor_new && number > 0;
-	switch (adding->monitor) {
-	case AXIS_TV_MONITOR_ALL:
-		return number > 0 || adding->specials;
-	case AXIS_TV_MONITOR_FUTURE:
-		return number > 0;
-	case AXIS_TV_MONITOR_LATEST:
-		return number > 0 && number == latest;
-	case AXIS_TV_MONITOR_FIRST:
-		return number > 0 && number == first;
-	default:
-		return FALSE;
-	}
+	return axis_tv_monitor_takes_season(adding->monitor, adding->specials, number, first, latest);
 }
 
 gboolean

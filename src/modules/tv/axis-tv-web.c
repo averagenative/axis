@@ -7,7 +7,9 @@
  *   POST /series                      add a series (title, profile, root,
  *                                     monitor, specials, search)
  *   POST /series/:id/search           scope=episode|season|series, item=
- *   POST /series/:id/monitor          season=N or episode=ID, monitored=yes
+ *   POST /series/:id/monitor          season=N or episode=ID, monitored=yes;
+ *                                     or the whole series: whole=keep|all|
+ *                                     latest|none, specials=yes, new=yes
  *   POST /series/:id/grab             a listed release (candidate=)
  *   POST /series/:id/give-up          an open grab (grab=, confirm=yes)
  *   POST /series/:id/blocklist/clear  one entry (entry=) or all
@@ -621,6 +623,12 @@ axis_tv_web_done_message(const gchar *key)
 		  "minute." },
 		{ "nothing_wanted", "Nothing of it is wanted now: no search was queued." },
 		{ "monitored", "Monitoring was changed." },
+		{ "monitoring", "The monitoring of the whole series was changed. An episode that is wanted now is searched for "
+		  "by the next automatic search, at the scheduler's ordinary pace: nothing was searched for at once. No file was "
+		  "touched: an episode that has a file keeps it, monitored or not." },
+		{ "monitoring_saved", "The monitoring of the whole series was saved. No episode's monitoring changed, and no "
+		  "file was touched." },
+		{ "monitoring_same", "Nothing changed: the series was monitored that way already." },
 		{ "grabbed", "The release was sent to a download client." },
 		{ "given_up", "Axis gave up on the download: it is on the blocklist, it is being removed from its client, and "
 		  "the next best release is sought. A torrent's client deletes its files; SABnzbd keeps the files of a job "
@@ -1713,6 +1721,9 @@ typedef struct
 	AxisTvAsked  asked;	/* a search: what came of it */
 	gint64       episode;	/* an edit: the episode whose releases it came from */
 	AxisTvEdited edited;
+	gboolean     whole;	/* monitoring: of the whole series (its card's form) */
+	AxisTvWholeMonitoring monitoring;
+	AxisTvWholeMonitored  monitored;
 	gchar       *back;	/* (nullable) the page the form came from */
 	gchar       *at;	/* (nullable) the place on it (web/axis-web-place.h) */
 	GError      *error;
@@ -1757,7 +1768,10 @@ act_run(
 				work->arg, FALSE, work->user, &work->asked, &work->queued, &work->error);
 		break;
 	case ACT_MONITOR:
-		if (work->arg > 0)
+		if (work->whole) {
+			work->monitoring.user = work->user;
+			axis_tv_set_series_monitoring(self, work->series_id, &work->monitoring, &work->monitored, &work->error);
+		} else if (work->arg > 0)
 			axis_tv_set_episode_monitored(self, work->series_id, work->arg, work->flag, work->user, &work->error);
 		else
 			axis_tv_set_season_monitored(self, work->series_id, work->season, work->flag, work->user, &work->error);
@@ -1888,6 +1902,13 @@ act_done(
 			place = g_strdup("settings");
 		break;
 	case ACT_MONITOR:
+		if (work->whole) {
+			/* Back at the series' card "Monitoring", with what came of it. */
+			key = !work->monitored.changed ? "monitoring_same" : work->monitored.episodes > 0 ? "monitoring" :
+				"monitoring_saved";
+			place = g_strdup("monitoring");
+			break;
+		}
 		key = "monitored";
 		place = work->arg > 0 ? g_strdup_printf("episode-%" G_GINT64_FORMAT, work->arg) :
 			g_strdup_printf("season-%d", work->season);
@@ -2051,7 +2072,29 @@ start_act(
 		}
 		break;
 	}
-	case ACT_MONITOR:
+	case ACT_MONITOR: {
+		/* The whole series' form (its card "Monitoring"): what to do with
+		 * the seasons, and whether new ones are monitored.  Without "whole",
+		 * a season's or an episode's. */
+		const gchar *whole = htmx_request_get_form_value(request, "whole");
+
+		if (whole != NULL) {
+			work->whole = TRUE;
+			work->monitoring.seasons = strcmp(whole, "keep") != 0;
+			work->monitoring.specials = axis_web_storage_form_yes(request, "specials");
+			work->monitoring.monitor_new = axis_web_storage_form_yes(request, "new");
+			if (strcmp(whole, "all") == 0) {
+				work->monitoring.monitor = AXIS_TV_MONITOR_ALL;
+			} else if (strcmp(whole, "latest") == 0) {
+				work->monitoring.monitor = AXIS_TV_MONITOR_LATEST;
+			} else if (strcmp(whole, "none") == 0) {
+				work->monitoring.monitor = AXIS_TV_MONITOR_NONE;
+			} else if (work->monitoring.seasons) {
+				act_work_free(work);
+				return axis_web_error_respond(request, 400, "Not changed", "Choose what to do with the seasons.");
+			}
+			break;
+		}
 		work->arg = form_id(request, "episode");
 		work->season = form_season(request, "season");
 		work->flag = axis_web_storage_form_yes(request, "monitored");
@@ -2060,6 +2103,7 @@ start_act(
 			return axis_web_error_respond(request, 400, "Not changed", "Say which season or episode.");
 		}
 		break;
+	}
 	case ACT_GRAB:
 		work->arg = form_id(request, "candidate");
 		if (work->arg <= 0) {

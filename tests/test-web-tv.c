@@ -7126,10 +7126,284 @@ test_replace_grab(Fixture *fx, gconstpointer data)
 	g_free(m.grab);
 }
 
+/* ── The series' own mark, and the monitoring of a whole series ─── */
+
+/* The line under a series' title: its mark and its sentence. */
+static gchar *
+state_line(const gchar *body)
+{
+	const gchar *line = strstr(body, "film-state-line");
+	const gchar *end = line != NULL ? strstr(line, "</div>") : NULL;
+
+	if (end == NULL)
+		g_error("expected the series' state line in:\n%s", body);
+	return g_strndup(line, (gsize)(end - line));
+}
+
+static gchar *
+monitoring_links(Fixture *fx)
+{
+	return q(fx, "SELECT (SELECT count(*) FROM library_file) || '|' || (SELECT count(*) FROM series_file) || '|' ||"
+		" (SELECT string_agg(file_id || ':' || episode_id, ',' ORDER BY file_id, episode_id) FROM series_file_episode)");
+}
+
+/* The whole-series form posted by an administrator from the series' page;
+ * the Location it answers with. */
+static gchar *
+monitoring_post(
+	Fixture     *fx,
+	gint64       series,
+	const gchar *form
+){
+	g_autofree gchar *page = g_strdup_printf("/series/%" G_GINT64_FORMAT, series);
+	g_autofree gchar *action = g_strdup_printf("/series/%" G_GINT64_FORMAT "/monitor", series);
+	AxisTestReply reply = post_as(fx, fx->admin, page, action, form);
+	gchar *location;
+
+	g_assert_cmpuint(reply.status, ==, 303);
+	location = g_strdup(axis_test_reply_header(&reply, "Location"));
+	axis_test_reply_clear(&reply);
+	g_assert_nonnull(location);
+	return location;
+}
+
+/*
+ * Spec (tv, series-monitoring-control): A series is "Not monitored" only
+ * when nothing of it is monitored; The monitoring of a whole series is
+ * changed in one place.  The series that read "Not monitored": both seasons
+ * monitored and wholly in the library, the specials not monitored, new
+ * seasons monitored.
+ */
+static void
+test_series_monitoring(Fixture *fx, gconstpointer data)
+{
+	gint64 series = add_series(fx, "202", AXIS_TV_MONITOR_ALL);
+	g_autofree gchar *page = g_strdup_printf("/series/%" G_GINT64_FORMAT, series);
+	g_autofree gchar *action = g_strdup_printf("/series/%" G_GINT64_FORMAT "/monitor", series);
+	g_autofree gchar *links = NULL;
+	g_autofree gchar *now = NULL;
+	g_autofree gchar *line = NULL;
+	g_autofree gchar *location = NULL;
+	g_autofree gchar *n = NULL;
+	AxisTestReply reply;
+	gint season;
+	gint number;
+
+	axis_test_db_exec(fx->t->db, "UPDATE series_episode SET air_date = DATE '2024-05-01' WHERE season_number = 2"
+		" AND number > 2");
+	for (season = 1; season <= 2; season++) {
+		for (number = 1; number <= 4; number++) {
+			g_autofree gchar *name = g_strdup_printf("Harbour Lights (2024)/Season %02d/S%02dE%02d.mkv", season, season,
+				number);
+
+			in_library(fx, series, episode_id(fx, series, season, number), name, "bluray_1080p");
+		}
+	}
+	links = monitoring_links(fx);
+	g_assert_cmpint(qi(fx, "SELECT count(*) FROM series_season WHERE monitored"), ==, 2);
+	g_assert_cmpint(qi(fx, "SELECT count(*) FROM series WHERE monitor_new AND monitor_choice = 'all'"), ==, 1);
+
+	/* Its own page: in the library, with what it does about new episodes;
+	 * the specials' row alone says "Not monitored". */
+	reply = get_as(fx, fx->admin, page);
+	g_assert_cmpuint(reply.status, ==, 200);
+	line = state_line(reply.body);
+	assert_contains(line, "film-mark-in_library");
+	assert_lacks(line, "film-mark-unmonitored");
+	assert_lacks(line, "Not monitored");
+	assert_contains(line, "Every monitored episode that has aired is in the library.");
+	assert_contains(line, "New seasons and episodes are monitored as they are announced.");
+	g_clear_pointer(&line, g_free);
+	assert_contains(reply.body, "8 of 8 aired episodes in the library");
+	/* The card: how it stands in words, and one form for all of it. */
+	assert_contains(reply.body, "id=\"monitoring\"");
+	assert_contains(reply.body, "2 of 2 seasons monitored; the specials are not monitored; new seasons are monitored "
+		"when they are announced.");
+	assert_contains(reply.body, "name=\"whole\"");
+	assert_contains(reply.body, "Monitor every season");
+	assert_contains(reply.body, "Monitor the latest season only");
+	assert_contains(reply.body, "Stop monitoring every season");
+	assert_contains(reply.body, "Monitor new seasons and episodes as they are announced");
+	assert_contains(reply.body, "With every season, monitor the specials too");
+	assert_contains(reply.body, "Save monitoring of the whole series");
+	assert_contains(reply.body, "No file is deleted, moved or unlinked");
+	assert_lacks(reply.body, "Monitored as in Sonarr");
+	/* (The seasons' own ticks stay.) */
+	assert_contains(reply.body, "Save monitoring of this season");
+	g_assert_true(strstr(reply.body, "id=\"monitoring\"") < strstr(reply.body, "id=\"season-2\""));
+	assert_csp_clean(reply.body);
+	axis_test_reply_clear(&reply);
+	/* A viewer reads how it stands, and has no form. */
+	reply = get_as(fx, fx->viewer, page);
+	assert_contains(reply.body, "2 of 2 seasons monitored");
+	assert_lacks(reply.body, "Save monitoring of the whole series");
+	assert_lacks(reply.body, "name=\"whole\"");
+	axis_test_reply_clear(&reply);
+	/* The list says the same of it, in both views. */
+	reply = get_as(fx, fx->admin, "/series");
+	assert_contains(reply.body, "Harbour Lights");
+	assert_contains(reply.body, "film-mark-in_library");
+	assert_lacks(reply.body, "film-mark-unmonitored");
+	axis_test_reply_clear(&reply);
+	reply = get_as(fx, fx->admin, "/series?view=table");
+	assert_contains(reply.body, "film-mark-in_library");
+	assert_lacks(reply.body, "film-mark-unmonitored");
+	axis_test_reply_clear(&reply);
+
+	/* A viewer cannot change it, with the token; an administrator cannot
+	 * without it (a forged form); a choice that is none is refused. */
+	reply = post_as(fx, fx->viewer, page, action, "whole=none");
+	g_assert_cmpuint(reply.status, ==, 403);
+	axis_test_reply_clear(&reply);
+	reply = post_as(fx, fx->admin, NULL, action, "whole=none");
+	g_assert_cmpuint(reply.status, ==, 403);
+	axis_test_reply_clear(&reply);
+	reply = post_as(fx, fx->admin, page, action, "whole=sideways&new=yes");
+	g_assert_cmpuint(reply.status, ==, 400);
+	assert_contains(reply.body, "Choose what to do with the seasons.");
+	axis_test_reply_clear(&reply);
+	g_assert_cmpint(qi(fx, "SELECT count(*) FROM series_episode WHERE monitored"), ==, 8);
+	g_assert_cmpint(qi(fx, "SELECT count(*) FROM series WHERE monitor_new AND monitor_choice = 'all'"), ==, 1);
+	g_assert_cmpint(qi(fx, "SELECT count(*) FROM series_event WHERE kind = 'monitored'"), ==, 0);
+
+	/* The box alone, cleared: new seasons are not monitored; the seasons,
+	 * the episodes and the choice are as they were, and the series is still
+	 * in the library. */
+	location = monitoring_post(fx, series, "whole=keep");
+	g_assert_true(g_str_has_suffix(location, "done=monitoring_saved&at=monitoring#monitoring"));
+	reply = follow(fx, location);
+	assert_notice_at(reply.body, "monitoring", "The monitoring of the whole series was saved.");
+	assert_contains(reply.body, "2 of 2 seasons monitored; the specials are not monitored; new seasons are not "
+		"monitored until you choose them.");
+	line = state_line(reply.body);
+	assert_contains(line, "film-mark-in_library");
+	assert_lacks(line, "New seasons and episodes are monitored");
+	g_clear_pointer(&line, g_free);
+	axis_test_reply_clear(&reply);
+	g_clear_pointer(&location, g_free);
+	g_assert_cmpint(qi(fx, "SELECT count(*) FROM series WHERE NOT monitor_new AND monitor_choice = 'all'"), ==, 1);
+	g_assert_cmpint(qi(fx, "SELECT count(*) FROM series_episode WHERE monitored"), ==, 8);
+	g_assert_cmpint(qi(fx, "SELECT count(*) FROM series_event WHERE kind = 'monitored' AND by_user = 'root' AND text LIKE"
+		" 'New seasons are no longer monitored when they are announced by root.%%'"), ==, 1);
+
+	/* Stop monitoring every season: now, and only now, it is not monitored.
+	 * The history says who, and its files are where they were. */
+	location = monitoring_post(fx, series, "whole=none");
+	g_assert_true(g_str_has_suffix(location, "done=monitoring&at=monitoring#monitoring"));
+	reply = follow(fx, location);
+	assert_notice_at(reply.body, "monitoring", "The monitoring of the whole series was changed.");
+	assert_contains(reply.body, "No file was touched: an episode that has a file keeps it, monitored or not.");
+	line = state_line(reply.body);
+	assert_contains(line, "film-mark-unmonitored");
+	assert_contains(line, ">Not monitored<");
+	assert_contains(line, "No season is monitored, and new seasons are not: Axis searches for nothing of it. 8 episodes "
+		"are in the library.");
+	g_clear_pointer(&line, g_free);
+	assert_contains(reply.body, "0 of 2 seasons monitored; the specials are not monitored; new seasons are not monitored "
+		"until you choose them.");
+	assert_contains(reply.body, "No season monitored any more, the specials neither by root (2 seasons and 8 episodes "
+		"changed).");
+	axis_test_reply_clear(&reply);
+	g_clear_pointer(&location, g_free);
+	g_assert_cmpint(qi(fx, "SELECT count(*) FROM series_episode WHERE monitored"), ==, 0);
+	g_assert_cmpint(qi(fx, "SELECT count(*) FROM series_season WHERE monitored"), ==, 0);
+	g_assert_cmpint(qi(fx, "SELECT count(*) FROM series WHERE NOT monitor_new AND monitor_choice = 'none'"), ==, 1);
+	reply = get_as(fx, fx->admin, "/series");
+	assert_contains(reply.body, "film-mark-unmonitored");
+	assert_lacks(reply.body, "film-mark-in_library");
+	axis_test_reply_clear(&reply);
+	now = monitoring_links(fx);
+	g_assert_cmpstr(now, ==, links);
+	g_clear_pointer(&now, g_free);
+	/* The same again: nothing changed, and the page says so. */
+	location = monitoring_post(fx, series, "whole=none");
+	g_assert_true(g_str_has_suffix(location, "done=monitoring_same&at=monitoring#monitoring"));
+	reply = follow(fx, location);
+	assert_notice_at(reply.body, "monitoring", "Nothing changed: the series was monitored that way already.");
+	axis_test_reply_clear(&reply);
+	g_clear_pointer(&location, g_free);
+	g_assert_cmpint(qi(fx, "SELECT count(*) FROM series_event WHERE kind = 'monitored'"), ==, 2);
+
+	/* The latest season only, and new seasons again: one season left out,
+	 * the rest in the library. */
+	location = monitoring_post(fx, series, "whole=latest&new=yes");
+	g_assert_true(g_str_has_suffix(location, "done=monitoring&at=monitoring#monitoring"));
+	reply = follow(fx, location);
+	assert_contains(reply.body, "1 of 2 seasons monitored; the specials are not monitored; new seasons are monitored "
+		"when they are announced.");
+	line = state_line(reply.body);
+	assert_contains(line, "film-mark-in_library");
+	assert_lacks(line, "Not monitored");
+	g_clear_pointer(&line, g_free);
+	assert_contains(reply.body, "Only the latest season (season 2) monitored by root (1 season and 4 episodes changed).");
+	axis_test_reply_clear(&reply);
+	g_clear_pointer(&location, g_free);
+	n = q(fx, "SELECT string_agg(DISTINCT season_number::text, ',') FROM series_episode WHERE monitored");
+	g_assert_cmpstr(n, ==, "2");
+	g_clear_pointer(&n, g_free);
+	g_assert_cmpint(qi(fx, "SELECT count(*) FROM series WHERE monitor_new AND monitor_choice = 'latest'"), ==, 1);
+	reply = get_as(fx, fx->admin, "/series");
+	assert_contains(reply.body, "film-mark-in_library");
+	assert_lacks(reply.body, "film-mark-unmonitored");
+	axis_test_reply_clear(&reply);
+
+	/* A series migrated says "As in Sonarr" until a person chooses for the
+	 * whole of it: the box alone leaves that; a choice replaces it. */
+	axis_test_db_exec(fx->t->db, "UPDATE series SET monitor_choice = 'brought'");
+	reply = get_as(fx, fx->admin, page);
+	assert_contains(reply.body, "Monitored as in Sonarr: each season and episode as it was there");
+	axis_test_reply_clear(&reply);
+	location = monitoring_post(fx, series, "whole=keep&new=yes");
+	g_assert_true(g_str_has_suffix(location, "done=monitoring_same&at=monitoring#monitoring"));
+	g_clear_pointer(&location, g_free);
+	g_assert_cmpint(qi(fx, "SELECT count(*) FROM series WHERE monitor_choice = 'brought'"), ==, 1);
+	/* Every season: the specials are left as they are. */
+	location = monitoring_post(fx, series, "whole=all&new=yes");
+	g_assert_true(g_str_has_suffix(location, "done=monitoring&at=monitoring#monitoring"));
+	reply = follow(fx, location);
+	assert_lacks(reply.body, "Monitored as in Sonarr: each season");
+	assert_contains(reply.body, "2 of 2 seasons monitored; the specials are not monitored; new seasons are monitored "
+		"when they are announced.");
+	assert_contains(reply.body, "Every season monitored, the specials left as they were by root (1 season and 4 episodes "
+		"changed). What to monitor was \"As in Sonarr\" until now.");
+	axis_test_reply_clear(&reply);
+	g_clear_pointer(&location, g_free);
+	g_assert_cmpint(qi(fx, "SELECT count(*) FROM series WHERE monitor_choice = 'all'"), ==, 1);
+	g_assert_cmpint(qi(fx, "SELECT count(*) FROM series_episode WHERE monitored AND season_number > 0"), ==, 8);
+	g_assert_cmpint(qi(fx, "SELECT count(*) FROM series_episode WHERE monitored AND season_number = 0"), ==, 0);
+
+	/* With the specials' box: the special, aired and without a file, is
+	 * wanted from now on; its wait is cleared and nothing is queued at once. */
+	axis_test_db_exec(fx->t->db, "UPDATE series_episode SET air_date = DATE '2024-02-01', next_search_at = now() +"
+		" interval '1 day' WHERE season_number = 0");
+	location = monitoring_post(fx, series, "whole=all&specials=yes&new=yes");
+	g_assert_true(g_str_has_suffix(location, "done=monitoring&at=monitoring#monitoring"));
+	reply = follow(fx, location);
+	assert_contains(reply.body, "2 of 2 seasons monitored; the specials are monitored; new seasons are monitored when "
+		"they are announced.");
+	assert_contains(reply.body, "Every season monitored, the specials too by root (1 season and 1 episode changed).");
+	line = state_line(reply.body);
+	assert_contains(line, "film-mark-wanted");
+	g_clear_pointer(&line, g_free);
+	axis_test_reply_clear(&reply);
+	g_clear_pointer(&location, g_free);
+	g_assert_cmpint(qi(fx, "SELECT count(*) FROM series_episode WHERE monitored"), ==, 9);
+	g_assert_cmpint(qi(fx, "SELECT count(*) FROM series_episode WHERE next_search_at IS NOT NULL"), ==, 0);
+	g_assert_cmpint(qi(fx, "SELECT count(*) FROM job WHERE kind = 'tv.search'"), ==, 0);
+
+	/* Every change with the administrator who made it; not one file or link
+	 * changed through all of it. */
+	g_assert_cmpint(qi(fx, "SELECT count(*) FROM series_event WHERE kind = 'monitored' AND by_user = 'root'"), ==, 5);
+	now = monitoring_links(fx);
+	g_assert_cmpstr(now, ==, links);
+	g_assert_cmpuint(logged("monitoring changed"), >=, 5);
+}
+
 int
 main(int argc, char **argv)
 {
 	g_test_init(&argc, &argv, NULL);
+	AXIS_TEST_ADD_DB_CASE("/web/tv/series-monitoring", Fixture, NULL, test_series_monitoring);
 	AXIS_TEST_ADD_DB_CASE("/web/tv/replace-grab", Fixture, NULL, test_replace_grab);
 	AXIS_TEST_ADD_DB_CASE("/web/tv/anime-kind", Fixture, NULL, test_anime_kind);
 	AXIS_TEST_ADD_DB_CASE("/web/tv/anime-add", Fixture, NULL, test_anime_add);

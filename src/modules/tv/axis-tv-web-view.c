@@ -1437,6 +1437,98 @@ season_section(
 	return HTMX_NODE(details);
 }
 
+/* "12 of 13 seasons monitored; the specials are not monitored; new seasons
+ * are monitored when they are announced." */
+static gchar *
+monitoring_words(const AxisTvSeries *s)
+{
+	GString *words = g_string_new(NULL);
+
+	if (s->n_seasons == 0)
+		g_string_append(words, "No season is known yet");
+	else
+		g_string_append_printf(words, "%u of %u %s monitored", s->n_seasons_monitored, s->n_seasons,
+			s->n_seasons == 1 ? "season" : "seasons");
+	if (s->has_specials)
+		g_string_append(words, s->specials_monitored ? "; the specials are monitored" :
+			"; the specials are not monitored");
+	g_string_append(words, s->monitor_new ? "; new seasons are monitored when they are announced." :
+		"; new seasons are not monitored until you choose them.");
+	return g_string_free(words, FALSE);
+}
+
+/*
+ * The monitoring of the whole series, at the top of its page: how it stands,
+ * in words, and for an administrator one form that changes it without
+ * opening each season (POST /series/:id/monitor with "whole").  The seasons'
+ * own ticks below stay.
+ */
+static HtmxNode *
+monitoring_card(
+	HtmxRequest      *request,
+	const SeriesWork *work,
+	gboolean          admin
+){
+	static const gchar *const choices[][2] = {
+		{ "keep", "Leave the seasons as they are" },
+		{ "all", "Monitor every season" },
+		{ "latest", "Monitor the latest season only" },
+		{ "none", "Stop monitoring every season" }
+	};
+	const AxisTvSeries *s = work->series;
+	HtmxNode *card = axis_web_storage_card("Monitoring");
+	g_autofree gchar *words = monitoring_words(s);
+	guint i;
+
+	htmx_element_set_id(HTMX_ELEMENT(card), "monitoring");
+	if (work->notice != NULL)
+		axis_web_notice_put(work->notice, card, "monitoring");
+	ADD(card, axis_web_storage_text("series-monitoring-now", words));
+	if (s->monitor_choice == AXIS_TV_MONITOR_BROUGHT)
+		ADD(card, axis_web_storage_text("help series-monitoring-brought", admin ?
+			"Monitored as in Sonarr: each season and episode as it was there when the series was migrated. A choice for "
+			"the seasons below replaces that." :
+			"Monitored as in Sonarr: each season and episode as it was there when the series was migrated."));
+	if (admin) {
+		g_autofree gchar *action = g_strdup_printf("/series/%" G_GINT64_FORMAT "/monitor", s->id);
+		HtmxNode *form = axis_web_auth_post_form(request, action);
+		HtmxDiv *field = htmx_div_new();
+		HtmxLabel *label = htmx_label_new_for("series-monitoring-seasons");
+		HtmxSelect *select = htmx_select_new_with_name("whole");
+
+		htmx_element_add_class(HTMX_ELEMENT(form), "film-form");
+		htmx_element_add_class(HTMX_ELEMENT(form), "series-monitoring");
+		htmx_element_add_class(HTMX_ELEMENT(field), "field");
+		htmx_node_set_text_content(HTMX_NODE(label), "Seasons");
+		htmx_element_set_id(HTMX_ELEMENT(select), "series-monitoring-seasons");
+		for (i = 0; i < G_N_ELEMENTS(choices); i++) {
+			HtmxOption *option = htmx_option_new_with_value(choices[i][0], choices[i][1]);
+
+			htmx_option_set_selected(option, i == 0);
+			ADD(select, option);
+		}
+		ADD(field, label);
+		ADD(field, select);
+		ADD(form, field);
+		ADD(form, check_field("series-monitoring-specials", "With every season, monitor the specials too", "specials",
+			FALSE));
+		ADD(form, check_field("series-monitoring-new", "Monitor new seasons and episodes as they are announced", "new",
+			s->monitor_new));
+		ADD(form, axis_web_auth_button("Save monitoring of the whole series", "button-small"));
+		ADD(card, form);
+		ADD(card, axis_web_storage_text("help series-monitoring-help", "With the box ticked, a season the provider "
+			"announces later is monitored from the day it is listed, so its episodes are searched for as they air; "
+			"without it, a new season waits until you monitor it. A new episode of a season Axis knows is monitored as "
+			"its season is, either way. \"Monitor every season\" leaves the specials as they are unless you tick their "
+			"box. \"Monitor the latest season only\" stops monitoring every other season and the specials. \"Stop "
+			"monitoring every season\" stops the specials too."));
+		ADD(card, axis_web_storage_text("help series-monitoring-files", "A change here changes only what Axis searches "
+			"for. No file is deleted, moved or unlinked: an episode that has a file keeps it, monitored or not. "
+			"Nothing is searched for at once: the next automatic search takes the episodes that are wanted now."));
+	}
+	return card;
+}
+
 static HtmxNode *
 facts_card(
 	HtmxRequest      *request,
@@ -2215,6 +2307,8 @@ series_done(
 	ADD(info, axis_web_browser_link(title_href, "Series overview"));
 	ADD(head, info);
 	ADD(content, head);
+	/* What of it is monitored, and the one form for all of it. */
+	ADD(content, monitoring_card(request, work, admin));
 
 	/* The seasons, the latest first, the specials last. */
 	for (i = 0; i < work->episodes->len; i++) {

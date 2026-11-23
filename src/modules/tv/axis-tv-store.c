@@ -69,7 +69,7 @@ enum
 	S_PROVIDER_ID, S_PROFILE_ID, S_PROFILE_NAME, S_PROFILE_FORMAT, S_PROFILE_DEFINITION, S_ROOT_ID, S_ROOT_NAME,
 	S_VOLUME_ID, S_VOLUME_NAME, S_VOLUME_STATE, S_MONITOR, S_MONITOR_NEW, S_ADDED_BY, S_ADDED, S_SYNCED,
 	S_MISMATCHED, S_BY_PLACE, S_OTHER_LIVE, S_PROFILE_SLUG, S_SOURCE, S_CLAIMS, S_SYNCED_RECORD, S_HOLD,
-	S_KIND, S_BROUGHT_ABSOLUTE, S_ABSOLUTE_ONLY, S_SEASON_ABSOLUTE
+	S_KIND, S_BROUGHT_ABSOLUTE, S_ABSOLUTE_ONLY, S_SEASON_ABSOLUTE, S_SEASONS
 };
 
 /*
@@ -78,8 +78,9 @@ enum
  * the releases its searches ruled out, its episodes without a provider's id,
  * its stray downloads, the claims about its identifiers): the whole of it
  * for one series or a few (SERIES_SELECT), nothing of it for a list of every
- * series (SERIES_SELECT_LIST), which is then one join with no subquery a
- * row.  The columns are the same either way.
+ * series (SERIES_SELECT_LIST), which is then one join with one small
+ * subquery a row (the series' seasons, counted).  The columns are the same
+ * either way.
  */
 #define SERIES_SELECT_OF(ids, counts, claims, absolute) \
 	"SELECT s.id, s.title_id, t.title, t.original_title, t.year, t.status, t.runtime_minutes, t.poster_ref," \
@@ -88,6 +89,14 @@ enum
 	" v.name, v.state, s.monitor_choice, s.monitor_new, s.added_by, " US("s.added_at") ", " US("s.synced_at") "," \
 	counts " qp.slug, s.episode_source," claims " s.record_id, s.search_hold, s.kind, s.brought_absolute::text," \
 	absolute \
+	/* Its seasons and those of them that are monitored, its specials and \
+	 * whether they are: "n:m:s:t", from the series' few rows of \
+	 * series_season by their index (series_season_unique).  A list reads it \
+	 * too: without it a list could not tell a series of which nothing is \
+	 * monitored from one whose specials alone are not. */ \
+	", (SELECT count(*) FILTER (WHERE sn.number > 0) || ':' || count(*) FILTER (WHERE sn.number > 0 AND sn.monitored)" \
+	"   || ':' || count(*) FILTER (WHERE sn.number = 0) || ':' || count(*) FILTER (WHERE sn.number = 0 AND sn.monitored)" \
+	"   FROM series_season sn WHERE sn.series_id = s.id)" \
 	" FROM series s JOIN meta_title t ON t.id = s.title_id" \
 	" JOIN quality_profile qp ON qp.id = s.quality_profile_id" \
 	" LEFT JOIN library_root lr ON lr.id = s.root_id LEFT JOIN volume v ON v.id = lr.volume_id"
@@ -208,6 +217,20 @@ series_from_row(
 	s->brought_absolute = get_text(result, row, S_BROUGHT_ABSOLUTE);
 	s->n_absolute_only = (guint)get_int(result, row, S_ABSOLUTE_ONLY, 0);
 	s->n_season_absolute = (guint)get_int(result, row, S_SEASON_ABSOLUTE, 0);
+	text = axis_db_result_get_text(result, row, S_SEASONS);
+	if (text != NULL) {
+		guint seasons = 0;
+		guint on = 0;
+		guint specials = 0;
+		guint specials_on = 0;
+
+		if (sscanf(text, "%u:%u:%u:%u", &seasons, &on, &specials, &specials_on) == 4) {
+			s->n_seasons = seasons;
+			s->n_seasons_monitored = on;
+			s->has_specials = specials > 0;
+			s->specials_monitored = specials_on > 0;
+		}
+	}
 	return s;
 }
 
@@ -701,6 +724,8 @@ summary_count(
 ){
 	summary->counts[state] += n;
 	summary->episodes += n;
+	if (e->monitored)
+		summary->monitored += n;
 	if (e->monitored && axis_tv_episode_aired(e, rules, NULL)) {
 		summary->aired_monitored += n;
 		if (e->n_files > 0)
@@ -717,12 +742,52 @@ summary_count(
 	}
 }
 
-/* The summary's sentence, from its counts (and its episodes that need
- * attention, when they were read). */
+gboolean
+axis_tv_series_monitored(
+	const AxisTvSeries *series,
+	guint               monitored_episodes
+){
+	return series->monitor_new || series->n_seasons_monitored > 0 || series->specials_monitored ||
+		monitored_episodes > 0;
+}
+
+/* What the series does about episodes that come later, for a series with
+ * nothing under way: said after its sentence. */
+static const gchar *
+summary_later(const AxisTvSummary *summary)
+{
+	const AxisTvSeries *s = summary->series;
+
+	if (s->monitor_new)
+		return " New seasons and episodes are monitored as they are announced.";
+	if (s->status == AXIS_META_STATUS_CONTINUING && (s->n_seasons_monitored > 0 || summary->monitored > 0))
+		return " New episodes of a monitored season are monitored as they are announced; new seasons are not.";
+	return "";
+}
+
+/* The summary's own state where its episodes' worst leaves it open, and its
+ * sentence, from its counts (and its episodes that need attention, when
+ * they were read). */
 static void
 summary_say(AxisTvSummary *summary)
 {
 	g_clear_pointer(&summary->reason, g_free);
+	/*
+	 * Every episode is in the library or not monitored (the two states that
+	 * are no worse than each other, so that the episode counted first would
+	 * decide): the series is not monitored only when nothing of it is; else
+	 * it is in the library when an episode of it is, and waits for what
+	 * airs when none is.  The specials, or a season left out, never make a
+	 * monitored series read as not monitored.
+	 */
+	if (summary->episodes > 0 && axis_tv_state_severity(summary->state) == 0) {
+		if (!axis_tv_series_monitored(summary->series, summary->monitored))
+			summary->state = AXIS_TV_UNMONITORED;
+		else if (summary->counts[AXIS_TV_IN_LIBRARY] > 0)
+			summary->state = AXIS_TV_IN_LIBRARY;
+		else
+			summary->state = AXIS_TV_NOT_AIRED;
+	}
 	if (summary->episodes == 0) {
 		summary->state = AXIS_TV_NOT_AIRED;
 		summary->reason = g_strdup("No episodes are known yet. Select Update details now on the series page to fetch them.");
@@ -732,13 +797,20 @@ summary_say(AxisTvSummary *summary)
 		/* Counted, and its episodes not read: the caller reads them
 		 * (axis_tv_store_overview_attention()) before it shows the series. */
 		summary->reason = NULL;
+	} else if (summary->state == AXIS_TV_UNMONITORED) {
+		summary->reason = summary->counts[AXIS_TV_IN_LIBRARY] == 0 ?
+			g_strdup("No season is monitored, and new seasons are not: Axis searches for nothing of it.") :
+			g_strdup_printf("No season is monitored, and new seasons are not: Axis searches for nothing of it. %u %s in "
+				"the library.", summary->counts[AXIS_TV_IN_LIBRARY], summary->counts[AXIS_TV_IN_LIBRARY] == 1 ?
+				"episode is" : "episodes are");
 	} else if (summary->aired_monitored == 0) {
 		summary->reason = summary->next_air_date != NULL ? g_strdup_printf("Next episode on %s.",
-			summary->next_air_date) : g_strdup("No monitored episode has aired.");
+			summary->next_air_date) : g_strdup_printf("No monitored episode has aired.%s", summary_later(summary));
 	} else {
 		/* What is under way (the share in the library is shown beside it). */
 		g_autoptr(GString) text = g_string_new(NULL);
 		guint wanted = summary->counts[AXIS_TV_WANTED] + summary->counts[AXIS_TV_SEARCHING];
+		gboolean settled;
 
 		if (wanted > 0)
 			g_string_append_printf(text, wanted == 1 ? "%u episode wanted" : "%u episodes wanted", wanted);
@@ -751,11 +823,17 @@ summary_say(AxisTvSummary *summary)
 		if (summary->counts[AXIS_TV_UPGRADE_WANTED] > 0)
 			g_string_append_printf(text, "%s%u wanted for an upgrade", text->len > 0 ? ", " : "",
 				summary->counts[AXIS_TV_UPGRADE_WANTED]);
-		if (text->len == 0)
-			g_string_append(text, "Every aired episode is in the library");
+		/* (Of the episodes it monitors, when others are neither monitored
+		 * nor in the library: the specials, mostly.) */
+		settled = text->len == 0;
+		if (settled)
+			g_string_append(text, summary->counts[AXIS_TV_UNMONITORED] > 0 ?
+				"Every monitored episode that has aired is in the library" : "Every aired episode is in the library");
 		if (summary->next_air_date != NULL)
 			g_string_append_printf(text, "; the next episode airs on %s", summary->next_air_date);
 		g_string_append_c(text, '.');
+		if (settled)
+			g_string_append(text, summary_later(summary));
 		summary->reason = g_string_free(g_steal_pointer(&text), FALSE);
 	}
 }

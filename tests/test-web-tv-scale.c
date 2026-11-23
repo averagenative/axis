@@ -498,6 +498,74 @@ make_varied(Fixture *fx)
 		" FROM series_episode e WHERE e.id %% 40 = 36");
 }
 
+#define SETTLED_SERIES 5
+
+/*
+ * Five more series with nothing under way, each of the specials (three
+ * episodes, never monitored, no file) and two seasons of four aired
+ * episodes: every episode of them is in the library or not monitored, the
+ * two states that are no worse than each other, so the series' own state is
+ * decided by what of it is monitored and not by the episode counted first
+ * (series-monitoring-control).
+ *
+ *   1  both seasons monitored and in the library, new seasons monitored:
+ *      the series that read "Not monitored"
+ *   2  nothing monitored, new seasons neither, its files in the library
+ *   3  season 1 left out, season 2 monitored, all of both in the library
+ *   4  nothing monitored and no file, new seasons monitored
+ *   5  nothing monitored and no file, new seasons neither
+ */
+static void
+make_settled(Fixture *fx)
+{
+	sql(fx, "WITH t AS (INSERT INTO meta_title (kind, title, year, status, provider, provider_id)"
+		" SELECT 'series', 'Settled Series ' || i, 2010 + i, 'ended', 'fixture', 'w' || i"
+		" FROM generate_series(1, %d) i RETURNING id, provider_id),"
+		" s AS (INSERT INTO series (title_id, quality_profile_id, root_id, monitor_new) SELECT t.id,"
+		"  (SELECT id FROM quality_profile ORDER BY (slug = 'balanced') DESC, id LIMIT 1), %" G_GINT64_FORMAT ","
+		"  substr(t.provider_id, 2)::int IN (1, 4) FROM t RETURNING id, title_id),"
+		" k AS (SELECT s.id, substr(t.provider_id, 2)::int AS i FROM s JOIN t ON t.id = s.title_id),"
+		" n AS (INSERT INTO series_season (series_id, number, monitored) SELECT k.id, g,"
+		"  (k.i = 1 AND g > 0) OR (k.i = 3 AND g = 2) FROM k, generate_series(0, 2) g RETURNING 1)"
+		" INSERT INTO series_episode (series_id, season_number, number, title, air_date, monitored)"
+		" SELECT k.id, g, e, 'Part ' || e, DATE '2018-02-05' + e, (k.i = 1 AND g > 0) OR (k.i = 3 AND g = 2)"
+		" FROM k, generate_series(0, 2) g, generate_series(1, 4) e WHERE g > 0 OR e < 4", SETTLED_SERIES, fx->root_id);
+	add_files(fx, "e.season_number > 0 AND e.series_id IN (SELECT s.id FROM series s JOIN meta_title t ON t.id ="
+		" s.title_id WHERE t.provider_id IN ('w1', 'w2', 'w3'))", "'bluray_1080p'", "", "", "s");
+}
+
+/* The state of the settled series @i (make_settled()), which @counted and
+ * @derived both give. */
+static AxisTvState
+settled_state(
+	const GPtrArray *counted,
+	const GPtrArray *derived,
+	guint            i,
+	const gchar    **reason
+){
+	g_autofree gchar *title = g_strdup_printf("Settled Series %u", i);
+	guint k;
+
+	for (k = 0; k < derived->len; k++) {
+		const AxisTvSummary *d = g_ptr_array_index(derived, k);
+		const AxisTvSummary *c = g_ptr_array_index(counted, k);
+
+		if (g_strcmp0(d->series->title, title) != 0)
+			continue;
+		g_assert_cmpint(c->state, ==, d->state);
+		g_assert_cmpuint(c->monitored, ==, d->monitored);
+		g_assert_cmpuint(c->series->n_seasons, ==, 2);
+		g_assert_true(c->series->has_specials);
+		g_assert_false(c->series->specials_monitored);
+		g_assert_cmpuint(c->series->n_seasons_monitored, ==, d->series->n_seasons_monitored);
+		if (reason != NULL)
+			*reason = d->reason;
+		return d->state;
+	}
+	g_error("no series called %s", title);
+	return AXIS_TV_ATTENTION;
+}
+
 /* @counted: by the database alone, no episode read; @derived: from every
  * episode's facts.  Every number and the state; the sentence, unless the
  * series needs attention (its episodes are then read before it is shown). */
@@ -580,6 +648,8 @@ test_counted_as_derived(Fixture *fx, gconstpointer data)
 	guint k;
 
 	make_varied(fx);
+	/* (After the varied ones: what their episodes' ids decide is not theirs.) */
+	make_settled(fx);
 	g_assert_true(axis_tv_list(fx->tv, &derived, &error));
 	g_assert_no_error(error);
 	/* By the database alone: not one episode read. */
@@ -587,11 +657,32 @@ test_counted_as_derived(Fixture *fx, gconstpointer data)
 	g_assert_true(axis_tv_list_counted(fx->tv, FALSE, &alone, &error));
 	g_assert_no_error(error);
 	g_assert_cmpuint(axis_tv_episodes_read(), ==, read);
-	g_assert_cmpuint(alone->len, ==, VARIED_SERIES);
+	g_assert_cmpuint(alone->len, ==, VARIED_SERIES + SETTLED_SERIES);
 	g_assert_true(axis_tv_list_counted(fx->tv, TRUE, &counted, &error));
 	g_assert_no_error(error);
-	g_assert_cmpuint(counted->len, ==, VARIED_SERIES);
-	g_assert_cmpuint(derived->len, ==, VARIED_SERIES);
+	g_assert_cmpuint(counted->len, ==, VARIED_SERIES + SETTLED_SERIES);
+	g_assert_cmpuint(derived->len, ==, VARIED_SERIES + SETTLED_SERIES);
+	/* Spec (tv, series-monitoring-control): A series is "Not monitored" only
+	 * when nothing of it is monitored.  Counted or derived, the same. */
+	{
+		const gchar *reason = NULL;
+
+		g_assert_cmpint(settled_state(alone, derived, 1, &reason), ==, AXIS_TV_IN_LIBRARY);
+		assert_contains(reason, "Every monitored episode that has aired is in the library.");
+		assert_contains(reason, "New seasons and episodes are monitored as they are announced.");
+		g_assert_cmpint(settled_state(alone, derived, 2, &reason), ==, AXIS_TV_UNMONITORED);
+		assert_contains(reason, "No season is monitored, and new seasons are not");
+		assert_contains(reason, "8 episodes are in the library.");
+		g_assert_cmpint(settled_state(alone, derived, 3, &reason), ==, AXIS_TV_IN_LIBRARY);
+		assert_contains(reason, "Every monitored episode that has aired is in the library.");
+		assert_lacks(reason, "New seasons and episodes");
+		g_assert_cmpint(settled_state(alone, derived, 4, &reason), ==, AXIS_TV_NOT_AIRED);
+		assert_contains(reason, "No monitored episode has aired. New seasons and episodes are monitored");
+		g_assert_cmpint(settled_state(alone, derived, 5, &reason), ==, AXIS_TV_UNMONITORED);
+		g_assert_cmpstr(reason, ==, "No season is monitored, and new seasons are not: Axis searches for nothing of it.");
+		g_assert_cmpint(settled_state(counted, derived, 1, NULL), ==, AXIS_TV_IN_LIBRARY);
+		g_assert_cmpint(settled_state(counted, derived, 2, NULL), ==, AXIS_TV_UNMONITORED);
+	}
 	for (i = 0; i < derived->len; i++) {
 		const AxisTvSummary *d = g_ptr_array_index(derived, i);
 
@@ -637,7 +728,8 @@ test_counted_as_derived(Fixture *fx, gconstpointer data)
 	/* The pages say the same.  The list's tabs: the series by their state. */
 	reply = get_page(fx, "/series");
 	g_assert_cmpuint(reply.status, ==, 200);
-	g_assert_cmpuint(tab_count(reply.body, "All"), ==, VARIED_SERIES);
+	g_assert_cmpuint(tab_count(reply.body, "All"), ==, VARIED_SERIES + SETTLED_SERIES);
+	g_assert_cmpuint(series_states[AXIS_TV_UNMONITORED], >=, 2);
 	for (k = 0; k < AXIS_TV_N_STATES; k++) {
 		if (series_states[k] > 0)
 			g_assert_cmpuint(tab_count(reply.body, axis_tv_state_label((AxisTvState)k)), ==, series_states[k]);
