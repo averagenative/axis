@@ -19,7 +19,9 @@
 - [x] 3.1 The change of a whole series: every choice, the box alone, nothing changed, the history, a migrated series, no file or link changed, nothing queued (`/tv/whole-monitoring`).
 - [x] 3.2 The page and the list for the series that read "Not monitored"; the form for an administrator, a viewer, and a forged post (`/web/tv/series-monitoring`).
 - [x] 3.3 Five settled series counted and derived alike (`/web/tv-scale/counted-as-derived`).
-- [ ] 3.4 Run the three test programs with the sanitizers. They were written while a gate held the machine and were not built.
+- [x] 3.4 Run `test-tv`, `test-web-tv`, `test-web-tv-scale` and `test-web-attention` with the sanitizers.
+- [x] 3.5 Measure the list's statement with and without the count of seasons at the scale fixture's size (see the design).
+- [x] 3.6 Style the card (`data/web/axis.css`), phone width included.
 
 ## 4. Documents
 

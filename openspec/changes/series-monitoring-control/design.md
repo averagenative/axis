@@ -29,6 +29,8 @@ The episodes' own ticks are counted by both paths already (`AxisTvSummary.monito
 
 `speed-up-lists-and-dashboard` made the list's statement one join with no subquery a row. This change adds one. It is an index probe that returns a handful of rows for each series. The alternative, joining the seasons grouped by series, reads the whole of `series_season` when one series is asked for, which every action on a series does.
 
+Measured on the scale fixture (1,500 series, 36,000 episodes, `/web/tv-scale/pages`): the list's statement takes 9.7 ms with the count and 4.8 ms without it. The TV list's page takes 228 to 230 ms either way, so the count is left as a subquery.
+
 ### The sentence
 
 - Not monitored: "No season is monitored, and new seasons are not: Axis searches for nothing of it." and, when there are files, "8 episodes are in the library."

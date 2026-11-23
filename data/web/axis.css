@@ -4532,6 +4532,27 @@ a.folder-mark:hover {
 	margin-top: 0.75rem;
 }
 
+/* A series' card "Monitoring": how it stands in a sentence, then the one
+ * form for all of it; its two boxes each on a line of their own, so that a
+ * long label is read whole. */
+.series-monitoring-now {
+	margin: 0;
+	font-weight: 600;
+}
+
+.series-monitoring {
+	margin-top: 0.75rem;
+}
+
+.series-monitoring > .field-check {
+	flex: 1 1 100%;
+}
+
+.series-monitoring-help,
+.series-monitoring-files {
+	max-width: 60rem;
+}
+
 /* The calendar: one section a day, an episode a row. */
 .series-calendar {
 	display: grid;
@@ -4986,6 +5007,11 @@ a.folder-mark:hover {
 	.film-form > .field {
 		flex-basis: 100%;
 		max-width: none;
+	}
+
+	/* The Monitoring card's button under its boxes, as wide as they are. */
+	.series-monitoring > button {
+		flex-basis: 100%;
 	}
 
 	/* The Naming preview: each film a block, its names under it, so that
