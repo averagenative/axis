@@ -284,6 +284,14 @@ typedef struct
 
 	AxisTvMonitor   monitor_choice;
 	gboolean        monitor_new;
+	/* Its seasons as their own rows say (the specials are not counted among
+	 * them): how many there are and how many are monitored, and whether it
+	 * has specials and they are monitored.  What says whether anything of it
+	 * is monitored at all (axis_tv_series_monitored()). */
+	guint           n_seasons;
+	guint           n_seasons_monitored;
+	gboolean        has_specials;
+	gboolean        specials_monitored;
 	gchar          *added_by;
 	gint64          added_us;
 	gint64          synced_us;
@@ -1116,6 +1124,15 @@ axis_tv_attention_sentence(const GPtrArray *items);
  * needs attention, @reason says why in words (the most common reason first)
  * and @attention lists each episode that needs it (AxisTvAttentionItem, by
  * season and number).
+ *
+ * The series' own state, when no episode of it is wanted, in flight, not
+ * aired or in need of attention (every episode is in the library or not
+ * monitored): %AXIS_TV_UNMONITORED only when nothing of it is monitored
+ * (axis_tv_series_monitored() says no: no season, no episode, and new
+ * seasons are not); else %AXIS_TV_IN_LIBRARY when an episode of it is in the
+ * library, and %AXIS_TV_NOT_AIRED when none is.  Episodes that are not
+ * monitored (the specials, a season left out) never make a monitored series
+ * read as not monitored, whatever the order its episodes are counted in.
  */
 typedef struct
 {
@@ -1124,6 +1141,7 @@ typedef struct
 	guint         in_library;	/* aired, monitored, in the library */
 	guint         aired_monitored;
 	guint         episodes;
+	guint         monitored;	/* monitored, aired or not, with a file or not */
 	AxisTvState   state;
 	gchar        *reason;
 	gchar        *next_air_date;	/* the next monitored episode's, or %NULL */
@@ -1138,6 +1156,14 @@ typedef struct
 
 void
 axis_tv_summary_free(AxisTvSummary *summary);
+
+/* Whether anything of the series is monitored: a season, the specials, one
+ * of its @monitored_episodes, or the seasons that come later. */
+gboolean
+axis_tv_series_monitored(
+	const AxisTvSeries *series,
+	guint               monitored_episodes
+);
 
 /* Every series (AxisTvSummary), by title, from the facts of every episode
  * of the library.  No page uses it: it is what axis_tv_list_counted() is
@@ -1469,6 +1495,73 @@ axis_tv_set_episode_monitored(
 	gboolean      monitored,
 	const gchar  *user,
 	GError      **error
+);
+
+/**
+ * AxisTvWholeMonitoring:
+ * @seasons: change the seasons too, as @monitor says; without it only
+ *   @monitor_new is set, and the seasons, the episodes and the series'
+ *   choice ("What to monitor") stay as they are
+ * @monitor: %AXIS_TV_MONITOR_ALL (every season; the specials only with
+ *   @specials, else left as they are), %AXIS_TV_MONITOR_LATEST (the latest
+ *   season and nothing else, as the Add form's choice: the other seasons and
+ *   the specials are not monitored) or %AXIS_TV_MONITOR_NONE (no season, the
+ *   specials neither)
+ * @specials: with %AXIS_TV_MONITOR_ALL, the specials too
+ * @monitor_new: the seasons that come later are monitored when announced
+ * @user: (nullable) who changes it
+ */
+typedef struct
+{
+	gboolean       seasons;
+	AxisTvMonitor  monitor;
+	gboolean       specials;
+	gboolean       monitor_new;
+	const gchar   *user;
+} AxisTvWholeMonitoring;
+
+/**
+ * AxisTvWholeMonitored:
+ * @changed: anything changed (a history line was written)
+ * @seasons: the seasons whose own tick changed
+ * @episodes: the episodes whose monitoring changed
+ * @new_changed: whether new seasons are monitored changed
+ */
+typedef struct
+{
+	gboolean changed;
+	guint    seasons;
+	guint    episodes;
+	gboolean new_changed;
+} AxisTvWholeMonitored;
+
+/**
+ * axis_tv_set_series_monitoring:
+ * @done: (out) (optional): what changed
+ *
+ * The monitoring of a whole series in one change: whether its new seasons
+ * are monitored, and, with @change->seasons, every season of it as the
+ * choice says, each with its episodes (as axis_tv_set_season_monitored()
+ * changes one).  The choice is decided a season by the rule the Add form's
+ * choices follow (axis_tv_monitor_takes_season()).  The series' choice
+ * becomes the one made, so a series brought over ("As in Sonarr") says what
+ * a person chose from then on.
+ *
+ * Only what is wanted changes: no file, no link between a file and an
+ * episode, no grab and no download is touched, and an episode that has a
+ * file keeps it whether it is monitored or not.  Nothing is searched for at
+ * once: an episode monitored now has its wait cleared, and the next
+ * automatic search takes it at the scheduler's ordinary pace, as after a
+ * change of one season.  A hold of a series brought over is not ended.  One
+ * line in the series' history, when anything changed.
+ */
+gboolean
+axis_tv_set_series_monitoring(
+	AxisTv                       *self,
+	gint64                        series_id,
+	const AxisTvWholeMonitoring  *change,
+	AxisTvWholeMonitored         *done,
+	GError                      **error
 );
 
 /**

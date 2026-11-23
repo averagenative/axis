@@ -73,6 +73,48 @@ episodes right away (Axis does this on a schedule anyway); **Remove this
 series**, last and apart from the others, forgets the series and touches no
 file.
 
+Under the series' name, a mark and a sentence say how the series stands.
+The mark is the worst state of its episodes. A series reads **Not
+monitored** only when nothing of it is monitored: no season, no episode, and
+new seasons are not monitored either. Specials that you do not monitor, or a
+season that you left out, do not make the series read **Not monitored**.
+When every monitored episode that has aired is in the library, the series
+reads **In library**, and the sentence says whether new seasons and episodes
+are monitored as they are announced.
+
+The **Monitoring** card, under the series' name, says what Axis monitors in
+words, for example "12 of 13 seasons monitored; the specials are not
+monitored; new seasons are monitored when they are announced." To change
+the monitoring of the whole series without opening each season:
+
+1. Under **Seasons**, select what to do with the seasons:
+   - **Leave the seasons as they are** changes no season.
+   - **Monitor every season** monitors every season and its episodes. The
+     specials stay as they are unless you select **With every season,
+     monitor the specials too**.
+   - **Monitor the latest season only** monitors the latest season and stops
+     monitoring every other season and the specials.
+   - **Stop monitoring every season** stops monitoring every season and the
+     specials.
+1. Select or clear **Monitor new seasons and episodes as they are
+   announced**. When it is selected, a season that the provider announces
+   later is monitored from the day it is listed, so Axis searches for its
+   episodes as they air. When it is cleared, a new season waits until you
+   monitor it. A new episode of a season that Axis already knows is
+   monitored as its season is, either way.
+1. Select **Save monitoring of the whole series**.
+
+The change affects only what Axis searches for. Axis does not delete, move
+or unlink a file: an episode that has a file keeps it, whether you monitor
+it or not. Axis searches for nothing at once. The next automatic search
+takes the episodes that are wanted now. To search right away, select
+**Search for every wanted episode**. The series' history records the change
+with your user name.
+
+A series that you migrated from Sonarr shows **As in Sonarr** under **What
+to monitor** until you select something other than **Leave the seasons as
+they are**. After that, it shows what you selected.
+
 When you change the quality profile, Axis searches again at once for every
 wanted episode the series monitors, with the new profile: a whole season
 where enough of it is wanted, else each episode. The notice after **Save**
