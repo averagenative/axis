@@ -256,9 +256,48 @@ axis_db_pool_get_connections_opened(AxisDbPool *self);
 guint
 axis_db_pool_get_statements_sent(AxisDbPool *self);
 
-/* Counts one statement sent on one of the pool's connections. */
+/* Counts one statement sent on one of the pool's connections, and tells the
+ * observer, if one is set. */
 void
-axis_db_pool_count_statement(AxisDbPool *self);
+axis_db_pool_count_statement(
+	AxisDbPool         *self,
+	const gchar        *sql,
+	guint               n_params,
+	const gchar *const *params
+);
+
+/**
+ * AxisDbStatementObserver:
+ * @sql: the statement as it was sent
+ * @n_params: how many parameters it has
+ * @params: (nullable): their values (each %NULL for SQL NULL); valid during
+ *   the call only
+ * @data: as given to axis_db_pool_set_statement_observer()
+ *
+ * Called on the thread that sent the statement, just after it was sent.
+ * It must not use the pool.
+ */
+typedef void (*AxisDbStatementObserver)(
+	const gchar        *sql,
+	guint               n_params,
+	const gchar *const *params,
+	gpointer            data
+);
+
+/**
+ * axis_db_pool_set_statement_observer:
+ * @observer: (nullable): told every statement the pool's connections send
+ *   from now on; %NULL: none
+ *
+ * For tests that measure the statements the daemon's own functions send
+ * (tests/test-db-scale.c): what is explained is what was sent.
+ */
+void
+axis_db_pool_set_statement_observer(
+	AxisDbPool              *self,
+	AxisDbStatementObserver  observer,
+	gpointer                 data
+);
 
 /**
  * axis_db_pool_get_n_in_use:

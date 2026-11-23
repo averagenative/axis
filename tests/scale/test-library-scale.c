@@ -412,8 +412,9 @@ estimate_list(
 	axis_library_filter_clear(&filter);
 }
 
-/* The plan of @sql as the estimator runs it (JIT off), or with JIT left on
- * when @jit (with its summary: plan_of's COSTS OFF hides it). */
+/* The plan of @sql as the estimator runs it (JIT off, as in every pooled
+ * session), or with JIT on when @jit (with its summary: plan_of's COSTS OFF
+ * hides it). */
 static gchar *
 plan_estimate(
 	Fixture             *fx,
@@ -433,8 +434,9 @@ plan_estimate(
 	g_assert_nonnull(conn);
 	g_assert_true(axis_db_conn_begin(conn, &error));
 	g_assert_true(axis_db_conn_exec(conn, "SET LOCAL statement_timeout = '120s'", 0, NULL, NULL, &error));
-	if (!jit)
-		g_assert_true(axis_db_conn_exec(conn, AXIS_ESTIMATE_SQL_NO_JIT, 0, NULL, NULL, &error));
+	/* (A pooled session has it off.) */
+	if (jit)
+		g_assert_true(axis_db_conn_exec(conn, "SET LOCAL jit = on", 0, NULL, NULL, &error));
 	g_assert_true(axis_db_conn_exec(conn, explain, n, values, &result, &error));
 	g_assert_true(axis_db_conn_commit(conn, &error));
 	axis_db_pool_release(fx->t->pool, conn);
@@ -484,7 +486,7 @@ estimate_plans(
 	g_print("#   savings list, the loader on a batch of films:\n%s", plan);
 	g_clear_pointer(&plan, g_free);
 	plan = plan_estimate(fx, AXIS_ESTIMATE_SQL_FILES, params, 1, TRUE);
-	g_print("#   the same with PostgreSQL's JIT left on (what AXIS_ESTIMATE_SQL_NO_JIT avoids):\n%s", plan);
+	g_print("#   the same with PostgreSQL's JIT on (what the pool's sessions avoid):\n%s", plan);
 
 	tracks = axis_test_library_q(fx->t, "SELECT '{' || string_agg(id::text, ',') || '}' FROM (SELECT id FROM"
 		" library_file WHERE root_id = %" G_GINT64_FORMAT " AND kind = 'audio' ORDER BY id LIMIT %d) x", music,

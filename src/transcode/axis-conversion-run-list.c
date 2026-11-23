@@ -543,8 +543,7 @@ axis_conversion_runs_build_list(
 	if (!axis_db_conn_exec(l.conn, "BEGIN ISOLATION LEVEL REPEATABLE READ", 0, NULL, NULL, error))
 		goto out;
 	if (!axis_db_conn_exec(l.conn, "SET LOCAL statement_timeout = '" AXIS_ESTIMATE_STATEMENT_TIMEOUT "'", 0, NULL, NULL,
-	        error) ||
-	    !axis_db_conn_exec(l.conn, AXIS_ESTIMATE_SQL_NO_JIT, 0, NULL, NULL, error))
+	        error))
 		goto rollback;
 	/* Built once: a list job run again after an interruption starts over. */
 	if (!axis_db_conn_exec(l.conn, "DELETE FROM conversion_run_entry WHERE run_id = $1::bigint", 1, params, NULL,

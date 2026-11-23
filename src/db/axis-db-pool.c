@@ -52,6 +52,8 @@ struct _AxisDbPool
 	guint        validation_interval_ms;
 	gint         connections_opened;	/* atomic */
 	gint         statements_sent;		/* atomic */
+	AxisDbStatementObserver observer;	/* under mutex */
+	gpointer     observer_data;
 
 	/* Fixed at creation */
 	guint        size;
@@ -215,10 +217,16 @@ on_notice(
 		g_debug("database %s: %s", severity, clean);
 }
 
+/* jit: the daemon's statements are short and many, and where the planner's
+ * estimate of one passes jit_above_cost PostgreSQL compiles it with LLVM at
+ * every run, which costs more than the statement (tests/test-db-scale.c
+ * measures it).  Off for every pooled session, as three statements had it
+ * by hand before. */
 static const gchar settings_sql[] =
 	"SELECT set_config('TimeZone', 'UTC', false),"
 	" set_config('statement_timeout', $1, false),"
-	" set_config('idle_in_transaction_session_timeout', $2, false)";
+	" set_config('idle_in_transaction_session_timeout', $2, false),"
+	" set_config('jit', 'off', false)";
 
 /* Applies the session settings to a fresh connection within @deadline.
  * Returns NULL on success, or what went wrong. */
@@ -962,10 +970,38 @@ axis_db_pool_get_statements_sent(AxisDbPool *self)
 }
 
 void
-axis_db_pool_count_statement(AxisDbPool *self)
-{
-	if (self != NULL)
-		g_atomic_int_inc(&self->statements_sent);
+axis_db_pool_count_statement(
+	AxisDbPool         *self,
+	const gchar        *sql,
+	guint               n_params,
+	const gchar *const *params
+){
+	AxisDbStatementObserver observer;
+	gpointer data;
+
+	if (self == NULL)
+		return;
+	g_atomic_int_inc(&self->statements_sent);
+	g_mutex_lock(&self->mutex);
+	observer = self->observer;
+	data = self->observer_data;
+	g_mutex_unlock(&self->mutex);
+	if (observer != NULL)
+		observer(sql, n_params, params, data);
+}
+
+void
+axis_db_pool_set_statement_observer(
+	AxisDbPool              *self,
+	AxisDbStatementObserver  observer,
+	gpointer                 data
+){
+	g_return_if_fail(self != NULL);
+
+	g_mutex_lock(&self->mutex);
+	self->observer = observer;
+	self->observer_data = data;
+	g_mutex_unlock(&self->mutex);
 }
 
 guint

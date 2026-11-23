@@ -72,13 +72,12 @@ axis_estimate_rows_new(void);
 	" LEFT JOIN media_info m ON m.file_id = f.id"
 
 /*
- * For the short statements of lists and file pages, in their transaction.
- * The correlated subqueries above give the loader a planned cost far above
+ * (The correlated subqueries above give the loader a planned cost far above
  * jit_above_cost, so PostgreSQL would compile it with LLVM each time: about
  * 380 ms (measured: tests/scale/test-library-scale.c) for a statement that
- * then runs in 1.5 ms, paid by every batch of a list.
+ * then runs in 1.5 ms, paid by every batch of a list.  Every pooled session
+ * has jit off for that reason: src/db/axis-db-pool.c.)
  */
-#define AXIS_ESTIMATE_SQL_NO_JIT "SET LOCAL jit = off"
 
 /* The files of $1 (an id array). */
 #define AXIS_ESTIMATE_SQL_FILES \

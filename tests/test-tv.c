@@ -1168,8 +1168,29 @@ test_metadata(Fixture *fx, gconstpointer data)
 	exec(fx, "INSERT INTO series_event (series_id, title_label, episode_id, kind, text) VALUES (%" G_GINT64_FORMAT ","
 		" 'Harbour Lights (2024)', %" G_GINT64_FORMAT ", 'searched', 'A search of it.')", series, low_tide);
 
-	/* Nothing changed: nothing to say. */
-	g_assert_cmpuint(sync_series(fx, series), ==, 0);
+	/* Nothing changed: nothing to say, and not one row is written again
+	 * (scale-database-first-batch): every episode's row, and the identity it
+	 * holds, is the version it was, where it was. */
+	{
+		g_autofree gchar *rows = q(fx, "SELECT string_agg(ctid::text || xmin::text, ',' ORDER BY id) FROM series_episode"
+			" WHERE series_id = %" G_GINT64_FORMAT, series);
+		g_autofree gchar *identities = q(fx, "SELECT string_agg(i.ctid::text || i.xmin::text, ',' ORDER BY i.episode_id)"
+			" FROM series_episode_identity i JOIN series_episode e ON e.id = i.episode_id WHERE e.series_id = %"
+			G_GINT64_FORMAT, series);
+		g_autofree gchar *rows_after = NULL;
+		g_autofree gchar *identities_after = NULL;
+
+		g_assert_nonnull(rows);
+		g_assert_nonnull(identities);
+		g_assert_cmpuint(sync_series(fx, series), ==, 0);
+		rows_after = q(fx, "SELECT string_agg(ctid::text || xmin::text, ',' ORDER BY id) FROM series_episode"
+			" WHERE series_id = %" G_GINT64_FORMAT, series);
+		identities_after = q(fx, "SELECT string_agg(i.ctid::text || i.xmin::text, ',' ORDER BY i.episode_id)"
+			" FROM series_episode_identity i JOIN series_episode e ON e.id = i.episode_id WHERE e.series_id = %"
+			G_GINT64_FORMAT, series);
+		g_assert_cmpstr(rows_after, ==, rows);
+		g_assert_cmpstr(identities_after, ==, identities);
+	}
 
 	/* A refresh brings a new episode to each season, and season 1 is
 	 * numbered anew (S01E02 is now S01E04, the two-part shifts up). */

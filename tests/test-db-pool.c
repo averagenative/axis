@@ -1003,6 +1003,8 @@ test_session_settings(Fixture *fx, gconstpointer data)
 		assert_setting(conns[i], "TimeZone", "UTC");
 		assert_setting(conns[i], "statement_timeout", "1min");
 		assert_setting(conns[i], "idle_in_transaction_session_timeout", "5min");
+		/* (scale-database-first-batch: no statement is compiled.) */
+		assert_setting(conns[i], "jit", "off");
 	}
 
 	axis_db_pool_release(fx->pool, conns[0]);

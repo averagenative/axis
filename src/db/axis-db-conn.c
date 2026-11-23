@@ -392,7 +392,7 @@ axis_db_conn_run(
 		conn_set_libpq_error(self, error, "cannot send the statement");
 		return FALSE;
 	}
-	axis_db_pool_count_statement(self->pool);
+	axis_db_pool_count_statement(self->pool, sql, n_params, params);
 
 	for (;;) {
 		while (PQisBusy(self->pg)) {

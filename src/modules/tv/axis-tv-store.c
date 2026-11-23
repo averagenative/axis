@@ -829,21 +829,14 @@ axis_tv_store_overview(
 	if (!axis_tv_store_series(conn, AXIS_TV_SERIES_LIST, series_ids, &series, error))
 		return FALSE;
 	/*
-	 * Without the server's just-in-time compilation: the planner prices the
-	 * look-up of an episode's last search as if every episode had one made,
-	 * which puts a large library's statement over the price at which it
-	 * compiles the plan first, and that compilation takes longer than the
-	 * statement (tens of milliseconds against a hundred).  The setting lasts
-	 * for this transaction only.
+	 * (Without the server's just-in-time compilation, as every statement of
+	 * a pooled session is, axis-db-pool.c: the planner prices the look-up of
+	 * an episode's last search as if every episode had one made, which puts
+	 * a large library's statement over the price at which it compiles the
+	 * plan first, and that compilation takes longer than the statement.)
 	 */
-	if (!axis_db_conn_begin(conn, error))
+	if (!axis_db_conn_exec(conn, classes_select, 3, params, &result, error))
 		return FALSE;
-	if (!axis_db_conn_exec(conn, "SET LOCAL jit = off", 0, NULL, NULL, error) ||
-	    !axis_db_conn_exec(conn, classes_select, 3, params, &result, error) ||
-	    !axis_db_conn_commit(conn, error)) {
-		axis_db_conn_rollback(conn, NULL);
-		return FALSE;
-	}
 
 	*summaries = g_ptr_array_new_with_free_func((GDestroyNotify)axis_tv_summary_free);
 	any = g_array_sized_new(FALSE, TRUE, sizeof(gboolean), series->len);

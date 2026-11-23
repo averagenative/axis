@@ -32,6 +32,19 @@
 
 #include <string.h>
 
+/* An episode's row takes what the metadata says of it now ($2 to $8), and
+ * is listed again if it was gone: written only where one of them differs. */
+#define AXIS_TV_SYNC_SQL_EPISODE \
+	"UPDATE series_episode SET provider_id = coalesce($2, provider_id)," \
+	" season_number = $3::integer, number = $4::integer, absolute_number = $5::integer," \
+	" title = left($6, 500), air_date = $7::date, runtime_minutes = $8::integer, gone_at = NULL" \
+	" WHERE id = $9::bigint AND series_id = $1::bigint" \
+	" AND (provider_id IS DISTINCT FROM coalesce($2, provider_id)" \
+	"  OR season_number IS DISTINCT FROM $3::integer OR number IS DISTINCT FROM $4::integer" \
+	"  OR absolute_number IS DISTINCT FROM $5::integer OR title IS DISTINCT FROM left($6, 500)" \
+	"  OR air_date IS DISTINCT FROM $7::date OR runtime_minutes IS DISTINCT FROM $8::integer" \
+	"  OR gone_at IS NOT NULL)"
+
 typedef struct
 {
 	gint64   id;
@@ -300,11 +313,12 @@ axis_tv_sync_rows(
 				changes++;
 			}
 			params[8] = id;
-			/* (Keyed anew, it takes the new record's id of its episode.) */
-			if (!axis_db_conn_exec(conn, "UPDATE series_episode SET provider_id = coalesce($2, provider_id),"
-			        " season_number = $3::integer, number = $4::integer, absolute_number = $5::integer,"
-			        " title = left($6, 500), air_date = $7::date, runtime_minutes = $8::integer, gone_at = NULL"
-			        " WHERE id = $9::bigint AND series_id = $1::bigint", 9, params, NULL, error))
+			/* (Keyed anew, it takes the new record's id of its episode.)
+			 * Only a row that differs is written: an episode the metadata
+			 * says nothing new about, which is nearly every one at every
+			 * sync, would otherwise leave a dead row behind each time, and
+			 * another in series_episode_identity through its trigger. */
+			if (!axis_db_conn_exec(conn, AXIS_TV_SYNC_SQL_EPISODE, 9, params, NULL, error))
 				return FALSE;
 			continue;
 		}

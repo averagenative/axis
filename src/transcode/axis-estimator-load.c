@@ -343,7 +343,6 @@ axis_estimator_timed_exec(
 	if (!axis_db_conn_begin(conn, error))
 		return FALSE;
 	if (!axis_db_conn_exec(conn, set, 0, NULL, NULL, error) ||
-	    !axis_db_conn_exec(conn, AXIS_ESTIMATE_SQL_NO_JIT, 0, NULL, NULL, error) ||
 	    !axis_db_conn_exec(conn, sql, n_params, params, result, error)) {
 		axis_db_conn_rollback(conn, NULL);
 		return FALSE;
@@ -381,8 +380,7 @@ load_by(
 		if (!axis_db_conn_begin(conn, error))
 			return FALSE;
 		if (!axis_db_conn_exec(conn, "SET LOCAL statement_timeout = '" AXIS_LIBRARY_LIST_TIMEOUT "'", 0, NULL, NULL,
-		        error) ||
-		    !axis_db_conn_exec(conn, AXIS_ESTIMATE_SQL_NO_JIT, 0, NULL, NULL, error))
+		        error))
 			goto fail;
 	}
 	if (!axis_db_conn_exec(conn, sql, 1, params, &result, error))
