@@ -30,7 +30,7 @@ and `linux/arm64`.
 
 ### Published images
 
-Images are built and pushed by the repository's one GitHub Actions workflow,
+Images are built and pushed by the GitHub Actions workflow
 `.github/workflows/images.yml`, when a version tag is pushed and once a
 night. A release
 candidate (a tag with a suffix, such as `v0.1.0-rc2`) and a final release
@@ -951,3 +951,7 @@ use `:z` on whole disks (it relabels every file on them); add
   end, and skips with a stated reason any part whose prerequisite is missing.
   It does not run [the remote-worker example](examples/remote-worker/README.md),
   which needs two machines and a GPU.
+- Every push to `main` runs these checks and `make fuzz` on GitHub
+  (`.github/workflows/checks.yml`), each in a job of its own. There, a part
+  of `make check-examples` that is skipped fails the job, because the
+  workflow installs every prerequisite.

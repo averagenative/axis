@@ -153,6 +153,8 @@ Run the gates one at a time and alone on the machine. Two test runs that share t
 
 `make check` and `make fuzz` run in parallel: `make -j16 check` and `make -j16 fuzz`. The `-j` is for the compilers. The test programs run `TEST_JOBS` at a time and the fuzz targets `FUZZ_JOBS` at a time, by default one for each processor and at most 16, each with a log of its own under `build/`; every program runs whatever the others did, and the failures are reported at the end. A value of 1 runs them one after another on the terminal and stops at the first failure. A fuzz target still gets its whole `FUZZ_SECONDS` on a processor of its own, so do not set `FUZZ_JOBS` above the number of processors. A test program must not depend on running alone: its own database, its own scratch directories, ports from `axis_test_free_port()`, and no deadline that only an idle machine meets. The throwaway PostgreSQL keeps its data in memory (`AXIS_TEST_PG_ON_DISK=1` puts it on disk).
 
+Every push to `main` also runs the four gates on GitHub's standard runners, each in a job of its own (`.github/workflows/checks.yml`). A run with four green jobs is the sign that a commit can be deployed. The workflow does not run on pull requests: a change from a fork is checked by the person who merges it, and on GitHub once it is on `main`.
+
 Other checks are outside the gates because they need hardware or more time: `make check-scale` (large generated libraries), `make check-hwenc` (hardware encoders), `make check-jellyfin` (a real Jellyfin in a container), and `make test RELEASE=1 AXIS_SKIP_DB_TESTS=1` (the release build, as the image build runs it).
 
 ### Made-up titles only
