@@ -758,6 +758,29 @@ test_two_placings(Fixture *fx, gconstpointer data)
 	g_assert_cmpint(done->series_id, ==, series_id);
 	g_assert_null(done->add_error);
 	g_assert_cmpint(done->state, ==, AXIS_REQUEST_STATE_APPROVED);
+
+	/* Alone too: a placing that added a series and could not monitor all of
+	 * its seasons leaves it, with the seasons monitored so far. */
+	{
+		static const gint both[] = { 1, 2 };
+		gint64 clockwork = series(fx, AXIS_TEST_REQUESTS_CLOCKWORK);
+		g_autofree gchar *partial = NULL;
+		g_autofree gchar *left = NULL;
+
+		g_assert_true(ask_series(fx, fx->r->robin, clockwork, AXIS_REQUEST_SEASONS_PICKED, both, 2, &made, &error));
+		g_assert_no_error(error);
+		partial = g_strdup(made.public_id);
+		axis_request_made_clear(&made);
+		N("UPDATE request_season SET season = 9 WHERE season = 2 AND request_id = (SELECT id FROM request"
+			" WHERE public_id = '%s') RETURNING season", partial);
+		added = TRUE;
+		g_assert_true(axis_requests_approve(fx->r->requests, partial, "root", 0, 0, &added, &error));
+		g_assert_no_error(error);
+		g_assert_false(added);
+		left = Q("SELECT string_agg(ss.number || ':' || ss.monitored, ',' ORDER BY ss.number) FROM series s"
+			" JOIN series_season ss ON ss.series_id = s.id WHERE s.title_id = %" G_GINT64_FORMAT, clockwork);
+		g_assert_cmpstr(left, ==, "1:true,2:false");
+	}
 }
 
 /* ── Automatic approval ─────────────────────────────────────────── */
