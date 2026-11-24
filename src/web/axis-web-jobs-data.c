@@ -16,6 +16,18 @@
 	"(extract(epoch from finished_at) * 1000000)::bigint, " \
 	"(extract(epoch from run_at) * 1000000)::bigint, dedupe_key"
 
+/*
+ * k: every (kind, queue, state) the job table holds, each found by one step
+ * into job_list_idx past the one before (the index is in that order), never
+ * by reading the jobs: a few hundred steps at most, however many jobs are
+ * kept.
+ */
+#define JOB_GROUPS \
+	"k AS ((SELECT kind, queue, state FROM job ORDER BY kind, queue, state LIMIT 1) " \
+	"  UNION ALL SELECT n.kind, n.queue, n.state FROM k CROSS JOIN LATERAL (SELECT j.kind, j.queue, j.state " \
+	"    FROM job j WHERE (j.kind, j.queue, j.state) > (k.kind, k.queue, k.state) " \
+	"    ORDER BY j.kind, j.queue, j.state LIMIT 1) n)"
+
 enum
 {
 	COL_ID,
@@ -301,15 +313,31 @@ axis_web_jobs_list(
 	GStrv               *queues,
 	GError             **error
 ){
+	/*
+	 * The page's jobs without reading the table: the jobs of one kind, queue
+	 * and state lie together in job_list_idx in the order of their ids, so
+	 * the newest $7 + 1 of each such group that the filters let through are
+	 * that many index entries, and the page is the newest $7 + 1 of those.
+	 * What it costs follows the number of groups (some hundreds at most:
+	 * the kinds times the states) and the page's size, not the number of
+	 * jobs kept.  The cursor is the place the page before ended at (waiting
+	 * and running jobs first, then by id), which each group starts below.
+	 */
 	static const gchar sql[] =
-		"SELECT " ROW_COLUMNS " FROM job "
-		"WHERE ($1::text[] IS NULL OR state::text = ANY ($1::text[])) "
-		"AND ($2::text IS NULL OR queue = $2::text) "
-		"AND ($3::boolean IS NULL "
-		"     OR (state IN ('queued', 'running'), id) < ($3::boolean, $4::bigint)) "
-		"AND ($5::text IS NULL OR (kind = ANY ($6::text[])) = ($5::text = 'upkeep')) "
-		"ORDER BY (state IN ('queued', 'running')) DESC, id DESC "
-		"LIMIT $7::int + 1";
+		"WITH RECURSIVE " JOB_GROUPS ", "
+		"top AS (SELECT k.state IN ('queued', 'running') AS active, x.id AS job_id "
+		"  FROM k CROSS JOIN LATERAL (SELECT j.id FROM job j "
+		"    WHERE j.kind = k.kind AND j.queue = k.queue AND j.state = k.state "
+		"    AND j.id < CASE WHEN $3::boolean IS NULL OR (k.state IN ('queued', 'running')) < $3::boolean "
+		"      THEN 9223372036854775807 ELSE $4::bigint END "
+		"    ORDER BY j.id DESC LIMIT $7::int + 1) x "
+		"  WHERE ($1::text[] IS NULL OR k.state::text = ANY ($1::text[])) "
+		"  AND ($2::text IS NULL OR k.queue = $2::text) "
+		"  AND ($3::boolean IS NULL OR (k.state IN ('queued', 'running')) <= $3::boolean) "
+		"  AND ($5::text IS NULL OR (k.kind = ANY ($6::text[])) = ($5::text = 'upkeep')) "
+		"  ORDER BY 1 DESC, 2 DESC LIMIT $7::int + 1) "
+		"SELECT " ROW_COLUMNS " FROM top JOIN job ON job.id = top.job_id "
+		"ORDER BY top.active DESC, top.job_id DESC";
 	g_autoptr(AxisDbResult) result = NULL;
 	g_autoptr(AxisDbResult) queue_result = NULL;
 	g_autofree gchar *states = NULL;
@@ -355,8 +383,8 @@ axis_web_jobs_list(
 	if (queues != NULL) {
 		g_autoptr(GPtrArray) names = g_ptr_array_new_with_free_func(g_free);
 
-		if (!axis_db_pool_exec(pool, "SELECT DISTINCT queue FROM job ORDER BY queue LIMIT 100",
-		                       0, NULL, &queue_result, error)) {
+		if (!axis_db_pool_exec(pool, "WITH RECURSIVE " JOB_GROUPS " SELECT DISTINCT queue FROM k ORDER BY queue"
+		                       " LIMIT 100", 0, NULL, &queue_result, error)) {
 			if (next != NULL)
 				g_clear_pointer(next, g_free);
 			return FALSE;
