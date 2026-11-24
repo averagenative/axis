@@ -383,6 +383,8 @@ test_steps(Fixture *fx, gconstpointer data)
 	g_assert_cmpuint(strlen(token), ==, 43);
 	g_assert_cmpuint(count_of(reply.body, token), ==, 1);
 	g_assert_null(axis_test_reply_header(&reply, "Set-Cookie"));
+	/* The one answer that holds the token is kept by no cache. */
+	assert_contains(axis_test_reply_header(&reply, "Cache-Control"), "no-store");
 	assert_contains(reply.body, "Save this as axis-worker-shed-pc.container.");
 	assert_contains(reply.body, "Image=" AXIS_ATTACH_IMAGE ":" AXIS_VERSION "\n");
 	assert_contains(reply.body, "Environment=AXIS_WORKER_URL=https://axis.example.org\n");
@@ -560,6 +562,29 @@ test_refused(Fixture *fx, gconstpointer data)
 		reply = post(fx, fx->admin, "/workers/attach/disks", allowed);
 		g_assert_cmpuint(reply.status, ==, 200);
 		assert_contains(reply.body, "Step 2 of 5");
+		axis_test_reply_clear(&reply);
+	}
+
+	/* What was typed is shown back in its field as text, whatever it holds. */
+	{
+		g_autofree gchar *m = machine("desk\"><script>alert(1)</script>", "podman", "cpu",
+			"https://axis.example.org\" onfocus=\"alert(1)");
+		g_autofree gchar *d = disk(fx->a, "nfs", "/mnt/a\"><script>alert(2)</script>");
+		g_autofree gchar *all = g_strconcat(good_machine, d, NULL);
+		AxisTestReply reply = post(fx, fx->admin, "/workers/attach/disks", m);
+
+		/* In a field's value the quote is what could end it: it is written
+		 * as &quot;, so the rest stays inside the value. */
+		g_assert_cmpuint(reply.status, ==, 400);
+		assert_lacks(reply.body, "desk\">");
+		assert_lacks(reply.body, "\" onfocus=\"alert(1)");
+		assert_contains(reply.body, "value=\"desk&quot;>");
+		assert_contains(reply.body, "org&quot; onfocus=&quot;alert(1)\"");
+		axis_test_reply_clear(&reply);
+		reply = post(fx, fx->admin, "/workers/attach/mounts", all);
+		g_assert_cmpuint(reply.status, ==, 400);
+		assert_lacks(reply.body, "/mnt/a\">");
+		assert_contains(reply.body, "value=\"/mnt/a&quot;>");
 		axis_test_reply_clear(&reply);
 	}
 
