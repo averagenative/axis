@@ -2396,8 +2396,96 @@ test_plain_http(Fixture *fx, gconstpointer data)
 	assert_status(&reply, 200);
 	axis_test_reply_clear(&reply);
 	g_assert_cmpuint(asked(fx, NULL), ==, 0);
-	/* The administrator's sentence is in the log, once. */
-	g_assert_cmpuint(count_of(log_text->str, "AXIS_PORTAL_TRUSTED_PROXIES"), ==, 1);
+	/* The administrator's sentence is in the log, once (and, since P4, once
+	 * the one about forwarding headers from an address that is not listed:
+	 * /portal/session/proxy-not-listed). */
+	g_assert_cmpuint(count_of(log_text->str, "refused a visit over plain http"), ==, 1);
+	g_assert_cmpuint(count_of(log_text->str, "AXIS_PORTAL_TRUSTED_PROXIES"), ==, 2);
+}
+
+/* Spec (deployment): The proxy is listed -- a login that arrives through the
+ * listed proxy over HTTPS is accepted, and the client the proxy names is the
+ * one the portal throttles and tells the daemon of. */
+static void
+test_proxy_listed(Fixture *fx, gconstpointer data)
+{
+	gchar *cookie = NULL;
+	AxisTestReply reply;
+	guint refused = 0;
+	guint i;
+
+	reply = get(fx, "/login", NULL);
+	assert_status(&reply, 200);
+	assert_has(reply.body, "<form");
+	assert_has(reply.body, "name=\"password\"");
+	axis_test_reply_clear(&reply);
+	reply = login_from(fx, "robin", ROBIN_PASSWORD, "198.51.100.30", NULL, &cookie);
+	assert_status(&reply, 303);
+	g_assert_nonnull(cookie);
+	g_free(cookie);
+	axis_test_reply_clear(&reply);
+	assert_has(last_call(fx, "login")->body, "\"client_address\":\"198.51.100.30\"");
+	assert_has(log_text->str, "login: robin from 198.51.100.30");
+
+	/* The throttle is the forwarded client's, not the proxy's: one address
+	 * that fails again and again is refused, and the next one is not. */
+	for (i = 0; i < AXIS_PORTAL_LOGIN_FREE_FAILURES + 5; i++) {
+		reply = login_from(fx, "robin", "a wrong password", "198.51.100.31", NULL, NULL);
+		if (reply.status == 429)
+			refused++;
+		axis_test_reply_clear(&reply);
+	}
+	g_assert_cmpuint(refused, >=, 4);
+	cookie = NULL;
+	reply = login_from(fx, "robin", ROBIN_PASSWORD, "198.51.100.32", NULL, &cookie);
+	assert_status(&reply, 303);
+	g_free(cookie);
+	axis_test_reply_clear(&reply);
+	assert_has(last_call(fx, "login")->body, "\"client_address\":\"198.51.100.32\"");
+	assert_lacks(log_text->str, "an address that is not trusted");
+	assert_lacks(log_text->str, "refused a visit over plain http");
+}
+
+/* Spec (deployment): The proxy is not listed -- the portal serves no login
+ * form, says that it needs HTTPS, asks the daemon nothing, and its log says
+ * once that forwarded headers came from an address that is not trusted,
+ * with the address, which is what must be listed. */
+static void
+test_proxy_not_listed(Fixture *fx, gconstpointer data)
+{
+	static const gchar *const forwarded[] = {
+		"X-Forwarded-Proto", "https", "X-Forwarded-For", OUTSIDE, "X-Forwarded-Host", "portal.example.org", NULL
+	};
+	AxisTestReply reply;
+	guint i;
+
+	/* A visit without such headers says nothing of them. */
+	reply = get(fx, "/login", NULL);
+	assert_status(&reply, 403);
+	axis_test_reply_clear(&reply);
+	assert_lacks(log_text->str, "an address that is not trusted");
+
+	for (i = 0; i < 3; i++) {
+		reply = send_from(fx, "GET", "/login", NULL, NULL, NULL, forwarded);
+		assert_status(&reply, 403);
+		assert_has(reply.body, "This portal answers over HTTPS only");
+		assert_lacks(reply.body, "<form");
+		assert_lacks(reply.body, "name=\"password\"");
+		g_assert_null(axis_test_reply_header(&reply, "Set-Cookie"));
+		axis_test_reply_clear(&reply);
+		reply = send_from(fx, "POST", "/login", NULL, "username=robin&password=" ROBIN_PASSWORD, NULL, forwarded);
+		assert_status(&reply, 403);
+		g_assert_null(axis_test_reply_header(&reply, "Set-Cookie"));
+		axis_test_reply_clear(&reply);
+	}
+	g_assert_cmpuint(asked(fx, NULL), ==, 0);
+	g_assert_cmpuint(count_of(log_text->str, "came from 127.0.0.1, an address that is not trusted, and were ignored"),
+		==, 1);
+	g_assert_cmpuint(count_of(log_text->str, "refused a visit over plain http"), ==, 1);
+	/* Nothing a stranger sent is in the line: not the client it named, not
+	 * the host. */
+	assert_lacks(log_text->str, OUTSIDE);
+	assert_lacks(log_text->str, "portal.example.org");
 }
 
 /* The test-only override: plain http is served, with cookies that are
@@ -3262,6 +3350,8 @@ main(int argc, char **argv)
 	ADD("/portal/session/open-redirect", MODE_PROXY, test_open_redirect);
 	ADD("/portal/session/plain-http", MODE_PLAIN, test_plain_http);
 	ADD("/portal/session/forwarded-from-elsewhere", MODE_INSECURE, test_insecure_override);
+	ADD("/portal/session/proxy-listed", MODE_PROXY, test_proxy_listed);
+	ADD("/portal/session/proxy-not-listed", MODE_PLAIN, test_proxy_not_listed);
 	ADD("/portal/limits/login-flood", MODE_PROXY, test_login_flood);
 	ADD("/portal/limits/made-up-cookies", MODE_PROXY, test_made_up_cookies);
 	ADD("/portal/limits/one-device-misbehaves", MODE_PROXY, test_one_device_misbehaves);

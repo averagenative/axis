@@ -201,6 +201,7 @@ struct _AxisPortalApp
 	guint              pending;	/* pages waiting for the daemon */
 	gboolean           stopping;
 	gboolean           said_https;	/* the line on plain http was written */
+	gboolean           said_forwarded;	/* and the one on forwarding headers from an address not listed */
 	gint64             time_offset_us;
 	guint              noted[N_NOTES];	/* how many of each kind there were */
 	AxisPortalLogBudget lines[N_NOTES];	/* how many were written */
@@ -1973,6 +1974,18 @@ serve(
 	proxied =peer != NULL && axis_ip_address_parse(peer, &from) && axis_proxy_list_contains(self->trusted, &from);
 	if (self->resolver != NULL && peer != NULL && axis_ip_address_parse(peer, &from) && !proxied)
 		axis_proxy_resolver_poke(self->resolver);
+	/* (Slice P4.)  Forwarding headers from an address that is not listed are
+	 * ignored, and the log says so once, with the address: when it is the
+	 * administrator's own reverse proxy, that is the address (or the name
+	 * behind it) to list. */
+	if (!proxied && !self->said_forwarded && (header_of(request, "X-Forwarded-For") != NULL ||
+	        header_of(request, "X-Forwarded-Proto") != NULL || header_of(request, "X-Forwarded-Host") != NULL)) {
+		self->said_forwarded = TRUE;
+		g_message("forwarded headers (X-Forwarded-For, X-Forwarded-Proto or X-Forwarded-Host) came from %s, an address "
+			"that is not trusted, and were ignored; this is said once. If that is your reverse proxy, list it in "
+			"trusted_proxies (AXIS_PORTAL_TRUSTED_PROXIES); until then the portal serves no login",
+			peer != NULL ? peer : "an unknown address");
+	}
 	/* A listed proxy that says nothing of who the client is (no
 	 * X-Forwarded-For, one that cannot be read, or only proxies in it) would
 	 * make every visitor one client: one throttle, and one address told to
