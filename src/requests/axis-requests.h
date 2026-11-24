@@ -115,6 +115,10 @@ G_BEGIN_DECLS
  * @AXIS_REQUESTS_ERROR_PORTAL_FULL: the request came through the portal API,
  *   and what all such requests count today (a movie one, a season one each,
  *   whatever became of them) has reached requests.portal_per_day
+ * @AXIS_REQUESTS_ERROR_PORTAL_SHARE: the request came through the portal API,
+ *   and what the person's own such requests count today (withdrawn ones
+ *   included) has reached AXIS_REQUESTS_PORTAL_SHARE_OF() of
+ *   requests.portal_per_day: one person cannot use up the portal's day
  */
 typedef enum
 {
@@ -126,8 +130,13 @@ typedef enum
 	AXIS_REQUESTS_ERROR_DECIDED,
 	AXIS_REQUESTS_ERROR_PLACEMENT,
 	AXIS_REQUESTS_ERROR_TOO_MANY,
-	AXIS_REQUESTS_ERROR_PORTAL_FULL
+	AXIS_REQUESTS_ERROR_PORTAL_FULL,
+	AXIS_REQUESTS_ERROR_PORTAL_SHARE
 } AxisRequestsError;
+
+/* One person's share of requests.portal_per_day (@ceiling): a third of it, at
+ * least one. */
+#define AXIS_REQUESTS_PORTAL_SHARE_OF(ceiling) MAX((ceiling) / 3, 1)
 
 GQuark
 axis_requests_error_quark(void);
@@ -512,10 +521,12 @@ axis_request_made_clear(AxisRequestMade *made);
  * @made: (out caller-allocates): what came of it; clear it
  *
  * A person asks for a title.  Refused whole, changing nothing, with
- * KIND_OFF, CLOSED, QUOTA, TOO_MANY, PORTAL_FULL, INVALID or NOT_FOUND (no
- * such title, or no such enabled account; also a title its provider marks as
- * adult, for anyone but an administrator: the same answer, so that the
- * title's number says nothing).  A second person is never refused for asking for
+ * KIND_OFF, CLOSED, QUOTA, TOO_MANY, PORTAL_FULL, PORTAL_SHARE, INVALID or
+ * NOT_FOUND (no such title, or no such enabled account; also a title its
+ * provider marks as adult, or whose mark is not known yet, for anyone but an
+ * administrator: the same answer, given before the title's kind or closed
+ * state is looked at, so that the title's number says nothing).  A second
+ * person is never refused for asking for
  * what is requested already: they follow it, unless their limit for the kind
  * is 0 (QUOTA: they follow nothing either).
  */

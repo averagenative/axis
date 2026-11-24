@@ -418,8 +418,8 @@ static const AxisSettingInfo settings_table[] = {
 	{ AXIS_REQUESTS_SETTING_PORTAL_DAY, AXIS_SETTING_INTEGER, "Requests through the request portal in one day",
 	  "What all requests made through the request portal may count in one calendar day, whoever made them: a movie "
 	  "counts one and each season one. Beyond it the portal's requests are refused until the next day. It bounds what "
-	  "a portal in the wrong hands can ask for. 0: no request can be made through the portal.", 0, "30", 0, 10000, 0,
-	  0, NULL },
+	  "a portal in the wrong hands can ask for. One person's requests may count a third of it at most, withdrawn ones "
+	  "included. 0: no request can be made through the portal.", 0, "30", 0, 10000, 0, 0, NULL },
 	{ NULL, 0, NULL, NULL, 0, NULL, 0, 0, 0, 0, NULL }
 };
 
