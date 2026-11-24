@@ -21,7 +21,7 @@ The first batch built a database at the design scale (5,000 series, 300,000 epis
 - **Old searches** are deleted once an hour, at most 1,000 a statement and ten statements a time.
 - **The Movies list's counts** and the movies' attention count read each kind of fact once and join; the movies' facts read the searches in flight once.
 - **The TV lists' counting statement** loses two orderings it did not need. The pages `/series` and `/series/wanted` are not faster for it: see "Not changed".
-- **History has a keeping time.** Four settings on a new **History settings** card say how long events, grabs, finished downloads and finished imports are kept (0 each, which keeps them forever until an administrator chooses a time; a year is suggested). An hourly job deletes what is older, a bounded batch a statement, and never a row that anything still names, that is open, or that explains the present state of a title.
+- **History has a keeping time.** Four settings on a new **History settings** card say how long events, grabs, finished downloads and finished imports are kept (a year each by default; 0 keeps them forever). An hourly job deletes what is older, a bounded batch a statement, and never a row that anything still names, that is open, or that explains the present state of a title.
 
 ## Impact
 
@@ -30,7 +30,7 @@ The first batch built a database at the design scale (5,000 series, 300,000 epis
 - Migrations: `0081_scale_lists.sql` (three indexes), `0082_history_retention.sql` (eleven indexes). Plain `CREATE INDEX` in the migration's transaction, as in the first batch: the daemon applies migrations before it starts anything that writes. `design.md` has each index's build time.
 - Tests: `tests/test-db-scale.c` (`/db/scale/second`, `/db/scale/retention`), `tests/test-tv.c`, `tests/test-movies.c`, `tests/test-history-retention.c` (new), `tests/test-settings.c`, `tests/test-job-registry.c`.
 - Behavior that differs:
-  - Nothing is deleted by default: each keeping time is 0, which keeps history forever, as before. History older than the time an administrator sets is deleted, within the rules above.
+  - Each keeping time is a year by default; 0 keeps that kind forever. History older than the keeping time is deleted, within the rules above.
   - A new required module, **History**, with its settings card and its hourly job on the Jobs page.
   - A series' episode list follows the metadata within six hours on a library of any size; before, that held only up to 120 series.
   - The scheduler's log line counts the wanted episodes of the series it read, not of every series.

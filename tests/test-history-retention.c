@@ -7,8 +7,8 @@
  * Each test makes its own database with one series (one episode) and one
  * movie on a made-up disk, writes the rows it needs by SQL, runs one or more
  * runs of axis_history_prune() and reads what is left.  "Old" is 400 days
- * ago, beyond the 365 days that run() keeps (the defaults keep everything, and
- * /history/defaults-delete-nothing shows it); "recent" is 10 days ago.  Each rule
+ * ago, beyond the 365 days that the defaults keep (/history/defaults-keep-a-year
+ * shows it); "recent" is 10 days ago.  Each rule
  * of what is kept has a case of its own; /history/<table>/old-one-goes shows
  * that the same rows without the rule do go.
  *
@@ -290,8 +290,8 @@ add_library_file(
 
 /* ── Running ────────────────────────────────────────────────────── */
 
-/* The defaults keep everything; the tests choose a year, as an administrator
- * may. */
+/* The defaults are a year; the tests set it by hand so that they do not
+ * depend on the default. */
 static void
 keep_a_year(AxisHistoryKeep *keep)
 {
@@ -1030,10 +1030,10 @@ test_zero_keeps_everything(Fixture *fx, gconstpointer data)
 	g_assert_cmpint(qi(fx, "SELECT count(*) FROM movie_grab"), ==, AXIS_HISTORY_GRABS_KEPT);
 }
 
-/* With the settings untouched (and with no settings store), nothing is
- * deleted: not even looked at, however old. */
+/* With the settings untouched (and with no settings store), each kind is
+ * kept for a year: what is older goes, what is newer stays. */
 static void
-test_defaults_delete_nothing(Fixture *fx, gconstpointer data)
+test_defaults_keep_a_year(Fixture *fx, gconstpointer data)
 {
 	g_autoptr(AxisSettings) settings = axis_settings_new();
 	g_autoptr(AxisModuleRegistry) modules = axis_module_registry_new();
@@ -1050,38 +1050,42 @@ test_defaults_delete_nothing(Fixture *fx, gconstpointer data)
 	g_assert_true(axis_settings_load(settings, fx->pool, &error));
 	g_assert_no_error(error);
 
-	/* Very old ended history of every kind, in numbers that would go. */
-	add_events(fx, FALSE, TRUE, 40, "now() - interval '3000 days'");
-	add_events(fx, TRUE, TRUE, 40, "now() - interval '3000 days'");
-	add_import(fx, "movies", "dismissed", "now() - interval '3000 days'", 0, 0);
-	add_import(fx, "movies", "dismissed", "now() - interval '3000 days'", 0, 0);
-	add_download(fx, "failed", "now() - interval '3000 days'");
+	/* Ended history of every kind, in numbers that would go: a part
+	 * beyond a year and a part within it. */
+	add_events(fx, FALSE, TRUE, 40, OLD);
+	add_events(fx, TRUE, TRUE, 40, OLD);
+	add_events(fx, FALSE, TRUE, 10, RECENT);
+	add_import(fx, "movies", "dismissed", OLD, 0, 0);
+	add_import(fx, "movies", "dismissed", OLD, 0, 0);
+	add_import(fx, "movies", "dismissed", RECENT, 0, 0);
+	add_download(fx, "failed", OLD);
+	add_download(fx, "failed", RECENT);
 	for (i = 0; i < AXIS_HISTORY_GRABS_KEPT + 3; i++) {
-		add_grab(fx, TRUE, "now() - interval '3000 days'", 0);
-		add_grab(fx, FALSE, "now() - interval '3000 days'", 0);
+		add_grab(fx, TRUE, OLD, 0);
+		add_grab(fx, FALSE, OLD, 0);
 	}
 
 	histories[0] = fx->history;	/* no settings store */
 	histories[1] = configured;	/* the settings' defaults */
 	for (h = 0; h < 2; h++) {
 		axis_history_read_keep(histories[h], &keep);
-		g_assert_cmpint(keep.events_s, ==, 0);
-		g_assert_cmpint(keep.grabs_s, ==, 0);
-		g_assert_cmpint(keep.downloads_s, ==, 0);
-		g_assert_cmpint(keep.imports_s, ==, 0);
+		g_assert_cmpint(keep.events_s, ==, 365 * 86400);
+		g_assert_cmpint(keep.grabs_s, ==, 365 * 86400);
+		g_assert_cmpint(keep.downloads_s, ==, 365 * 86400);
+		g_assert_cmpint(keep.imports_s, ==, 365 * 86400);
 		g_assert_true(axis_history_prune(histories[h], fx->pool, &keep, NULL, &report, &error));
 		g_assert_no_error(error);
-		for (i = 0; i < AXIS_HISTORY_N_PARTS; i++) {
-			g_assert_cmpuint(report.statements[i], ==, 0);
-			g_assert_cmpuint(report.deleted[i], ==, 0);
-		}
 	}
-	g_assert_cmpint(qi(fx, "SELECT count(*) FROM series_event"), ==, 40);
-	g_assert_cmpint(qi(fx, "SELECT count(*) FROM movie_event"), ==, 40);
-	g_assert_cmpint(qi(fx, "SELECT count(*) FROM import"), ==, 2);
+	/* What is older than a year went, down to the floors; what is newer
+	 * stayed. */
+	g_assert_cmpint(qi(fx, "SELECT count(*) FROM series_event"), ==, AXIS_HISTORY_EVENTS_KEPT);
+	g_assert_cmpint(qi(fx, "SELECT count(*) FROM series_event WHERE created_at > " RECENT " - interval '1 day'"),
+		==, 10);
+	g_assert_cmpint(qi(fx, "SELECT count(*) FROM movie_event"), ==, AXIS_HISTORY_EVENTS_KEPT);
+	g_assert_cmpint(qi(fx, "SELECT count(*) FROM import"), ==, 1);
 	g_assert_cmpint(qi(fx, "SELECT count(*) FROM download"), ==, 1);
-	g_assert_cmpint(qi(fx, "SELECT count(*) FROM movie_grab"), ==, AXIS_HISTORY_GRABS_KEPT + 3);
-	g_assert_cmpint(qi(fx, "SELECT count(*) FROM series_grab"), ==, AXIS_HISTORY_GRABS_KEPT + 3);
+	g_assert_cmpint(qi(fx, "SELECT count(*) FROM movie_grab"), ==, AXIS_HISTORY_GRABS_KEPT);
+	g_assert_cmpint(qi(fx, "SELECT count(*) FROM series_grab"), ==, AXIS_HISTORY_GRABS_KEPT);
 }
 
 /* An error in one table does not stop the others: they are pruned, and the
@@ -1154,11 +1158,11 @@ test_job_follows_the_settings(Fixture *fx, gconstpointer data)
 	g_assert_true(axis_settings_load(settings, fx->pool, &error));
 	g_assert_no_error(error);
 
-	/* The defaults keep everything, and the limits: 30 days at least, or 0. */
-	g_assert_cmpint(axis_settings_get_duration(settings, AXIS_HISTORY_SETTING_KEEP_EVENTS), ==, 0);
-	g_assert_cmpint(axis_settings_get_duration(settings, AXIS_HISTORY_SETTING_KEEP_GRABS), ==, 0);
-	g_assert_cmpint(axis_settings_get_duration(settings, AXIS_HISTORY_SETTING_KEEP_DOWNLOADS), ==, 0);
-	g_assert_cmpint(axis_settings_get_duration(settings, AXIS_HISTORY_SETTING_KEEP_IMPORTS), ==, 0);
+	/* The defaults are a year, and the limits: 30 days at least, or 0. */
+	g_assert_cmpint(axis_settings_get_duration(settings, AXIS_HISTORY_SETTING_KEEP_EVENTS), ==, 365 * 86400);
+	g_assert_cmpint(axis_settings_get_duration(settings, AXIS_HISTORY_SETTING_KEEP_GRABS), ==, 365 * 86400);
+	g_assert_cmpint(axis_settings_get_duration(settings, AXIS_HISTORY_SETTING_KEEP_DOWNLOADS), ==, 365 * 86400);
+	g_assert_cmpint(axis_settings_get_duration(settings, AXIS_HISTORY_SETTING_KEEP_IMPORTS), ==, 365 * 86400);
 	g_assert_false(axis_settings_set(settings, AXIS_HISTORY_SETTING_KEEP_EVENTS, "29d", &error));
 	g_assert_nonnull(strstr(error->message, "must be 0 or at least 30d"));
 	g_clear_error(&error);
@@ -1334,9 +1338,9 @@ test_settings_page(Page *fx, gconstpointer data)
 	assert_contains(reply.body, "Keep finished downloads on the Downloads page for");
 	assert_contains(reply.body, "Keep finished imports on the Imports page for");
 	assert_contains(reply.body, "name=\"history.keep_events\"");
-	assert_contains(reply.body, "value=\"0s\"");
-	assert_contains(reply.body, "Default: 0s.");
-	assert_contains(reply.body, "0: kept forever, which is the default; a year (365d) is a reasonable choice.");
+	assert_contains(reply.body, "value=\"365d\"");
+	assert_contains(reply.body, "Default: 365d.");
+	assert_contains(reply.body, "The default is a year (365d); 0 keeps them forever.");
 	axis_test_reply_clear(&reply);
 
 	reply = post_history(fx, "90d", "60d", "365d", "400d");
@@ -1412,7 +1416,7 @@ main(int argc, char **argv)
 	ADD("runs/batches-are-bounded", test_batches_are_bounded);
 	ADD("runs/kept-rows-do-not-block", test_kept_rows_do_not_block);
 	ADD("runs/zero-keeps-everything", test_zero_keeps_everything);
-	ADD("runs/defaults-delete-nothing", test_defaults_delete_nothing);
+	ADD("runs/defaults-keep-a-year", test_defaults_keep_a_year);
 	ADD("runs/an-error-in-one-table-does-not-stop-the-rest", test_error_in_one_table_does_not_stop_the_rest);
 	g_test_add_func("/history/left-holes-words", test_left_holes_words);
 	ADD("job/follows-the-settings", test_job_follows_the_settings);

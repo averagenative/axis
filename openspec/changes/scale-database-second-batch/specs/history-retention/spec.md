@@ -1,11 +1,11 @@
 ## ADDED Requirements
 
 ### Requirement: Each kind of history has a keeping time
-Axis SHALL have four settings, on a **History settings** card of the Settings page, that say how long history is kept: the events of movies and series (`history.keep_events`), the records of grabs (`history.keep_grabs`), finished downloads (`history.keep_downloads`) and finished imports (`history.keep_imports`). Each SHALL default to 0, which means kept forever, and SHALL accept 30 days to 3,650 days; the card's help text SHALL say that history is kept forever until a time is chosen and suggest a year as a reasonable choice. Age SHALL be counted from when the row ended (an event's time, a grab's closing, a download's or an import's finish), never while it is open.
+Axis SHALL have four settings, on a **History settings** card of the Settings page, that say how long history is kept: the events of movies and series (`history.keep_events`), the records of grabs (`history.keep_grabs`), finished downloads (`history.keep_downloads`) and finished imports (`history.keep_imports`). Each SHALL default to 365 days, and SHALL accept 30 days to 3,650 days, or 0, which means kept forever; the card's help text SHALL say that the default is a year and that 0 keeps that kind forever. Age SHALL be counted from when the row ended (an event's time, a grab's closing, a download's or an import's finish), never while it is open.
 
 #### Scenario: The defaults
 - **WHEN** Axis is installed or upgraded and nothing is set
-- **THEN** each of the four keeping times is 0, and a run deletes nothing, however old the history is
+- **THEN** each of the four keeping times is 365 days, and a run deletes the history that ended more than a year ago, within the rules below, and keeps the rest
 
 #### Scenario: Kept forever
 - **WHEN** an administrator sets a keeping time to 0

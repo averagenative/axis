@@ -141,7 +141,7 @@ These come from reading the code; the review did not run them.
 
 ## Choose how long Axis keeps history
 
-Axis records what happens to each movie and series, each release it grabs, each download, and each import. Axis keeps these records forever until you choose a time, so they grow for as long as Axis runs. Once you choose a time, the job **Deleting old history of movies, series, downloads and imports** runs every hour and deletes the records that ended longer ago than that time. A year (`365d`) is a reasonable choice.
+Axis records what happens to each movie and series, each release it grabs, each download, and each import. By default, Axis keeps these records for a year. The job **Deleting old history of movies, series, downloads and imports** runs every hour and deletes the records that ended longer ago than the time you set. To keep a kind of record forever, set its time to `0`.
 
 To choose how long Axis keeps history:
 
@@ -152,12 +152,12 @@ The following table describes the settings:
 
 | Setting | Default | What it keeps |
 | --- | --- | --- |
-| **Keep the history of what happened to movies and series for** | `0` (forever) | The events on a movie's or a series' page and on the **History** pages, counted from when each happened. |
-| **Keep the record of each release grabbed for** | `0` (forever) | The record of each grab, counted from when the grab ended. |
-| **Keep finished downloads on the Downloads page for** | `0` (forever) | The downloads that finished, failed, or were removed, counted from when each ended. |
-| **Keep finished imports on the Imports page for** | `0` (forever) | The imports that were imported or dismissed, with their files and decisions, counted from when each ended. |
+| **Keep the history of what happened to movies and series for** | `365d` (a year) | The events on a movie's or a series' page and on the **History** pages, counted from when each happened. |
+| **Keep the record of each release grabbed for** | `365d` (a year) | The record of each grab, counted from when the grab ended. |
+| **Keep finished downloads on the Downloads page for** | `365d` (a year) | The downloads that finished, failed, or were removed, counted from when each ended. |
+| **Keep finished imports on the Imports page for** | `365d` (a year) | The imports that were imported or dismissed, with their files and decisions, counted from when each ended. |
 
-Each setting takes a duration from `30d` to `3650d`. Enter `0` to keep that kind of record forever, which is the default. A change applies at the next hourly run, and you don't need to restart Axis.
+Each setting takes a duration from `30d` to `3650d`. Enter `0` to keep that kind of record forever. A change applies at the next hourly run, and you don't need to restart Axis.
 
 Axis never deletes a record that something still needs, however old the record is:
 

@@ -15,8 +15,8 @@
  *   over several runs, never in one long lock.
  *
  * The settings, durations from 30 days to 10 years, or 0 for "kept for
- * ever", which is the default: nothing is deleted until an administrator
- * chooses a time:
+ * ever"; the default is a year (365 days), so history older than that is
+ * deleted unless an administrator chooses another time or 0:
  *
  *   history.keep_events     the events of movies and series (created_at)
  *   history.keep_grabs      grabs that are closed (closed_at)
@@ -53,10 +53,10 @@ G_BEGIN_DECLS
 #define AXIS_HISTORY_SETTING_KEEP_DOWNLOADS "history.keep_downloads"
 #define AXIS_HISTORY_SETTING_KEEP_IMPORTS   "history.keep_imports"
 
-/* The settings' limits, in days (0, kept forever, besides). */
+/* The settings' limits, in days (0, kept forever, besides), and the default. */
 #define AXIS_HISTORY_MIN_DAYS     30
 #define AXIS_HISTORY_MAX_DAYS     3650
-#define AXIS_HISTORY_DEFAULT_DAYS 0
+#define AXIS_HISTORY_DEFAULT_DAYS 365
 
 /* The rows one statement looks at, at most: as many parents may go in it.
  * An import takes its files with it (at most AXIS_IMPORT_MAX_FILES each),

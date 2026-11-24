@@ -174,14 +174,14 @@ A new required module, **History** (`src/jobs/axis-history.c`), with its own car
 
 | Key | Label | Default |
 | --- | --- | --- |
-| `history.keep_events` | Keep the history of what happened to movies and series for | 0 |
-| `history.keep_grabs` | Keep the record of each release grabbed for | 0 |
-| `history.keep_downloads` | Keep finished downloads on the Downloads page for | 0 |
-| `history.keep_imports` | Keep finished imports on the Imports page for | 0 |
+| `history.keep_events` | Keep the history of what happened to movies and series for | 365d |
+| `history.keep_grabs` | Keep the record of each release grabbed for | 365d |
+| `history.keep_downloads` | Keep finished downloads on the Downloads page for | 365d |
+| `history.keep_imports` | Keep finished imports on the Imports page for | 365d |
 
-Each takes 30 days to 3,650 days, or 0 for "kept forever", which is the default. A duration could not have both a minimum and a 0, so the settings got a flag, `AXIS_SETTING_ZERO_OFF`.
+Each takes 30 days to 3,650 days, or 0 for "kept forever". A duration could not have both a minimum and a 0, so the settings got a flag, `AXIS_SETTING_ZERO_OFF`.
 
-The default deletes nothing: an upgrade keeps all history until an administrator chooses a time, and the help text says so. It suggests a year, which is long enough that nothing a person looks at in the ordinary way goes, and which bounds every table by a year's activity plus what the rules below keep.
+The default is a year, which is long enough that nothing a person looks at in the ordinary way goes, and which bounds every table by a year's activity plus what the rules below keep. An upgrade therefore deletes history older than a year, a bounded batch an hour, until an administrator sets 0 for a kind to keep it forever; the help text says so.
 
 ### The job
 
@@ -227,7 +227,7 @@ The last six are small only because the generated database leaves those columns 
 
 ### Figures
 
-Half of every kind aged 400 days, every keeping time at a year (the defaults keep everything and would delete nothing):
+Half of every kind aged 400 days, every keeping time at a year (the default):
 
 | Run | Time | Statements | Longest | Events | Imports | Grabs | Downloads |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -250,7 +250,7 @@ Every batch is an Index Only Scan on its age index (backward on `import_ended`),
 
 ## What a reviewer should check
 
-- The defaults are 0: nothing is deleted until an administrator sets a time. A run whose deletion fails in one table goes on with the others and fails with the first error.
+- The defaults are a year; 0 keeps a kind forever. A run whose deletion fails in one table goes on with the others and fails with the first error.
 - `report.considered` in the scheduler's log line means something narrower.
 - `candidate_stored()` became `candidates_stored()`: a module's hook is called once for all the releases of a search.
 - The prune's time is kept in memory, so each start prunes once at the first follow-up.
