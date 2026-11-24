@@ -735,6 +735,91 @@ test_config_unknown_key(void)
 	}
 }
 
+/* An environment with the portal's own settings and @pairs (name, value,
+ * %NULL-ended). */
+static AxisPortalConfig *
+load_env(
+	const gchar *const  *pairs,
+	GError             **error
+){
+	g_auto(GStrv) envp = g_new0(gchar *, 1);
+	guint i;
+
+	envp = g_environ_setenv(envp, "AXIS_PORTAL_URL", "http://127.0.0.1:7801", TRUE);
+	envp = g_environ_setenv(envp, "AXIS_PORTAL_TOKEN", "zzPortalToken" "AAAAAAAAAA" "AAAAAAAAAA" "AAAAAAAAAA", TRUE);
+	for (i = 0; pairs[i] != NULL; i += 2)
+		envp = g_environ_setenv(envp, pairs[i], pairs[i + 1], TRUE);
+	return axis_portal_config_load(NULL, envp, TRUE, error);
+}
+
+/* Found by the review of P3 (S4): Kubernetes puts variables into every pod
+ * of a namespace for each Service there, so a Service called axis-portal
+ * stopped the portal from starting, and for most of them the message did not
+ * name the variable.  They are left aside, and named in one line; any other
+ * unknown variable still stops it, by its name. */
+static void
+test_config_service_links(void)
+{
+	static const gchar *const links[] = {
+		"AXIS_PORTAL_SERVICE_HOST", "10.96.0.7",
+		"AXIS_PORTAL_SERVICE_PORT", "7802",
+		"AXIS_PORTAL_SERVICE_PORT_HTTP", "7802",
+		"AXIS_PORTAL_PORT", "tcp://10.96.0.7:7802",
+		"AXIS_PORTAL_PORT_7802_TCP", "tcp://10.96.0.7:7802",
+		"AXIS_PORTAL_PORT_7802_TCP_PROTO", "tcp",
+		"AXIS_PORTAL_PORT_7802_TCP_PORT", "7802",
+		"AXIS_PORTAL_PORT_7802_TCP_ADDR", "10.96.0.7",
+		"AXIS_PORTAL_PORT_53_UDP", "udp://[fd00::7]:53",
+		NULL
+	};
+	static const struct
+	{
+		const gchar *name;
+		const gchar *value;
+		const gchar *said;
+	} refused[] = {
+		/* A name of a link, with a value that is not one. */
+		{ "AXIS_PORTAL_PORT", "7802", "AXIS_PORTAL_PORT, which axis-portal does not know" },
+		{ "AXIS_PORTAL_PORT_7802_TCP", "8125", "AXIS_PORTAL_PORT_7802_TCP, which axis-portal does not know" },
+		{ "AXIS_PORTAL_SERVICE_HOST", "portal.example.net", "AXIS_PORTAL_SERVICE_HOST, which" },
+		{ "AXIS_PORTAL_PORT_7802_TCP_PROTO", "http", "AXIS_PORTAL_PORT_7802_TCP_PROTO, which" },
+		{ "AXIS_PORTAL_PORT_99999_TCP_PORT", "7802", "AXIS_PORTAL_PORT_99999_TCP_PORT, which" },
+		/* Another Service's links, and a setting that is not one. */
+		{ "AXIS_PORTAL_API_SERVICE_HOST", "10.96.0.8", "enableServiceLinks: false" },
+		{ "AXIS_PORTAL_DATABASE_URL", "postgresql://axis@db/axis", "the environment has AXIS_PORTAL_DATABASE_URL" },
+		{ "AXIS_PORTAL_TIMEOUT_2", "zz-five", "the environment has AXIS_PORTAL_TIMEOUT_2" },
+		/* A name that might be a token pasted by mistake is not printed. */
+		{ "AXIS_PORTAL_zzSecretLooking-Value", "zz-its-value", "not printed in case it holds a secret" }
+	};
+	g_autoptr(AxisPortalConfig) config = NULL;
+	guint i;
+
+	{
+		g_autoptr(GError) error = NULL;
+
+		config = load_env(links, &error);
+		g_assert_no_error(error);
+		g_assert_nonnull(config);
+		for (i = 0; links[i] != NULL; i += 2)
+			assert_has(config->service_links, links[i]);
+		/* None of them is taken for a setting. */
+		g_assert_cmpuint(config->listen_port, ==, AXIS_PORTAL_DEFAULT_PORT);
+	}
+	for (i = 0; i < G_N_ELEMENTS(refused); i++) {
+		g_autoptr(GError) error = NULL;
+		const gchar *pairs[3];
+
+		pairs[0] = refused[i].name;
+		pairs[1] = refused[i].value;
+		pairs[2] = NULL;
+		g_assert_null(load_env(pairs, &error));
+		g_assert_nonnull(error);
+		assert_has(error->message, refused[i].said);
+		assert_lacks(error->message, "zzSecretLooking");
+		assert_lacks(error->message, refused[i].value);
+	}
+}
+
 /* Spec (portal): Plain HTTP refused -- an unencrypted address that is not
  * loopback, without the override, stops the portal with the reason. */
 static void
@@ -2891,6 +2976,7 @@ main(int argc, char **argv)
 
 	g_test_add_func("/portal/config/unknown-key", test_config_unknown_key);
 	g_test_add_func("/portal/config/plain-http-refused", test_config_plain_http);
+	g_test_add_func("/portal/config/service-links", test_config_service_links);
 	g_test_add_func("/portal/wire/bodies", test_wire_bodies);
 	g_test_add_func("/portal/wire/answers", test_wire_answers);
 	g_test_add_func("/portal/form/reader", test_form_reader);

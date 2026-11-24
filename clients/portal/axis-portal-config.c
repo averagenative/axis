@@ -68,6 +68,7 @@ axis_portal_config_free(AxisPortalConfig *self)
 	g_free(self->ca_file);
 	g_free(self->listen_host);
 	g_free(self->trusted_proxies);
+	g_free(self->service_links);
 	g_free(self);
 }
 
@@ -206,15 +207,176 @@ read_file(
 	return TRUE;
 }
 
+/* ── Kubernetes service links ───────────────────────────────────── */
+
+/* A port as Kubernetes writes one: 1 to 65535, plain digits. */
+static gboolean
+link_port(const gchar *text)
+{
+	guint port = 0;
+	const gchar *p;
+
+	if (text == NULL || text[0] == '\0' || text[0] == '0' || strlen(text) > 5)
+		return FALSE;
+	for (p = text; *p != '\0'; p++) {
+		if (!g_ascii_isdigit(*p))
+			return FALSE;
+		port = port * 10 + (guint)(*p - '0');
+	}
+	return port <= 65535;
+}
+
+static gboolean
+link_protocol(
+	const gchar *text,
+	gsize        length,
+	gboolean     upper
+){
+	static const gchar *const lower_words[] = { "tcp", "udp", "sctp", NULL };
+	static const gchar *const upper_words[] = { "TCP", "UDP", "SCTP", NULL };
+	const gchar *const *words = upper ? upper_words : lower_words;
+	guint i;
+
+	for (i = 0; words[i] != NULL; i++) {
+		if (strlen(words[i]) == length && strncmp(text, words[i], length) == 0)
+			return TRUE;
+	}
+	return FALSE;
+}
+
+/* "tcp://10.0.0.7:7802", "udp://[fd00::7]:53": a service link's address. */
+static gboolean
+link_address(const gchar *text)
+{
+	const gchar *rest = text != NULL ? strstr(text, "://") : NULL;
+	const gchar *colon;
+	g_autofree gchar *host = NULL;
+
+	if (rest == NULL || !link_protocol(text, (gsize)(rest - text), FALSE))
+		return FALSE;
+	rest += 3;
+	colon = strrchr(rest, ':');
+	if (colon == NULL || !link_port(colon + 1))
+		return FALSE;
+	if (rest[0] == '[') {
+		if (colon - rest < 3 || colon[-1] != ']')
+			return FALSE;
+		host = g_strndup(rest + 1, (gsize)(colon - rest - 2));
+	} else {
+		host = g_strndup(rest, (gsize)(colon - rest));
+	}
+	return axis_ip_address_parse(host, NULL);
+}
+
+/* Whether @rest is "<digits>_<PROTOCOL>", and how long that is. */
+static gsize
+link_port_protocol(const gchar *rest)
+{
+	gsize digits = 0;
+	gsize length;
+
+	while (g_ascii_isdigit(rest[digits]))
+		digits++;
+	if (digits == 0 || rest[digits] != '_')
+		return 0;
+	{
+		g_autofree gchar *port = g_strndup(rest, digits);
+
+		if (!link_port(port))
+			return 0;
+	}
+	for (length = digits + 1; g_ascii_isupper(rest[length]); length++)
+		;
+	if (!link_protocol(rest + digits + 1, length - digits - 1, TRUE))
+		return 0;
+	return length;
+}
+
+/*
+ * Whether @name and @value are one of the variables Kubernetes puts into
+ * every container of a namespace for a Service called axis-portal (unless
+ * the pod says enableServiceLinks: false):
+ *
+ *   AXIS_PORTAL_SERVICE_HOST=10.0.0.7
+ *   AXIS_PORTAL_SERVICE_PORT=7802, AXIS_PORTAL_SERVICE_PORT_<NAME>=7802
+ *   AXIS_PORTAL_PORT=tcp://10.0.0.7:7802
+ *   AXIS_PORTAL_PORT_7802_TCP=tcp://10.0.0.7:7802
+ *   AXIS_PORTAL_PORT_7802_TCP_PROTO=tcp, _PORT=7802, _ADDR=10.0.0.7
+ *
+ * The value must have its shape too, so that a setting misspelled into one
+ * of these names is still refused.
+ */
+static gboolean
+is_service_link(
+	const gchar *name,
+	const gchar *value
+){
+	const gchar *rest = name + strlen("AXIS_PORTAL_");
+	const gchar *p;
+	gsize length;
+
+	if (strcmp(rest, "SERVICE_HOST") == 0)
+		return axis_ip_address_parse(value, NULL);
+	if (strcmp(rest, "SERVICE_PORT") == 0)
+		return link_port(value);
+	if (g_str_has_prefix(rest, "SERVICE_PORT_") && rest[strlen("SERVICE_PORT_")] != '\0') {
+		for (p = rest + strlen("SERVICE_PORT_"); *p != '\0'; p++) {
+			if (!g_ascii_isupper(*p) && !g_ascii_isdigit(*p) && *p != '_')
+				return FALSE;
+		}
+		return link_port(value);
+	}
+	if (strcmp(rest, "PORT") == 0)
+		return link_address(value);
+	if (!g_str_has_prefix(rest, "PORT_"))
+		return FALSE;
+	rest += strlen("PORT_");
+	length = link_port_protocol(rest);
+	if (length == 0)
+		return FALSE;
+	rest += length;
+	if (rest[0] == '\0')
+		return link_address(value);
+	if (strcmp(rest, "_PROTO") == 0)
+		return value != NULL && link_protocol(value, strlen(value), FALSE);
+	if (strcmp(rest, "_PORT") == 0)
+		return link_port(value);
+	if (strcmp(rest, "_ADDR") == 0)
+		return axis_ip_address_parse(value, NULL);
+	return FALSE;
+}
+
+/* A variable's name may be printed when it is of the characters a shell
+ * writes names with: a token (which has lower-case letters and '-' almost
+ * always) pasted into a name would not be. */
+static gboolean
+printable_name(const gchar *name)
+{
+	const gchar *p;
+
+	if (strlen(name) > 128)
+		return FALSE;
+	for (p = name; *p != '\0'; p++) {
+		if (!g_ascii_isupper(*p) && !g_ascii_isdigit(*p) && *p != '_')
+			return FALSE;
+	}
+	return TRUE;
+}
+
 /* The environment replaces the file's value.  A variable that begins with
  * AXIS_PORTAL_ and is not one of the keys is refused like a key of the file:
- * a setting that is believed to be in force and is not is worse than none. */
+ * a setting that is believed to be in force and is not is worse than none.
+ * Kubernetes' service links for a Service called axis-portal are not
+ * settings: they are left aside, and their names kept for one line of the
+ * log. */
 static gboolean
 read_environment(
-	Raw     *raw,
-	gchar  **envp,
-	GError **error
+	Raw               *raw,
+	gchar            **envp,
+	AxisPortalConfig  *config,
+	GError           **error
 ){
+	GString *links = NULL;
 	guint i;
 	guint j;
 
@@ -228,21 +390,39 @@ read_environment(
 		name = g_strndup(envp[i], (gsize)(equals - envp[i]));
 		for (j = 0; keys[j].key != NULL; j++)
 			known = known || strcmp(keys[j].env, name) == 0;
-		if (!known) {
-			g_autofree gchar *lower = g_ascii_strdown(name + strlen("AXIS_PORTAL_"), -1);
-
-			/* The daemon's own settings for its portal listener have names
-			 * that look like the portal's. */
-			if (strcmp(name, "AXIS_PORTAL_LISTEN_PORT") == 0 || strcmp(name, "AXIS_PORTAL_LISTEN_HOST") == 0)
-				return fail(error, "the environment has %s, which is a setting of the daemon (axisd), not of "
-					"axis-portal: the portal's own address is AXIS_PORTAL_WEB_LISTEN_HOST and "
-					"AXIS_PORTAL_WEB_LISTEN_PORT, and the daemon's is given in AXIS_PORTAL_URL", name);
-			if (printable_key(lower))
-				return fail(error, "the environment has %s, which axis-portal does not know", name);
-			return fail(error, "the environment has a variable that begins with AXIS_PORTAL_ and that axis-portal "
-				"does not know");
+		if (known)
+			continue;
+		/* The daemon's own settings for its portal listener have names that
+		 * look like the portal's. */
+		if (strcmp(name, "AXIS_PORTAL_LISTEN_PORT") == 0 || strcmp(name, "AXIS_PORTAL_LISTEN_HOST") == 0) {
+			if (links != NULL)
+				g_string_free(links, TRUE);
+			return fail(error, "the environment has %s, which is a setting of the daemon (axisd), not of "
+				"axis-portal: the portal's own address is AXIS_PORTAL_WEB_LISTEN_HOST and "
+				"AXIS_PORTAL_WEB_LISTEN_PORT, and the daemon's is given in AXIS_PORTAL_URL", name);
 		}
+		if (is_service_link(name, equals + 1)) {
+			if (links == NULL)
+				links = g_string_new(name);
+			else
+				g_string_append_printf(links, ", %s", name);
+			continue;
+		}
+		if (links != NULL)
+			g_string_free(links, TRUE);
+		if (!printable_name(name))
+			return fail(error, "the environment has a variable whose name begins with AXIS_PORTAL_, which "
+				"axis-portal does not know; its name has characters other than A-Z, 0-9 and _ or is longer than "
+				"128, and is not printed in case it holds a secret");
+		if (strstr(name, "_SERVICE_HOST") != NULL || strstr(name, "_SERVICE_PORT") != NULL ||
+		    strstr(name, "_PORT_") != NULL || g_str_has_suffix(name, "_PORT"))
+			return fail(error, "the environment has %s, which axis-portal does not know (if it is a Kubernetes "
+				"service link of another Service whose name begins with axis-portal, give that Service another "
+				"name or set enableServiceLinks: false in the pod's spec)", name);
+		return fail(error, "the environment has %s, which axis-portal does not know", name);
 	}
+	if (links != NULL)
+		config->service_links = g_string_free(links, FALSE);
 	for (i = 0; keys[i].key != NULL; i++) {
 		const gchar *value = g_environ_getenv(envp, keys[i].env);
 
@@ -452,7 +632,7 @@ axis_portal_config_load(
 
 	if (path != NULL && !read_file(&raw, path, error))
 		goto out;
-	if (!read_environment(&raw, envp, error))
+	if (!read_environment(&raw, envp, config, error))
 		goto out;
 
 	if ((text = raw_get(&raw, "log_level")) != NULL && !axis_log_level_from_string(text, &config->log_level)) {

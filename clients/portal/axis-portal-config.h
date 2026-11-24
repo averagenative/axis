@@ -7,6 +7,10 @@
  * A key the portal does not know stops it, with the key's name: there is no
  * key for a database, a media path, an indexer, a download client or a
  * details provider, and none can be smuggled in under another spelling.
+ * The variables Kubernetes adds for a Service called axis-portal
+ * (AXIS_PORTAL_SERVICE_HOST, AXIS_PORTAL_PORT_7802_TCP and the like, with
+ * values of their shape) are not settings: they are left aside and named in
+ * one line of the log.
  *
  *   url                   the daemon's portal listener, such as
  *                         http://axis:7801 (required)
@@ -72,6 +76,7 @@ typedef struct
 	guint          max_per_address;
 	AxisLogLevel   log_level;
 	AxisLogFormat  log_format;
+	gchar         *service_links;	/* Kubernetes' variables left aside, by name; nullable */
 } AxisPortalConfig;
 
 /**

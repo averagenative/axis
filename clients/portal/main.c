@@ -69,6 +69,9 @@ run(const AxisPortalConfig *config)
 	axis_log_init(config->log_level);
 	axis_log_set_format(config->log_format);
 	g_message("axis-portal %s (%s) starts: %s", AXIS_VERSION, AXIS_GIT_SHA, settings);
+	if (config->service_links != NULL)
+		g_message("left aside the Kubernetes service links of a Service called axis-portal, which are not settings: "
+			"%s (enableServiceLinks: false in the pod's spec leaves them out)", config->service_links);
 	/* (add-request-portal, slice P5 removes this line when its review has
 	 * passed.) */
 	g_warning("axis-portal has not been reviewed for exposure to the internet. Do not put it where the internet "
