@@ -15,6 +15,20 @@ $(CORE_OBJECTS): $(OBJDIR)/%.o: $(SRCDIR)/%.c
 	$(ECHO) "  CC      $< (core)"
 	$(Q)$(CC) $(CORE_CFLAGS) -MMD -MP -c -o $@ $<
 
+# What axis-portal shares with the daemon: the same sources, without libpq's
+# include paths (see config.mk).  A static pattern rule, as for the core.
+$(PORTAL_SHARED_OBJECTS): $(OBJDIR)/%.o: $(SRCDIR)/%.c
+	@mkdir -p $(dir $@)
+	$(ECHO) "  CC      $< (portal)"
+	$(Q)$(CC) $(PORTAL_SHARED_CFLAGS) -MMD -MP -c -o $@ $<
+
+# Objects from clients/portal/ (axis-portal): htmx-glib, libsoup, json-glib
+# and libsodium, and no libpq.
+$(PORTAL_OBJECTS): $(OBJDIR)/%.o: %.c
+	@mkdir -p $(dir $@)
+	$(ECHO) "  CC      $<"
+	$(Q)$(CC) $(PORTAL_CFLAGS) -MMD -MP -c -o $@ $<
+
 # Objects from clients/ (axis-worker): GLib's and libsoup's include paths
 # only.
 $(OBJDIR)/clients/%.o: clients/%.c
@@ -34,6 +48,7 @@ $(OBJDIR)/tests/%.o: $(TESTDIR)/%.c
 	$(ECHO) "  CC      $<"
 	$(Q)$(CC) $(CFLAGS) -I$(TESTDIR) -DAXISD_PATH=\"$(abspath $(AXISD))\" \
 		-DAXIS_WORKER_PATH=\"$(abspath $(AXIS_WORKER))\" \
+		-DAXIS_PORTAL_PATH=\"$(abspath $(AXIS_PORTAL))\" \
 		-DAXIS_MIGRATION_DIR=\"$(abspath $(MIGRATION_DIR))\" \
 		-MMD -MP -c -o $@ $<
 

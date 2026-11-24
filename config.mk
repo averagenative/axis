@@ -183,6 +183,21 @@ WORKER_CFLAGS   = $(CFLAGS_BASE) $(CFLAGS_OPT) $(CFLAGS_SAN) $(CFLAGS_HARDEN) \
                   -I$(SRCDIR) -I$(OUTDIR)
 WORKER_LDFLAGS  = $(LDFLAGS_SAN) $(LDFLAGS_HARDEN) $(shell pkg-config --libs $(WORKER_PKG_DEPS)) -lm
 
+# axis-portal (clients/portal/, and PORTAL_SHARED_SOURCES in the Makefile:
+# the files of src/ it shares with the daemon) serves pages, so it has
+# htmx-glib, json-glib (which htmx-glib needs) and libsodium (its random
+# values and its CSRF tokens) besides what the worker has; it has no libpq,
+# and a file of it that called the database would not link
+# (tests/check-portal-link.sh checks the result).
+PORTAL_PKG_DEPS = $(CORE_PKG_DEPS) libsoup-3.0 json-glib-1.0 libsodium
+PORTAL_SHARED_CFLAGS = $(CFLAGS_BASE) $(CFLAGS_OPT) $(CFLAGS_SAN) $(CFLAGS_HARDEN) \
+                  $(shell pkg-config --cflags $(PORTAL_PKG_DEPS)) $(HTMX_CFLAGS) -DG_LOG_DOMAIN=\"axis\" \
+                  -I$(SRCDIR) -I$(OUTDIR)
+PORTAL_CFLAGS   = $(CFLAGS_BASE) $(CFLAGS_OPT) $(CFLAGS_SAN) $(CFLAGS_HARDEN) \
+                  $(shell pkg-config --cflags $(PORTAL_PKG_DEPS)) $(HTMX_CFLAGS) -DG_LOG_DOMAIN=\"axis-portal\" \
+                  -I$(SRCDIR) -I$(OUTDIR)
+PORTAL_LDFLAGS  = $(LDFLAGS_SAN) $(LDFLAGS_HARDEN) $(shell pkg-config --libs $(PORTAL_PKG_DEPS)) -lm
+
 # Installation (make install DESTDIR=... PREFIX=...) and the container image.
 PREFIX          ?= /usr/local
 DESTDIR         ?=
