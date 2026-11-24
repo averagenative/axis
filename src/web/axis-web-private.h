@@ -243,6 +243,12 @@ axis_web_knows_path(
 	const gchar *path
 );
 
+/* For the tests that walk the route table: every route registered through
+ * the shell, as "<METHOD> <pattern>", or "<METHOD> public <pattern>" for one
+ * that needs no session.  Transfer full (of gchar *). */
+GPtrArray *
+axis_web_list_routes(AxisWeb *self);
+
 /*
  * Marks @response as having its own cache policy, so that the middleware
  * does not replace it with "no-store".  Static assets only.

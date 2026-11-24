@@ -58,6 +58,16 @@ G_BEGIN_DECLS
 #define AXIS_DEVICE_MAX_PER_USER       20
 #define AXIS_DEVICE_OWNER_FREE_FAILURES 10
 
+/* Throttles: free failures, first delay, longest delay, forget after,
+ * keys tracked.  A client address is allowed more failures than one
+ * username, since several people may share one address. */
+#define AXIS_AUTH_USER_FREE_FAILURES     5
+#define AXIS_AUTH_ADDRESS_FREE_FAILURES  20
+#define AXIS_AUTH_THROTTLE_BASE_US       (G_GINT64_CONSTANT(2) * G_USEC_PER_SEC)
+#define AXIS_AUTH_THROTTLE_MAX_US        (G_GINT64_CONSTANT(15) * 60 * G_USEC_PER_SEC)
+#define AXIS_AUTH_THROTTLE_FORGET_US     (G_GINT64_CONSTANT(24) * 3600 * G_USEC_PER_SEC)
+#define AXIS_AUTH_THROTTLE_MAX_KEYS      10000
+
 /* The forwarding hint: this many requests with X-Forwarded-For, all from
  * one private address while no proxy is trusted, before it is given. */
 #define AXIS_FORWARDING_HINT_REQUESTS  10
@@ -110,7 +120,27 @@ struct _AxisWebAuth
 	AxisLoginThrottle *by_worker_address;	/* wrong worker tokens, per client address */
 	AxisAuthAccountGoneFunc account_gone;	/* told of an account disabled or deleted; nullable */
 	gpointer           account_gone_data;
+	/* The portal API's logins (axis-web-auth-portal.c): counts of their own. */
+	AxisLoginThrottle *portal_by_user;
+	AxisLoginThrottle *portal_by_address;	/* the address the portal reports: only ever a refusal more */
+	AxisLoginThrottle *portal_by_device;
+	AxisLoginThrottle *portal_by_owner;
+	GQueue             portal_failures;	/* gint64*: when each failed login of the last hour was (monotonic) */
+	gint64             portal_admitted_us;	/* when a login was last admitted over the hourly ceiling */
+	GQueue             portal_waiting;	/* logins waiting for the one hashing place */
+	gboolean           portal_hashing;	/* one is being checked */
 };
+
+/* Made and freed with the auth; and, as it stops, every login that still
+ * waits is answered busy (axis-web-auth-portal.c). */
+void
+axis_web_auth_portal_init(AxisWebAuth *self);
+
+void
+axis_web_auth_portal_stop(AxisWebAuth *self);
+
+void
+axis_web_auth_portal_clear(AxisWebAuth *self);
 
 /* What follows an account that goes: see AxisAuthAccountGoneFunc.  Main
  * loop, before the Users page is used; %NULL removes it. */
@@ -203,6 +233,21 @@ axis_web_auth_worker_error(
 	const gchar *message
 );
 
+/* Whether @path (or a route's pattern) is of the portal API
+ * (AXIS_PORTAL_API_PREFIX, api/axis-portal-proto.h): answered on the portal
+ * listener only.  On this one every such path is one that does not exist,
+ * and no route may be registered there. */
+gboolean
+axis_web_auth_is_portal_path(const gchar *path);
+
+/* A JSON refusal of the portal API (axis_portal_error_to_json()). */
+HtmxResponse *
+axis_web_auth_portal_error(
+	guint        status,
+	const gchar *word,
+	const gchar *message
+);
+
 /* Whether a route @pattern may be registered as public. */
 gboolean
 axis_web_auth_is_public_pattern(const gchar *pattern);
@@ -245,6 +290,23 @@ axis_web_auth_dispatch(
 	AxisAuthDoneFunc  done,
 	gpointer          data,
 	GDestroyNotify    free_data
+);
+
+/* Runs on the main loop after work that has no request: @skipped when the
+ * auth was stopping and the work did not run. */
+typedef void (*AxisAuthAfterFunc)(AxisWebAuth *auth, gpointer data, gboolean skipped);
+
+/*
+ * Runs @work on a worker, then @after on the main loop.  Returns: %FALSE,
+ * having done nothing, when too much work is waiting or the auth has no
+ * database or is stopping.
+ */
+gboolean
+axis_web_auth_run(
+	AxisWebAuth       *self,
+	AxisAuthWorkFunc   work,
+	AxisAuthAfterFunc  after,
+	gpointer           data
 );
 
 /* ── Responses and cookies ────────────────────────────────────── */
@@ -326,6 +388,22 @@ gchar *
 axis_web_auth_device_of(
 	AxisWebAuth    *self,
 	HtmxRequest    *request,
+	const AxisUser *account
+);
+
+/* As axis_web_auth_device_of(), for a device value however it arrived (the
+ * portal API carries it in its login). */
+gchar *
+axis_web_auth_device_of_value(
+	AxisWebAuth    *self,
+	const gchar    *value,
+	const AxisUser *account
+);
+
+/* Makes a new device value for @account and records it (transfer full). */
+gchar *
+axis_web_auth_device_issue(
+	AxisWebAuth    *self,
 	const AxisUser *account
 );
 

@@ -48,15 +48,49 @@ axis_user_error_quark(void);
  * administrator (0x617869735f757372: its bytes spell "axis_usr"). */
 #define AXIS_USER_LOCK_KEY "7023479563127976818"
 
+/**
+ * AxisUserRole:
+ * @AXIS_USER_ROLE_USER: an ordinary user: may look, and ask for titles
+ * @AXIS_USER_ROLE_ADMIN: an administrator
+ * @AXIS_USER_ROLE_REQUESTER: below the ordinary user: asks for titles through
+ *   the portal API only, and has no part in the engine's own interface (no
+ *   login there, no session there, no route there)
+ */
 typedef enum
 {
 	AXIS_USER_ROLE_USER,
-	AXIS_USER_ROLE_ADMIN
+	AXIS_USER_ROLE_ADMIN,
+	AXIS_USER_ROLE_REQUESTER
 } AxisUserRole;
 
-/* "admin" or "user", as stored. */
+/* "admin", "user" or "requester", as stored. */
 const gchar *
 axis_user_role_to_string(AxisUserRole role);
+
+/* The role @text names; %FALSE for anything but the three. */
+gboolean
+axis_user_role_from_string(
+	const gchar  *text,
+	AxisUserRole *role
+);
+
+/* A requester's password has at least this many characters, and does not
+ * contain the username. */
+#define AXIS_REQUESTER_PASSWORD_MIN_CHARS 12
+
+/**
+ * axis_user_check_requester_password:
+ * @username: the account's (normalised) name
+ * @password: (nullable): what an administrator typed
+ *
+ * Returns: (nullable): %NULL if @password may be a requester's, else one
+ *   sentence that states the rule (static)
+ */
+const gchar *
+axis_user_check_requester_password(
+	const gchar *username,
+	const gchar *password
+);
 
 /**
  * AxisUser:
@@ -231,8 +265,11 @@ axis_user_store_set_disabled(
 /**
  * axis_user_store_set_role:
  *
- * Demoting the only enabled administrator fails with
- * %AXIS_USER_ERROR_LAST_ADMIN.
+ * Demoting the only enabled administrator (to a user or to a requester) fails
+ * with %AXIS_USER_ERROR_LAST_ADMIN.  A change of the role moves the account
+ * to a new epoch and deletes its sessions of every kind, in the same
+ * transaction: nothing opened under the old role outlives it.  Setting the
+ * role the account has changes nothing.
  *
  * Returns: (transfer full) (nullable): the account as it now is
  */

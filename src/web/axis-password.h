@@ -70,6 +70,12 @@ axis_password_verify(
 	const gchar *password
 );
 
+/* How many times axis_password_verify() was called since the process began
+ * (each call is one password hash): for the tests that count them.  Any
+ * thread. */
+guint
+axis_password_verify_count(void);
+
 /**
  * axis_password_prepare:
  *

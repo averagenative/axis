@@ -17,7 +17,50 @@ G_DEFINE_QUARK(axis-user-error-quark, axis_user_error)
 const gchar *
 axis_user_role_to_string(AxisUserRole role)
 {
-	return role == AXIS_USER_ROLE_ADMIN ? "admin" : "user";
+	switch (role) {
+	case AXIS_USER_ROLE_ADMIN:
+		return "admin";
+	case AXIS_USER_ROLE_REQUESTER:
+		return "requester";
+	case AXIS_USER_ROLE_USER:
+	default:
+		return "user";
+	}
+}
+
+gboolean
+axis_user_role_from_string(
+	const gchar  *text,
+	AxisUserRole *role
+){
+	if (g_strcmp0(text, "admin") == 0)
+		*role = AXIS_USER_ROLE_ADMIN;
+	else if (g_strcmp0(text, "user") == 0)
+		*role = AXIS_USER_ROLE_USER;
+	else if (g_strcmp0(text, "requester") == 0)
+		*role = AXIS_USER_ROLE_REQUESTER;
+	else
+		return FALSE;
+	return TRUE;
+}
+
+const gchar *
+axis_user_check_requester_password(
+	const gchar *username,
+	const gchar *password
+){
+	static const gchar rule[] = "A requester's password needs at least 12 characters and must not contain the "
+		"username.";
+	g_autofree gchar *folded = NULL;
+
+	if (password == NULL || !g_utf8_validate(password, -1, NULL) ||
+	    g_utf8_strlen(password, -1) < AXIS_REQUESTER_PASSWORD_MIN_CHARS)
+		return rule;
+	/* Usernames are lower-case ASCII: the password is compared in that. */
+	folded = g_ascii_strdown(password, -1);
+	if (username != NULL && username[0] != '\0' && strstr(folded, username) != NULL)
+		return rule;
+	return NULL;
 }
 
 AxisUser *
@@ -59,8 +102,9 @@ user_from_row(
 
 	axis_db_result_get_int64(result, row, 0, &user->id);
 	user->username = g_strdup(axis_db_result_get_text(result, row, 1));
-	user->role = g_strcmp0(axis_db_result_get_text(result, row, 2), "admin") == 0 ?
-		AXIS_USER_ROLE_ADMIN : AXIS_USER_ROLE_USER;
+	/* A role this build does not know is the weakest one, never a stronger. */
+	if (!axis_user_role_from_string(axis_db_result_get_text(result, row, 2), &user->role))
+		user->role = AXIS_USER_ROLE_REQUESTER;
 	axis_db_result_get_boolean(result, row, 3, &user->disabled);
 	axis_db_result_get_int64(result, row, 4, &epoch);
 	user->epoch = (gint)epoch;
@@ -377,8 +421,25 @@ typedef enum
 	CHANGE_ENABLE,
 	CHANGE_MAKE_ADMIN,
 	CHANGE_MAKE_USER,
+	CHANGE_MAKE_REQUESTER,
 	CHANGE_DELETE
 } Change;
+
+/* The role a change gives, or %NULL when it is not a change of the role. */
+static const gchar *
+change_role(Change change)
+{
+	switch (change) {
+	case CHANGE_MAKE_ADMIN:
+		return "admin";
+	case CHANGE_MAKE_USER:
+		return "user";
+	case CHANGE_MAKE_REQUESTER:
+		return "requester";
+	default:
+		return NULL;
+	}
+}
 
 typedef struct
 {
@@ -443,8 +504,11 @@ user_change_body(
 ){
 	UserChange *op = data;
 	g_autoptr(AxisDbResult) result = NULL;
-	const gchar *params[1];
+	const gchar *params[2];
 	const gchar *sql = NULL;
+	const gchar *role = change_role(op->change);
+	gboolean ends_sessions = op->change == CHANGE_DISABLE;
+	guint n_params = 1;
 
 	if (!axis_db_conn_exec(conn, "SELECT pg_advisory_xact_lock(" AXIS_USER_LOCK_KEY ")",
 	                       0, NULL, NULL, error))
@@ -453,6 +517,23 @@ user_change_body(
 		return FALSE;
 
 	params[0] = op->id;
+	params[1] = role;
+	/* A change of the role: the row is locked, and only a role that differs
+	 * moves the account to a new epoch and ends its sessions. */
+	if (role != NULL) {
+		g_autoptr(AxisDbResult) current = NULL;
+
+		if (!axis_db_conn_exec(conn, "SELECT role FROM app_user WHERE id = $1 FOR UPDATE", 1, params, &current, error))
+			return FALSE;
+		if (axis_db_result_get_n_rows(current) == 0) {
+			g_set_error_literal(error, AXIS_USER_ERROR, AXIS_USER_ERROR_NOT_FOUND,
+				"the account no longer exists");
+			return FALSE;
+		}
+		ends_sessions = g_strcmp0(axis_db_result_get_text(current, 0, 0), role) != 0;
+		n_params = 2;
+	}
+
 	switch (op->change) {
 	case CHANGE_DISABLE:
 		sql = "UPDATE app_user SET disabled = true, auth_epoch = auth_epoch + 1, "
@@ -463,19 +544,17 @@ user_change_body(
 		      "WHERE id = $1 RETURNING " USER_COLUMNS;
 		break;
 	case CHANGE_MAKE_ADMIN:
-		sql = "UPDATE app_user SET role = 'admin', updated_at = now() "
-		      "WHERE id = $1 RETURNING " USER_COLUMNS;
-		break;
 	case CHANGE_MAKE_USER:
-		sql = "UPDATE app_user SET role = 'user', updated_at = now() "
-		      "WHERE id = $1 RETURNING " USER_COLUMNS;
+	case CHANGE_MAKE_REQUESTER:
+		sql = "UPDATE app_user SET auth_epoch = auth_epoch + CASE WHEN role <> $2 THEN 1 ELSE 0 END, role = $2, "
+		      "updated_at = now() WHERE id = $1 RETURNING " USER_COLUMNS;
 		break;
 	case CHANGE_DELETE:
 		sql = "DELETE FROM app_user WHERE id = $1 RETURNING " USER_COLUMNS;
 		break;
 	}
 
-	if (!axis_db_conn_exec(conn, sql, 1, params, &result, error))
+	if (!axis_db_conn_exec(conn, sql, n_params, params, &result, error))
 		return FALSE;
 	if (axis_db_result_get_n_rows(result) == 0) {
 		g_set_error_literal(error, AXIS_USER_ERROR, AXIS_USER_ERROR_NOT_FOUND,
@@ -484,7 +563,8 @@ user_change_body(
 	}
 	op->result = user_from_row(result, 0);
 
-	if (op->change == CHANGE_DISABLE &&
+	/* Of every kind: the engine's sessions and the portal's proofs alike. */
+	if (ends_sessions &&
 	    !axis_db_conn_exec(conn, "DELETE FROM web_session WHERE user_id = $1",
 	                       1, params, NULL, error))
 		return FALSE;
@@ -532,8 +612,8 @@ axis_user_store_set_role(
 	AxisUserRole  role,
 	GError      **error
 ){
-	return user_change(pool, id, role == AXIS_USER_ROLE_ADMIN ? CHANGE_MAKE_ADMIN : CHANGE_MAKE_USER,
-		error);
+	return user_change(pool, id, role == AXIS_USER_ROLE_ADMIN ? CHANGE_MAKE_ADMIN :
+		role == AXIS_USER_ROLE_REQUESTER ? CHANGE_MAKE_REQUESTER : CHANGE_MAKE_USER, error);
 }
 
 gboolean

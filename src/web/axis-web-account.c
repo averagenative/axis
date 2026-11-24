@@ -345,7 +345,8 @@ account_page(
 	axis_web_auth_add(facts, htmx_dd_new_with_text(state->username));
 	axis_web_auth_add(facts, htmx_dt_new_with_text("Role"));
 	axis_web_auth_add(facts, htmx_dd_new_with_text(
-		state->role == AXIS_USER_ROLE_ADMIN ? "Administrator" : "User"));
+		state->role == AXIS_USER_ROLE_ADMIN ? "Administrator" :
+		state->role == AXIS_USER_ROLE_REQUESTER ? "Requester" : "User"));
 	axis_web_auth_add(you, facts);
 	axis_web_auth_add(content, you);
 	axis_web_auth_add(content, theme_card(request, state, &place));
@@ -687,7 +688,9 @@ users_message(const gchar *key)
 		{ "disabled", "The account has been disabled and its sessions ended." },
 		{ "enabled",  "The account has been enabled." },
 		{ "deleted",  "The account has been deleted." },
-		{ "role",     "The role has been changed." },
+		{ "role",     "The role has been changed. If it is another role than before, the account's sessions have "
+		              "been ended." },
+		{ "portal-ended", "The account's portal sessions have been ended." },
 		{ "password", "The password has been set and the account's sessions ended." },
 		{ NULL, NULL }
 	};
@@ -701,11 +704,26 @@ users_message(const gchar *key)
 	return NULL;
 }
 
+static const gchar *
+role_label(AxisUserRole role)
+{
+	switch (role) {
+	case AXIS_USER_ROLE_ADMIN:
+		return "Administrator";
+	case AXIS_USER_ROLE_REQUESTER:
+		return "Requester";
+	case AXIS_USER_ROLE_USER:
+	default:
+		return "User";
+	}
+}
+
 static HtmxNode *
 user_actions(
 	HtmxRequest         *request,
 	const AxisAuthState *state,
-	const AxisUser      *user
+	const AxisUser      *user,
+	guint                portal_sessions
 ){
 	HtmxTd *cell = htmx_td_new();
 	HtmxDiv *actions = htmx_div_new();
@@ -723,12 +741,24 @@ user_actions(
 
 	htmx_element_add_class(HTMX_ELEMENT(actions), "actions");
 
-	if (user->role == AXIS_USER_ROLE_ADMIN)
+	/* The two roles the account does not have. */
+	if (user->role != AXIS_USER_ROLE_USER)
 		axis_web_auth_add(actions, action_form(request, role, "role", "user", "Change role to user", NULL));
-	else
+	if (user->role != AXIS_USER_ROLE_ADMIN)
 		axis_web_auth_add(actions, action_form(request, role, "role", "admin", "Change role to administrator", NULL));
+	if (user->role != AXIS_USER_ROLE_REQUESTER)
+		axis_web_auth_add(actions, action_form(request, role, "role", "requester", "Change role to requester",
+			NULL));
 	axis_web_auth_add(actions, action_form(request, toggle, NULL, NULL,
 		user->disabled ? "Enable this account" : "Disable this account", NULL));
+	/* What a requester logged in to through the request portal. */
+	if (portal_sessions > 0) {
+		g_autofree gchar *end = g_strconcat(base, "/portal-sessions/end", NULL);
+		g_autofree gchar *end_label = g_strdup_printf("End %u portal %s", portal_sessions,
+			portal_sessions == 1 ? "session" : "sessions");
+
+		axis_web_auth_add(actions, action_form(request, end, NULL, NULL, end_label, NULL));
+	}
 
 	htmx_element_add_class(HTMX_ELEMENT(reset), "inline-form");
 	htmx_element_add_class(HTMX_ELEMENT(label), "visually-hidden");
@@ -782,10 +812,11 @@ users_page(
 	HtmxNode *create = card("New account");
 	HtmxNode *form = axis_web_auth_post_form(request, "/admin/users");
 	HtmxDiv *role_field = htmx_div_new();
-	HtmxLabel *role_label = htmx_label_new_for("role");
+	HtmxLabel *role_text = htmx_label_new_for("role");
 	HtmxSelect *role = htmx_select_new_with_name("role");
 	HtmxOption *as_user = htmx_option_new_with_value("user", "User");
 	HtmxOption *as_admin = htmx_option_new_with_value("admin", "Administrator");
+	HtmxOption *as_requester = htmx_option_new_with_value("requester", "Requester (the request portal only)");
 	HtmxResponse *response;
 	AxisWebNotice place;
 	guint i;
@@ -794,7 +825,9 @@ users_page(
 	htmx_node_add_child(HTMX_NODE(content), HTMX_NODE(title));
 	axis_web_auth_add(content, axis_web_page_intro("The people who can log in to Axis. Administrators can change "
 		"settings and start searches, downloads, imports and conversions; users can look, and "
-		"can ask for a movie or a series while the Requests module is on, but change nothing else."));
+		"can ask for a movie or a series while the Requests module is on, but change nothing else. A requester "
+		"cannot log in here at all: the account is for the request portal only, and its password needs at least 12 "
+		"characters."));
 	axis_web_notice_begin(&place, request, error, g_strdup(message), HTMX_NODE(content));
 	htmx_element_set_id(HTMX_ELEMENT(accounts), "accounts");
 	axis_web_notice_put(&place, accounts, "accounts");
@@ -815,9 +848,10 @@ users_page(
 		axis_web_auth_add(first, who);
 		axis_web_notice_put(&place, HTMX_NODE(first), row_id);
 		axis_web_auth_add(row, first);
-		axis_web_auth_add(row, cell_text(user->role == AXIS_USER_ROLE_ADMIN ? "Administrator" : "User"));
+		axis_web_auth_add(row, cell_text(role_label(user->role)));
 		axis_web_auth_add(row, cell_text(user->disabled ? "Disabled" : "Enabled"));
-		axis_web_auth_add(row, user_actions(request, state, user));
+		axis_web_auth_add(row, user_actions(request, state, user, axis_session_store_count_kind(auth->sessions,
+			user->id, AXIS_SESSION_PORTAL, axis_web_auth_now(auth))));
 		axis_web_auth_add(body, row);
 	}
 	axis_web_auth_add(table, body);
@@ -838,11 +872,12 @@ users_page(
 	axis_web_auth_add(form, axis_web_auth_field("new_user_password", "Password (at least 10 characters)",
 		"password", HTMX_INPUT_PASSWORD, "new-password", NULL));
 	htmx_element_add_class(HTMX_ELEMENT(role_field), "field");
-	htmx_node_set_text_content(HTMX_NODE(role_label), "Role");
+	htmx_node_set_text_content(HTMX_NODE(role_text), "Role");
 	htmx_element_set_id(HTMX_ELEMENT(role), "role");
 	axis_web_auth_add(role, as_user);
 	axis_web_auth_add(role, as_admin);
-	axis_web_auth_add(role_field, role_label);
+	axis_web_auth_add(role, as_requester);
+	axis_web_auth_add(role_field, role_text);
 	axis_web_auth_add(role_field, role);
 	axis_web_auth_add(form, role_field);
 	axis_web_auth_add(form, axis_web_auth_button("Create account", "button-primary"));
@@ -937,14 +972,7 @@ parse_role(
 	const gchar  *text,
 	AxisUserRole *role
 ){
-	if (g_strcmp0(text, "admin") == 0)
-		*role = AXIS_USER_ROLE_ADMIN;
-	else if (g_strcmp0(text, "user") == 0)
-		*role = AXIS_USER_ROLE_USER;
-	else
-		return FALSE;
-
-	return TRUE;
+	return axis_user_role_from_string(text, role);
 }
 
 static HtmxResponse *
@@ -968,6 +996,13 @@ handle_create_user(
 		return users_page(request, 400, TRUE, problem);
 	if (!parse_role(htmx_request_get_form_value(request, "role"), &role))
 		return users_page(request, 400, TRUE, "Choose a role.");
+	/* A requester's password is typed into the piece that faces the
+	 * internet: it has a rule of its own. */
+	if (role == AXIS_USER_ROLE_REQUESTER) {
+		problem = axis_user_check_requester_password(username, password);
+		if (problem != NULL)
+			return users_page(request, 400, TRUE, problem);
+	}
 
 	work = g_new0(CreateWork, 1);
 	work->username = g_steal_pointer(&username);
@@ -1060,7 +1095,7 @@ user_done(
 			"%s is the only enabled administrator, so it cannot be %s. Make another account an administrator "
 			"first.", work->name,
 			work->op == USER_DELETE ? "deleted" :
-			work->op == USER_DISABLE ? "disabled" : "changed to the user role");
+			work->op == USER_DISABLE ? "disabled" : "given another role");
 
 		axis_web_auth_audit("account change refused, last administrator: user=%s by=%s client=%s",
 			work->name, state->username, state->client_address);
@@ -1100,9 +1135,11 @@ user_done(
 		break;
 	}
 
-	/* An administrator who disabled or deleted their own account has no
-	 * session any more. */
-	self_ended = work->id == state->user_id && (work->op == USER_DISABLE || work->op == USER_DELETE);
+	/* An administrator who disabled or deleted their own account, or gave it
+	 * another role (which ends every session of an account), has no session
+	 * any more. */
+	self_ended = work->id == state->user_id && (work->op == USER_DISABLE || work->op == USER_DELETE ||
+		(work->op == USER_ROLE && work->result != NULL && work->result->role != state->role));
 	if (self_ended) {
 		response = axis_web_auth_redirect(request, "/login");
 		axis_web_auth_clear_session_cookie(request, response);
@@ -1168,6 +1205,30 @@ handle_delete(HtmxRequest *request, GHashTable *params, gpointer user_data)
 	return user_change(request, params, user_data, USER_DELETE);
 }
 
+/* Ending an account's portal sessions: every session proof issued to it stops
+ * working at the next request (in memory at once; the rows follow). */
+static HtmxResponse *
+handle_end_portal_sessions(
+	HtmxRequest *request,
+	GHashTable  *params,
+	gpointer     user_data
+){
+	AxisWebAuth *auth = user_data;
+	const AxisAuthState *state = axis_web_auth_state(request);
+	gint64 id = param_id(params);
+	const AxisUser *target = id != 0 ? axis_session_store_get_user(auth->sessions, id) : NULL;
+	g_autofree gchar *place = NULL;
+	guint ended;
+
+	if (target == NULL)
+		return not_found(request);
+	ended = axis_session_store_revoke_kind(auth->sessions, id, AXIS_SESSION_PORTAL);
+	axis_web_auth_audit("portal sessions ended: user=%s sessions=%u by=%s client=%s", target->username, ended,
+		state->username, state->client_address);
+	place = g_strdup_printf("user-%" G_GINT64_FORMAT, id);
+	return axis_web_place_redirect(request, "/admin/users", "portal-ended", place);
+}
+
 /* Setting another account's password. */
 
 static HtmxResponse *
@@ -1209,10 +1270,13 @@ handle_reset_password(
 	const gchar *password = htmx_request_get_form_value(request, "password");
 	const gchar *problem;
 	PasswordWork *work;
+	const AxisUser *target = id != 0 ? axis_session_store_get_user(auth->sessions, id) : NULL;
 
-	if (id == 0 || axis_session_store_get_user(auth->sessions, id) == NULL)
+	if (target == NULL)
 		return not_found(request);
 	problem = axis_auth_check_password(password);
+	if (problem == NULL && target->role == AXIS_USER_ROLE_REQUESTER)
+		problem = axis_user_check_requester_password(target->username, password);
 	if (problem != NULL)
 		return users_page(request, 400, TRUE, problem);
 
@@ -1249,4 +1313,6 @@ axis_web_account_register(
 		handle_delete, self);
 	axis_web_route_full(web, HTMX_METHOD_POST, "/admin/users/:id/password", AXIS_WEB_ROUTE_ADMIN,
 		handle_reset_password, self);
+	axis_web_route_full(web, HTMX_METHOD_POST, "/admin/users/:id/portal-sessions/end", AXIS_WEB_ROUTE_ADMIN,
+		handle_end_portal_sessions, self);
 }

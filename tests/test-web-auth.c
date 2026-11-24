@@ -2707,7 +2707,10 @@ test_admin_manage_accounts(Fixture *fx, gconstpointer data)
 	reply = post_as(fx, admin, path, promote);
 	g_assert_cmpuint(reply.status, ==, 303);
 	reply_clear(&reply);
-	/* The new role applies to the session already open. */
+	/* A change of the role ends every session of the account
+	 * (add-request-portal): the new role applies from the next login. */
+	g_assert_false(logged_in(fx, erin));
+	login_ok(fx, erin, "erin", "erins-new-password");
 	reply = get(fx, erin, "/admin/users");
 	g_assert_cmpuint(reply.status, ==, 200);
 	reply_clear(&reply);

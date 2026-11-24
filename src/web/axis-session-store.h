@@ -67,8 +67,28 @@ axis_session_store_get_idle_seconds(void);
  * ends the least recently used. */
 #define AXIS_SESSION_MAX_PER_USER 64
 
+/**
+ * AxisSessionKind:
+ * @AXIS_SESSION_WEB: a session of the engine's own interface: its token is
+ *   the browser's session cookie
+ * @AXIS_SESSION_PORTAL: made by a login through the portal API
+ *   (add-request-portal): its token is the session proof a request portal
+ *   presents for a person, beside its own token
+ *
+ * The kinds do not cross.  A lookup names the kind it accepts, and a session
+ * of the other kind is not found by it.  The account's role decides besides:
+ * a web session is valid only for an account that is not a requester, and a
+ * portal session only for one that is.
+ */
+typedef enum
+{
+	AXIS_SESSION_WEB,
+	AXIS_SESSION_PORTAL
+} AxisSessionKind;
+
 typedef struct
 {
+	AxisSessionKind kind;
 	gchar  *token_hash;	/* SHA-256 of the token, hex */
 	gchar  *public_id;	/* names the session on the account page */
 	gint64  user_id;
@@ -170,8 +190,11 @@ axis_session_store_remove_user(
  * @now_us: the current time
  * @user: (out) (transfer none) (optional): the session's account
  *
- * Finds the valid session for @token and marks it used.  An expired
- * session found on the way is ended.
+ * Finds the valid session of the engine's interface (%AXIS_SESSION_WEB) for
+ * @token and marks it used.  An expired session found on the way is ended.
+ * A portal session's proof finds nothing here, and neither does a session
+ * whose account is a requester (written from outside, or left by a change of
+ * the role): such a session is ended.
  *
  * Returns: (transfer none) (nullable): the session; valid until the next
  *   call that changes the store
@@ -179,6 +202,25 @@ axis_session_store_remove_user(
 const AxisSession *
 axis_session_store_lookup(
 	AxisSessionStore  *self,
+	const gchar       *token,
+	gint64             now_us,
+	const AxisUser   **user
+);
+
+/**
+ * axis_session_store_lookup_kind:
+ * @kind: the kind of session that is accepted
+ *
+ * As axis_session_store_lookup(), for @kind.  For %AXIS_SESSION_PORTAL: the
+ * session a login through the portal API made for @token (its proof), valid
+ * only while its account is an enabled requester under the epoch the session
+ * was made in.  A session of the other kind is not found (and not ended: it
+ * is valid where it belongs).
+ */
+const AxisSession *
+axis_session_store_lookup_kind(
+	AxisSessionStore  *self,
+	AxisSessionKind    kind,
 	const gchar       *token,
 	gint64             now_us,
 	const AxisUser   **user
@@ -195,9 +237,9 @@ axis_session_store_lookup(
  * @token: (out) (transfer full): the new session's token, for the
  *   cookie; free it with axis_secret_free()
  *
- * Makes a new session with a fresh random token.  If @epoch is not the
- * account's current one (it changed while the login was being checked),
- * the session is still made but is never valid.
+ * Makes a new session of the engine's interface with a fresh random token.
+ * If @epoch is not the account's current one (it changed while the login was
+ * being checked), the session is still made but is never valid.
  *
  * Returns: (transfer none): the session
  */
@@ -210,6 +252,44 @@ axis_session_store_create(
 	const gchar       *user_agent,
 	gint64             now_us,
 	gchar            **token
+);
+
+/* As axis_session_store_create(), of @kind. */
+const AxisSession *
+axis_session_store_create_kind(
+	AxisSessionStore  *self,
+	AxisSessionKind    kind,
+	gint64             user_id,
+	gint               epoch,
+	const gchar       *client_address,
+	const gchar       *user_agent,
+	gint64             now_us,
+	gchar            **token
+);
+
+/* Ends every session of @kind that @user_id has.  Returns: how many. */
+guint
+axis_session_store_revoke_kind(
+	AxisSessionStore *self,
+	gint64            user_id,
+	AxisSessionKind   kind
+);
+
+/* How many sessions of @user_id are held, of either kind, valid or not: for
+ * tests. */
+guint
+axis_session_store_count_held(
+	AxisSessionStore *self,
+	gint64            user_id
+);
+
+/* How many valid sessions of @kind @user_id has. */
+guint
+axis_session_store_count_kind(
+	AxisSessionStore *self,
+	gint64            user_id,
+	AxisSessionKind   kind,
+	gint64            now_us
 );
 
 /* Ends the session whose token hashes to @token_hash.  Returns: %TRUE if

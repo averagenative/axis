@@ -111,6 +111,15 @@ axis_password_prepare(void)
 	g_free(get_dummy_hash());
 }
 
+/* How many verifications were begun (atomic): for tests. */
+static gint verifications;
+
+guint
+axis_password_verify_count(void)
+{
+	return (guint)g_atomic_int_get(&verifications);
+}
+
 gboolean
 axis_password_verify(
 	const gchar *stored,
@@ -122,6 +131,7 @@ axis_password_verify(
 
 	g_return_val_if_fail(password != NULL, FALSE);
 
+	g_atomic_int_inc(&verifications);
 	usable = stored != NULL && g_str_has_prefix(stored, "$argon2id$") &&
 	         strlen(stored) < crypto_pwhash_argon2id_STRBYTES;
 	if (!usable) {

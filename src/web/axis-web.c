@@ -31,6 +31,7 @@
 typedef struct
 {
 	HtmxMethod         method;
+	gchar             *pattern;
 	GRegex            *regex;
 	AxisWebRouteFlags  flags;
 	HtmxRouteCallback  callback;
@@ -149,7 +150,25 @@ route_record_free(RouteRecord *record)
 {
 	g_regex_unref(record->regex);
 	axis_module_switch_unref(record->module_switch);
+	g_free(record->pattern);
 	g_free(record);
+}
+
+GPtrArray *
+axis_web_list_routes(AxisWeb *self)
+{
+	GPtrArray *list = g_ptr_array_new_with_free_func(g_free);
+	guint i;
+
+	g_return_val_if_fail(self != NULL, list);
+
+	for (i = 0; i < self->routes->len; i++) {
+		const RouteRecord *record = g_ptr_array_index(self->routes, i);
+
+		g_ptr_array_add(list, g_strdup_printf("%s %s%s", htmx_method_to_string(record->method),
+			(record->flags & AXIS_WEB_ROUTE_PUBLIC) ? "public " : "", record->pattern));
+	}
+	return list;
 }
 
 /* Whether the module that added @record is switched on. */
@@ -577,9 +596,16 @@ axis_web_route_full(
 		g_critical("refusing to register '%s': only worker routes are under the worker API's prefix", pattern);
 		return;
 	}
+	/* The portal API has a listener and a router of its own
+	 * (api/axis-portal-api.h): nothing of this one is under its prefix. */
+	if (axis_web_auth_is_portal_path(pattern)) {
+		g_critical("refusing to register '%s': the portal API is not answered on this listener", pattern);
+		return;
+	}
 
 	record = g_new0(RouteRecord, 1);
 	record->method = method;
+	record->pattern = g_strdup(pattern);
 	record->regex = pattern_to_regex(pattern);
 	record->flags = flags;
 	record->callback = callback;

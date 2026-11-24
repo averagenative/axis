@@ -65,6 +65,7 @@ typedef struct
 typedef struct
 {
 	OpKind  kind;
+	AxisSessionKind session_kind;	/* OP_INSERT */
 	gchar  *token_hash;
 	gchar  *public_id;
 	gint64  user_id;
@@ -146,7 +147,7 @@ run_op(
 		g_autofree gchar *epoch = g_strdup_printf("%d", op->epoch);
 		g_autofree gchar *created = int64_text(op->created_us);
 		g_autofree gchar *seen = int64_text(op->last_seen_us);
-		const gchar *params[8];
+		const gchar *params[9];
 
 		params[0] = op->token_hash;
 		params[1] = op->public_id;
@@ -156,13 +157,14 @@ run_op(
 		params[5] = seen;
 		params[6] = op->client_address;
 		params[7] = op->user_agent;
+		params[8] = op->session_kind == AXIS_SESSION_PORTAL ? "portal" : "web";
 		return axis_db_pool_exec(pool,
 			"INSERT INTO web_session (token_hash, public_id, user_id, user_epoch, "
-			"created_at, last_seen_at, client_address, user_agent) "
+			"created_at, last_seen_at, client_address, user_agent, kind) "
 			"VALUES ($1, $2, $3, $4, to_timestamp($5::double precision / 1000000), "
-			"to_timestamp($6::double precision / 1000000), $7, $8) "
+			"to_timestamp($6::double precision / 1000000), $7, $8, $9) "
 			"ON CONFLICT (token_hash) DO NOTHING",
-			8, params, NULL, error);
+			9, params, NULL, error);
 	}
 	case OP_DELETE: {
 		const gchar *params[1];
@@ -204,6 +206,7 @@ run_op(
 		return axis_db_pool_exec(pool,
 			"DELETE FROM web_session AS s USING app_user AS u "
 			"WHERE u.id = s.user_id AND (u.disabled OR s.user_epoch <> u.auth_epoch "
+			"OR (s.kind = 'portal') <> (u.role = 'requester') "
 			"OR s.last_seen_at < to_timestamp($1::double precision / 1000000) "
 			"OR s.created_at < to_timestamp($2::double precision / 1000000))",
 			2, params, NULL, error);
@@ -370,16 +373,20 @@ load(
 	                       "SELECT s.token_hash, s.public_id, s.user_id, s.user_epoch, "
 	                       "(extract(epoch FROM s.created_at) * 1000000)::bigint, "
 	                       "(extract(epoch FROM s.last_seen_at) * 1000000)::bigint, "
-	                       "s.client_address, s.user_agent "
+	                       "s.client_address, s.user_agent, s.kind "
 	                       "FROM web_session AS s JOIN app_user AS u ON u.id = s.user_id "
 	                       "WHERE NOT u.disabled AND s.user_epoch = u.auth_epoch",
 	                       0, NULL, &result, error))
 		return FALSE;
 
+	/* A row whose kind does not fit its account's role is loaded too: the
+	 * lookup refuses it, by the same rule as any other, and ends it. */
 	for (i = 0; i < axis_db_result_get_n_rows(result); i++) {
 		AxisSession *session = g_new0(AxisSession, 1);
 		gint64 epoch = 0;
 
+		session->kind = g_strcmp0(axis_db_result_get_text(result, i, 8), "portal") == 0 ? AXIS_SESSION_PORTAL :
+			AXIS_SESSION_WEB;
 		session->token_hash = g_strdup(axis_db_result_get_text(result, i, 0));
 		session->public_id = g_strdup(axis_db_result_get_text(result, i, 1));
 		axis_db_result_get_int64(result, i, 2, &session->user_id);
@@ -647,14 +654,28 @@ drop_sessions_of(
 		drop_session(self, g_ptr_array_index(doomed, i), TRUE);
 }
 
+/*
+ * Whether @session may be used by its account @owner as it is now: enabled,
+ * under the epoch the session was made in, and of the kind its role may have
+ * (a requester has no session of the engine's interface; anyone else has no
+ * portal session).
+ */
+static gboolean
+session_fits(
+	const AxisSession *session,
+	const AxisUser    *owner
+){
+	if (owner->disabled || session->epoch != owner->epoch)
+		return FALSE;
+	return (session->kind == AXIS_SESSION_PORTAL) == (owner->role == AXIS_USER_ROLE_REQUESTER);
+}
+
 static gboolean
 keep_if_valid_for(
 	const AxisSession *session,
 	gconstpointer      data
 ){
-	const AxisUser *user = data;
-
-	return !user->disabled && session->epoch == user->epoch;
+	return session_fits(session, data);
 }
 
 void
@@ -711,6 +732,17 @@ axis_session_store_lookup(
 	gint64             now_us,
 	const AxisUser   **user
 ){
+	return axis_session_store_lookup_kind(self, AXIS_SESSION_WEB, token, now_us, user);
+}
+
+const AxisSession *
+axis_session_store_lookup_kind(
+	AxisSessionStore  *self,
+	AxisSessionKind    kind,
+	const gchar       *token,
+	gint64             now_us,
+	const AxisUser   **user
+){
 	g_autofree gchar *hash = NULL;
 	AxisSession *session;
 	const AxisUser *owner;
@@ -725,12 +757,13 @@ axis_session_store_lookup(
 
 	hash = axis_token_hash(token);
 	session = g_hash_table_lookup(self->sessions, hash);
-	if (session == NULL)
+	/* A session of the other kind is none here, whatever else is true of
+	 * it; it is left as it is, for where it belongs. */
+	if (session == NULL || session->kind != kind)
 		return NULL;
 
 	owner = axis_session_store_get_user(self, session->user_id);
-	if (owner == NULL || owner->disabled || owner->epoch != session->epoch ||
-	    session_expired(session, now_us)) {
+	if (owner == NULL || !session_fits(session, owner) || session_expired(session, now_us)) {
 		drop_session(self, session, TRUE);
 		return NULL;
 	}
@@ -781,6 +814,93 @@ axis_session_store_create(
 	gint64             now_us,
 	gchar            **token
 ){
+	return axis_session_store_create_kind(self, AXIS_SESSION_WEB, user_id, epoch, client_address, user_agent, now_us,
+		token);
+}
+
+guint
+axis_session_store_revoke_kind(
+	AxisSessionStore *self,
+	gint64            user_id,
+	AxisSessionKind   kind
+){
+	g_autoptr(GPtrArray) doomed = g_ptr_array_new();
+	GHashTableIter iter;
+	gpointer value;
+	guint i;
+
+	g_return_val_if_fail(self != NULL, 0);
+
+	g_hash_table_iter_init(&iter, self->sessions);
+	while (g_hash_table_iter_next(&iter, NULL, &value)) {
+		AxisSession *session = value;
+
+		if (session->user_id == user_id && session->kind == kind)
+			g_ptr_array_add(doomed, session);
+	}
+	for (i = 0; i < doomed->len; i++)
+		drop_session(self, g_ptr_array_index(doomed, i), TRUE);
+	return doomed->len;
+}
+
+guint
+axis_session_store_count_held(
+	AxisSessionStore *self,
+	gint64            user_id
+){
+	GHashTableIter iter;
+	gpointer value;
+	guint n = 0;
+
+	g_return_val_if_fail(self != NULL, 0);
+
+	g_hash_table_iter_init(&iter, self->sessions);
+	while (g_hash_table_iter_next(&iter, NULL, &value)) {
+		if (((const AxisSession *)value)->user_id == user_id)
+			n++;
+	}
+	return n;
+}
+
+guint
+axis_session_store_count_kind(
+	AxisSessionStore *self,
+	gint64            user_id,
+	AxisSessionKind   kind,
+	gint64            now_us
+){
+	const AxisUser *owner;
+	GHashTableIter iter;
+	gpointer value;
+	guint n = 0;
+
+	g_return_val_if_fail(self != NULL, 0);
+
+	owner = axis_session_store_get_user(self, user_id);
+	if (owner == NULL)
+		return 0;
+	g_hash_table_iter_init(&iter, self->sessions);
+	while (g_hash_table_iter_next(&iter, NULL, &value)) {
+		const AxisSession *session = value;
+
+		if (session->user_id == user_id && session->kind == kind && session_fits(session, owner) &&
+		    !session_expired(session, now_us))
+			n++;
+	}
+	return n;
+}
+
+const AxisSession *
+axis_session_store_create_kind(
+	AxisSessionStore  *self,
+	AxisSessionKind    kind,
+	gint64             user_id,
+	gint               epoch,
+	const gchar       *client_address,
+	const gchar       *user_agent,
+	gint64             now_us,
+	gchar            **token
+){
 	AxisSession *session;
 	AxisSession *oldest;
 	guint count;
@@ -796,6 +916,7 @@ axis_session_store_create(
 	*token = axis_random_token();
 
 	session = g_new0(AxisSession, 1);
+	session->kind = kind;
 	session->token_hash = axis_token_hash(*token);
 	session->public_id = axis_random_public_id();
 	session->user_id = user_id;
@@ -808,6 +929,7 @@ axis_session_store_create(
 
 	op = g_new0(Op, 1);
 	op->kind = OP_INSERT;
+	op->session_kind = session->kind;
 	op->token_hash = g_strdup(session->token_hash);
 	op->public_id = g_strdup(session->public_id);
 	op->user_id = session->user_id;
@@ -928,8 +1050,9 @@ axis_session_store_list_for_user(
 	while (g_hash_table_iter_next(&iter, NULL, &value)) {
 		AxisSession *session = value;
 
-		if (session->user_id == user_id && session->epoch == owner->epoch &&
-		    !owner->disabled && !session_expired(session, now_us))
+		/* The account page's list: the engine's own sessions. */
+		if (session->user_id == user_id && session->kind == AXIS_SESSION_WEB && session_fits(session, owner) &&
+		    !session_expired(session, now_us))
 			g_ptr_array_add(list, session);
 	}
 	g_ptr_array_sort(list, compare_recent_first);
