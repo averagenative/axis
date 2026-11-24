@@ -53,6 +53,8 @@ struct _AxisWorkerApi
 	AxisWorkerApiTiming  timing;
 	AxisWorkerConvertHooks convert;
 	gpointer             convert_data;
+	AxisWorkerRegisteredFunc registered;	/* (nullable) main loop */
+	gpointer             registered_data;
 
 	GMutex               lock;
 	GHashTable          *leases;	/* (lock) gint64 job -> Lease */
@@ -1217,6 +1219,9 @@ work_finished(
 	htmx_response_set_content_type(response, "application/json");
 	if (work->reply.status == 503)
 		htmx_response_add_header(response, "Retry-After", "5");
+	if (work->op == OP_REGISTER && work->reply.status == 200 && work->api->registered != NULL &&
+	    !work->api->stopping)
+		work->api->registered(work->name, work->api->registered_data);
 	htmx_response_complete(work->deferred, response);
 	g_object_unref(response);
 	work->api->pending--;
@@ -1509,6 +1514,18 @@ axis_worker_api_new(
 	self->known = g_hash_table_new_full(g_int64_hash, g_int64_equal, g_free, g_free);
 	fix_timing(&self->timing);
 	return self;
+}
+
+void
+axis_worker_api_set_registered(
+	AxisWorkerApi            *self,
+	AxisWorkerRegisteredFunc  func,
+	gpointer                  user_data
+){
+	g_return_if_fail(self != NULL);
+
+	self->registered = func;
+	self->registered_data = user_data;
 }
 
 void

@@ -20,7 +20,10 @@
 #include "web/axis-web-notice.h"
 #include "web/axis-web-place.h"
 #include "web/axis-web-profiles-private.h"
+#include "web/axis-web-hub.h"
+#include "web/axis-web-private.h"
 #include "web/axis-web-storage-private.h"
+#include "web/axis-web-workers-private.h"
 
 #define MAX_PENDING 16
 
@@ -29,25 +32,12 @@
  * ten seconds). */
 #define CONNECTED_MS 30000
 
-struct _AxisWebWorkers
-{
-	AxisDbPool       *pool;
-	AxisWorkerTokens *tokens;
-	AxisEstimator    *estimator;	/* owned reference, or NULL */
-	AxisJobRegistry  *kinds;	/* owned reference, or NULL */
-	AxisConversions  *conversions;	/* owned reference, or NULL: where checks run, the pause */
-	guint             heartbeat_ms;
-	guint             pending;
-	gboolean          stopping;
-	gint64            started_us;	/* when these pages were made: the daemon's start */
-};
-
 #define ADD axis_web_storage_add
 
 /* ── Tasks off the main loop ────────────────────────────────────── */
 
-typedef void (*WorkFunc)(AxisWebWorkers *self, gpointer data);
-typedef HtmxResponse *(*DoneFunc)(AxisWebWorkers *self, HtmxRequest *request, gpointer data);
+typedef AxisWebWorkersWorkFunc WorkFunc;
+typedef AxisWebWorkersDoneFunc DoneFunc;
 
 typedef struct
 {
@@ -93,8 +83,10 @@ task_finished(
 	g_free(task);
 }
 
-static HtmxResponse *
-dispatch(
+#define dispatch axis_web_workers_dispatch
+
+HtmxResponse *
+axis_web_workers_dispatch(
 	AxisWebWorkers *self,
 	HtmxRequest    *request,
 	WorkFunc        work,
@@ -166,13 +158,19 @@ yes_no(gboolean yes)
 	return axis_web_browser_badge(yes ? "Yes" : "No", yes ? "badge-succeeded" : "badge-note");
 }
 
+guint
+axis_web_workers_connected_ms(AxisWebWorkers *self)
+{
+	return MAX((guint)CONNECTED_MS, 3 * self->heartbeat_ms + 10000);
+}
+
 /* Never seen, connected, silent since, revoked. */
 static HtmxNode *
 state_badge(
 	AxisWebWorkers       *self,
 	const AxisWorkerInfo *worker
 ){
-	guint connected = MAX((guint)CONNECTED_MS, 3 * self->heartbeat_ms + 10000);
+	guint connected = axis_web_workers_connected_ms(self);
 
 	if (worker->revoked_us > 0)
 		return axis_web_browser_badge("Revoked", "badge-failed");
@@ -185,8 +183,10 @@ state_badge(
 	return axis_web_browser_badge("Not heard from", "badge-warn");
 }
 
-static HtmxNode *
-encoders_table(const AxisEncoderCapabilities *caps)
+#define encoders_table axis_web_workers_encoders_table
+
+HtmxNode *
+axis_web_workers_encoders_table(const AxisEncoderCapabilities *caps)
 {
 	static const AxisWebColumn columns[] = {
 		{ "Encoder", AXIS_WEB_COL_TEXT },
@@ -592,21 +592,35 @@ create_card(
 	HtmxRequest   *request,
 	AxisWebNotice *placed
 ){
-	HtmxNode *card = axis_web_storage_card("Add a worker");
+	HtmxNode *card = axis_web_storage_card("Add a worker without the guide");
 	HtmxNode *form = axis_web_auth_post_form(request, "/workers");
 
 	htmx_element_set_id(HTMX_ELEMENT(card), "worker-add");
 	axis_web_notice_put(placed, card, "worker-add");
-	ADD(card, axis_web_storage_text(NULL, "A worker is the axis-worker program, on this machine or another, doing "
-		"work this server gives it. Name it here and you are shown its token once: give the token to the worker "
-		"(a file it reads, never its command line). A worker can do nothing but ask for work through its own "
-		"part of the API, and is only given work on a disk after it has read that disk's marker where it is "
-		"told the disk is."));
+	ADD(card, axis_web_storage_text(NULL, "For a worker you set up by hand (Kubernetes, a configuration file of "
+		"your own). Name it here and you are shown its token once: give the token to the worker (a file it "
+		"reads, never its command line). A worker can do nothing but ask for work through its own part of the "
+		"API, and is only given work on a disk after it has read that disk's marker where it is told the disk "
+		"is."));
 	htmx_element_add_class(HTMX_ELEMENT(form), "inline-form");
 	ADD(form, axis_web_storage_text_field("worker-name", "Name", "name", NULL, "garage-pc",
 		"Lower-case letters, digits and '-'."));
 	ADD(form, axis_web_auth_button("Add the worker", NULL));
 	ADD(card, form);
+	return card;
+}
+
+/* Where the guide starts. */
+static HtmxNode *
+attach_card(void)
+{
+	HtmxNode *card = axis_web_storage_card("Attach a worker");
+
+	htmx_element_set_id(HTMX_ELEMENT(card), "worker-attach");
+	ADD(card, axis_web_storage_text(NULL, "A short guide: say what the machine is (its container tool, its GPU or "
+		"none) and which disks it reaches, and you get the text that starts the worker there, with its token, and "
+		"a page that shows when the worker has registered and what it can do."));
+	ADD(card, axis_web_browser_link("/workers/attach", "Attach a worker"));
 	return card;
 }
 
@@ -652,9 +666,10 @@ page_done(
 	message = done_message(work->done, &is_error);
 	axis_web_notice_begin(&placed, request, is_error, g_strdup(message), HTMX_NODE(content));
 	if (work->workers->len == 0)
-		ADD(content, axis_web_storage_text("help", "No worker has been added yet. Add one in Add a worker below."));
+		ADD(content, axis_web_storage_text("help", "No worker has been added yet. Attach one with the guide below."));
 	for (i = 0; i < work->workers->len; i++)
 		ADD(content, worker_card(self, request, g_ptr_array_index(work->workers, i), &placed));
+	ADD(content, attach_card());
 	ADD(content, create_card(request, &placed));
 	if (self->estimator != NULL)
 		ADD(content, sample_card(request, work, &placed));
@@ -1088,6 +1103,8 @@ register_routes(
 		user_data);
 	axis_web_route_full(web, HTMX_METHOD_POST, "/workers/:name/resume", AXIS_WEB_ROUTE_ADMIN, handle_resume,
 		user_data);
+	((AxisWebWorkers *)user_data)->web = web;
+	axis_web_workers_attach_register(web, user_data);
 }
 
 static const AxisNavEntry nav_entries[] = {
@@ -1155,6 +1172,23 @@ axis_web_workers_free(AxisWebWorkers *self)
 	if (self->conversions != NULL)
 		axis_conversions_unref(self->conversions);
 	g_free(self);
+}
+
+void
+axis_web_workers_note_registered(
+	AxisWebWorkers *self,
+	const gchar    *name
+){
+	AxisWebHub *hub;
+
+	g_return_if_fail(self != NULL);
+
+	if (self->stopping || self->web == NULL)
+		return;
+	hub = axis_web_get_hub(self->web);
+	/* No content: the page asks for its own worker's state. */
+	if (hub != NULL)
+		axis_web_hub_publish(hub, AXIS_WORKERS_TOPIC, AXIS_WORKERS_EVENT_CHANGED, "changed");
 }
 
 void

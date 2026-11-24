@@ -22,6 +22,7 @@
 #include "api/axis-worker-tokens.h"
 #include "core/axis-module.h"
 #include "web/axis-web-auth.h"
+#include "web/axis-web-hub.h"
 #include "web/axis-web-workers.h"
 
 G_BEGIN_DECLS
@@ -41,6 +42,7 @@ typedef struct
 	HtmxServer        *server;
 	AxisWeb           *web;
 	AxisWorkerApi     *api;
+	AxisWebHub        *hub;		/* NULL unless made with a hub */
 	SoupSession       *session;
 	guint16            port;
 	gchar             *url;		/* http://127.0.0.1:PORT */
@@ -58,6 +60,15 @@ typedef struct
  */
 AxisTestDaemon *
 axis_test_daemon_new(
+	AxisDbPool                *pool,
+	AxisEstimator             *estimator,
+	const AxisWorkerApiTiming *timing,
+	const gchar               *trusted_proxies
+);
+
+/* The same, with the hub of the pages' live updates (/events) installed. */
+AxisTestDaemon *
+axis_test_daemon_new_with_hub(
 	AxisDbPool                *pool,
 	AxisEstimator             *estimator,
 	const AxisWorkerApiTiming *timing,

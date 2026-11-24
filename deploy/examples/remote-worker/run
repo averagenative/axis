@@ -1,5 +1,6 @@
 #!/bin/sh
-# run - axis-worker on a desktop with an NVIDIA GPU, with rootless Podman
+# run - axis-worker on another machine than Axis, with rootless Podman: an
+# NVIDIA GPU as written, an Intel or AMD GPU or the CPU only with `encoder`
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # Starts (or starts again) the worker container against the server's disks,
@@ -26,8 +27,34 @@ disks="/mnt/server/disk1:/media/disk1 /mnt/server/disk2:/media/disk2"
 without_identity=/media/disk1,/media/disk2
 # EDIT: the image, the same version as Axis on the server.
 image=ghcr.io/averagenative/axis:0.1.0-rc2
+# EDIT: the encoder.  nvenc: an NVIDIA GPU (README.md, step 4).  vaapi: an
+# Intel or AMD GPU, through its render node.  cpu: the software encoders
+# only, which are many times slower.  The worker is told that one family
+# only; a family it is not told is never run, not even to measure it.
+encoder=nvenc
 # How many of this machine's cores the worker's container may use.
 cpus=4
+
+case $encoder in
+nvenc)
+	gpu="--device nvidia.com/gpu=all"
+	families=nvenc
+	;;
+vaapi)
+	# keep-groups: the container keeps your groups, the one that owns the
+	# render node among them (usually render or video).
+	gpu="--device /dev/dri/renderD128 --group-add keep-groups"
+	families=vaapi
+	;;
+cpu)
+	gpu=
+	families=software
+	;;
+*)
+	echo "run: encoder must be nvenc, vaapi or cpu" >&2
+	exit 1
+	;;
+esac
 
 [ -r "$token" ] || { echo "run: $token cannot be read" >&2; exit 1; }
 case $(stat -c %a "$token") in
@@ -51,7 +78,7 @@ for pair in $disks; do
 done
 
 podman rm -f axis-worker >/dev/null 2>&1 || true
-# shellcheck disable=SC2086 # $mounts is several options on purpose
+# shellcheck disable=SC2086 # $mounts and $gpu are several options on purpose
 exec podman run -d --name axis-worker \
 	--entrypoint /usr/bin/axis-worker \
 	--userns=keep-id \
@@ -59,14 +86,14 @@ exec podman run -d --name axis-worker \
 	--security-opt label=disable \
 	--pids-limit 512 --tmpfs /tmp:rw,noexec,nosuid,size=256m,mode=1777 \
 	--cpus "$cpus" \
-	--device nvidia.com/gpu=all \
+	$gpu \
 	-v "$token:/run/secrets/axis_worker_token:ro" \
 	$mounts \
 	-e AXIS_WORKER_URL="$url" \
 	-e AXIS_WORKER_TOKEN_FILE=/run/secrets/axis_worker_token \
 	-e AXIS_WORKER_VOLUMES="$volumes" \
 	-e AXIS_WORKER_VOLUMES_WITHOUT_FILE_IDENTITY="$without_identity" \
-	-e AXIS_WORKER_ENCODER_FAMILIES=nvenc \
+	-e AXIS_WORKER_ENCODER_FAMILIES="$families" \
 	-e AXIS_WORKER_LOG_LEVEL=info \
 	--health-cmd '/usr/bin/axis-worker --healthcheck' --health-interval 30s \
 	--stop-timeout 75 --restart unless-stopped \

@@ -14,7 +14,7 @@ you run containers, copy its directory, and change the lines marked `EDIT`.
 | [Traefik](examples/traefik/README.md) | TLS and a host name in front of Axis, Compose or Kubernetes | `compose.yaml`, `ingressroute.yaml` |
 | [Kubernetes](examples/kubernetes/README.md) | Deployment, claims, Service, Ingress, workers with optional GPU, NetworkPolicy | `kustomization.yaml` and seven manifests |
 | [Podman Quadlet](examples/quadlet/README.md) | Containers as systemd services | five unit files |
-| [A worker on another machine](examples/remote-worker/README.md) | Axis on a server, the conversions on a desktop with a GPU: the worker over https, the disks through NFS, sshfs or SMB | `run`, `axis-worker.container` |
+| [A worker on another machine](examples/remote-worker/README.md) | Axis on a server, the conversions on another machine (an NVIDIA GPU, an Intel or AMD GPU, or the CPU only): the worker over https, the disks through NFS, sshfs or SMB | `run`, `axis-worker.container`, `compose.yaml` |
 
 Every example keeps the same rules: Axis never runs as root, its root
 filesystem is read-only, it has no Linux capabilities, secrets come from
@@ -751,8 +751,17 @@ a VPN that comes up later is used from then on.
 converted file. It reads media, writes only its own output in a disk's work
 area (`.axis-work/`, never the library), and needs no database.
 
-1. In Axis, open **Conversion workers**, add one, and copy the token it shows once
-   (Axis keeps only its hash).
+For a worker on another machine, or one you start with `docker run`,
+`podman run`, a `compose.yaml` of its own or a Quadlet unit, select
+**Attach a worker** on the **Conversion workers** page: the guide asks what
+the machine is and which disks it reaches, gives you the text that starts
+the worker there, and shows when the worker has registered
+([Run conversions on a worker](../docs/11-run-conversions-on-a-worker.md)).
+For the worker of the Compose or Kubernetes example, do it by hand:
+
+1. In Axis, open **Conversion workers**. In **Add a worker without the
+   guide**, add one, and copy the token it shows once (Axis keeps only its
+   hash).
 2. Give it to the worker as a file: the `axis_worker_token` secret in the
    Compose example, `axis-worker-token` in Kubernetes.
 3. Start it (`--profile worker` in Compose; `worker.yaml` in Kubernetes). It
@@ -949,8 +958,12 @@ use `:z` on whole disks (it relabels every file on them); add
   example it then takes `:ro` off and checks that the marker is written.
 - It pulls public images, names everything `axis-xtest-*`, removes it at the
   end, and skips with a stated reason any part whose prerequisite is missing.
-  It does not run [the remote-worker example](examples/remote-worker/README.md),
-  which needs two machines and a GPU.
+  It does not run the worker of
+  [the remote-worker example](examples/remote-worker/README.md), which needs
+  two machines and, for two of its three encoders, a GPU. Its `worker` part
+  checks what one machine without a GPU can: the `run` script is valid
+  shell, `compose config` accepts `compose.yaml` for each encoder, and
+  Quadlet's generator accepts `axis-worker.container` in a dry run.
 - Every push to `main` runs these checks and `make fuzz` on GitHub
   (`.github/workflows/checks.yml`), each in a job of its own. There, a part
   of `make check-examples` that is skipped fails the job, because the
