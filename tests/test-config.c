@@ -361,6 +361,45 @@ test_env_empty_ignored(void)
 	g_assert_cmpstr(axis_config_get_host(config), ==, "127.0.0.1");
 }
 
+/*
+ * The portal listener (add-request-portal): off by default, and on the main
+ * listener's address until it is given one of its own, in the file or in the
+ * environment (server.portal_listen_host, AXIS_PORTAL_LISTEN_HOST); an empty
+ * one is refused.
+ */
+static void
+test_portal_listener(void)
+{
+	g_autoptr(AxisConfig) config = axis_config_new();
+	g_autoptr(AxisConfig) refused = axis_config_new();
+	g_autoptr(GError) error = NULL;
+	g_auto(GStrv) env = make_env("AXIS_PORTAL_LISTEN_HOST", "10.0.0.7", NULL);
+	g_autofree gchar *text = NULL;
+
+	g_assert_cmpuint(axis_config_get_portal_port(config), ==, 0);
+	g_assert_cmpstr(axis_config_get_portal_host(config), ==, "127.0.0.1");
+	g_assert_true(axis_config_load_data(config, "[server]\nhost = 0.0.0.0\nportal_listen_port = 7801\n", &error));
+	g_assert_no_error(error);
+	g_assert_cmpuint(axis_config_get_portal_port(config), ==, 7801);
+	g_assert_cmpstr(axis_config_get_portal_host(config), ==, "0.0.0.0");
+	g_assert_true(axis_config_load_data(config, "[server]\nhost = 0.0.0.0\nportal_listen_host = 10.0.0.9\n"
+		"portal_listen_port = 7801\n", &error));
+	g_assert_no_error(error);
+	g_assert_cmpstr(axis_config_get_portal_host(config), ==, "10.0.0.9");
+	g_assert_cmpstr(axis_config_get_host(config), ==, "0.0.0.0");
+	g_assert_true(axis_config_apply_environment(config, env, &error));
+	g_assert_no_error(error);
+	g_assert_cmpstr(axis_config_get_portal_host(config), ==, "10.0.0.7");
+	g_assert_cmpstr(axis_config_get_host(config), ==, "0.0.0.0");
+	text = axis_config_describe(config);
+	g_assert_nonnull(strstr(text, "portal_listen_host=10.0.0.7 portal_listen_port=7801"));
+
+	g_assert_false(axis_config_load_data(refused, "[server]\nportal_listen_host =\n", &error));
+	assert_config_error(error, "portal_listen_host", NULL);
+	assert_defaults(refused);
+	g_assert_cmpstr(axis_config_get_portal_host(refused), ==, "127.0.0.1");
+}
+
 #define FILE_SECRET "s3cr3t-from-a-file"
 
 /* Writes @contents to a new temporary file and returns its path. */
@@ -1159,6 +1198,7 @@ main(int argc, char **argv)
 	g_test_add_func("/config/env/wins-over-file", test_env_wins_over_file);
 	g_test_add_func("/config/env/invalid-value", test_env_invalid_value);
 	g_test_add_func("/config/env/empty-ignored", test_env_empty_ignored);
+	g_test_add_func("/config/server/portal-listener", test_portal_listener);
 	g_test_add_func("/config/env/url-file/read", test_url_file_read);
 	g_test_add_func("/config/env/url-file/wins-over-config-file", test_url_file_wins_over_config_file);
 	g_test_add_func("/config/env/url-file/both-set", test_url_file_and_url_both_set);

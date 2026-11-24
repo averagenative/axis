@@ -1342,14 +1342,16 @@ serve(
 		axis_portal_api_set_serving(portal_api, portal_serving, gate);
 		portal_server = htmx_server_new();
 		axis_portal_api_install(portal_api, portal_server, axis_config_get_max_connections(config));
-		if (!htmx_server_listen_on(portal_server, axis_config_get_host(config), portal_port, &local) ||
+		/* On an address of its own when one is set (server.portal_listen_host),
+		 * so that the portal's network alone reaches it. */
+		if (!htmx_server_listen_on(portal_server, axis_config_get_portal_host(config), portal_port, &local) ||
 		    !htmx_server_start(portal_server, &local)) {
 			g_set_error(error, AXIS_ERROR, AXIS_ERROR_LISTEN, "cannot listen on %s:%u for the portal API: %s",
-				axis_config_get_host(config), (guint)portal_port, local->message);
+				axis_config_get_portal_host(config), (guint)portal_port, local->message);
 			return 1;
 		}
-		g_message("portal API: listening on %s:%u (the portal API and nothing else)", axis_config_get_host(config),
-			(guint)portal_port);
+		g_message("portal API: listening on %s:%u (the portal API and nothing else)",
+			axis_config_get_portal_host(config), (guint)portal_port);
 	}
 
 	/* The probes share each database question among the requests that
