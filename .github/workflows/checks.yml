@@ -64,12 +64,14 @@
 #     check ever runs a hardware encoder.
 #
 # WHEN A JOB FAILS it prints the end of its log once more as its last step
-# (for `make check`, which stops at the first failing test, that is the
-# failing test's output), and keeps the whole log as an artifact for a week.
+# (`make check` and `make fuzz` end with the whole log of each program that
+# failed, and their names), and keeps for a week, as an artifact, the job's
+# log and the log of every test program or fuzz target.
 #
-# PARALLEL TESTS.  The compilers run on every core (`make -j`); the tests and
-# the fuzz targets still run one after another.  The one place to change that
-# is the `env` block below, marked PARALLEL TESTS.
+# PARALLEL TESTS.  The compilers run on every core (`make -j`), and the test
+# programs and the fuzz targets run several at a time (TEST_JOBS, FUZZ_JOBS).
+# The one place where those two numbers are set is the `env` block below,
+# marked PARALLEL TESTS.
 #
 # The private word list that `make check-made-up` can read from
 # AXIS_MADE_UP_PRIVATE_WORDS is not given here; the check runs without it.
@@ -95,11 +97,12 @@ permissions: {}
 # get its answer.
 
 env:
-  # PARALLEL TESTS: the one place.  Once the Makefile runs tests and fuzz
-  # targets side by side (TEST_JOBS, FUZZ_JOBS), set both here to the number
-  # of cores of a standard runner, and nothing else in this file changes:
-  #   TEST_JOBS: 4
-  #   FUZZ_JOBS: 4
+  # PARALLEL TESTS: the one place.  How many test programs and how many fuzz
+  # targets run at a time (config.mk).  A standard runner has 4 processors
+  # and 16 GB.  A fuzz target needs a processor of its own for its whole
+  # FUZZ_SECONDS, so FUZZ_JOBS stays at the number of processors.
+  TEST_JOBS: 4
+  FUZZ_JOBS: 4
   FUZZ_SECONDS: 20
   # The version of podman-compose the examples are checked with.  The name
   # must not start with PODMAN_COMPOSE_: podman-compose reads every such
@@ -162,7 +165,8 @@ jobs:
           make -j"$(nproc)" check 2>&1 | tee "$RUNNER_TEMP/check.log"
           echo "\`make check\` passed in $((SECONDS / 60)) min $((SECONDS % 60)) s." >> "$GITHUB_STEP_SUMMARY"
 
-      # Never silently: every test that skipped itself, with its reason.
+      # Never silently: every test that skipped itself, with its reason, from
+      # each test program's own log, and anything make itself left out.
       - name: Name the tests that skipped themselves
         if: ${{ always() }}
         run: |
@@ -170,7 +174,8 @@ jobs:
               echo "### Tests that skipped themselves"
               echo
               echo '```'
-              grep -E '# SKIP|^  SKIP ' "$RUNNER_TEMP/check.log" | sort | uniq -c || echo "none"
+              grep -E '^  SKIP ' "$RUNNER_TEMP/check.log" || true
+              (cd build/gcc-debug-asan-ubsan/test-logs && grep -E '# SKIP' -- *.log) || echo "no test skipped itself"
               echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -179,12 +184,14 @@ jobs:
         run: tail -n 400 "$RUNNER_TEMP/check.log"
 
       # TODO: pin to a commit SHA.
-      - name: Keep the log
+      - name: Keep the logs
         if: ${{ failure() || cancelled() }}
         uses: actions/upload-artifact@v4
         with:
-          name: check-log
-          path: ${{ runner.temp }}/check.log
+          name: check-logs
+          path: |
+            ${{ runner.temp }}/check.log
+            build/gcc-debug-asan-ubsan/test-logs
           if-no-files-found: warn
           retention-days: 7
 
@@ -231,7 +238,7 @@ jobs:
         run: |
           set -o pipefail
           SECONDS=0
-          make fuzz FUZZ_SECONDS="$FUZZ_SECONDS" 2>&1 | tee -a "$RUNNER_TEMP/fuzz.log"
+          make -j"$(nproc)" fuzz FUZZ_SECONDS="$FUZZ_SECONDS" 2>&1 | tee -a "$RUNNER_TEMP/fuzz.log"
           echo "\`make fuzz FUZZ_SECONDS=$FUZZ_SECONDS\` passed in $((SECONDS / 60)) min $((SECONDS % 60)) s." >> "$GITHUB_STEP_SUMMARY"
 
       - name: The end of the log, once more
@@ -240,13 +247,14 @@ jobs:
 
       # The inputs that crashed a target are kept with the log.
       # TODO: pin to a commit SHA.
-      - name: Keep the log and what crashed
+      - name: Keep the logs and what crashed
         if: ${{ failure() || cancelled() }}
         uses: actions/upload-artifact@v4
         with:
-          name: fuzz-log
+          name: fuzz-logs
           path: |
             ${{ runner.temp }}/fuzz.log
+            build/fuzz/logs
             build/fuzz/artifacts
           if-no-files-found: warn
           retention-days: 7

@@ -237,8 +237,8 @@ fork is code that nobody has read yet. Before you open one, run the same
 four commands yourself:
 
 ```sh
-make check
-make fuzz FUZZ_SECONDS=20
+make -j16 check
+make -j16 fuzz FUZZ_SECONDS=20
 make check-container
 make container && make check-examples
 ```
