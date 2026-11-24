@@ -7,9 +7,11 @@
  * built as if it were attacked.  It holds no database connection, no media,
  * no provider's key and no session: a person's session is the proof in that
  * person's cookie, which the daemon judges every time.  What it does hold,
- * in memory only: its token, the counts of its throttles, the key of its
- * pre-login forms, what `whoami` said for at most 30 seconds, and posters up
- * to a fixed size.  It writes no file.
+ * in memory only: its token and the key derived from it that seals the
+ * session cookies, the counts of its throttles, the key of its pre-login
+ * forms, what `whoami` said for at most 30 seconds, which sessions the
+ * daemon confirmed in the last 15 minutes, and posters up to a fixed size.
+ * It writes no file.
  *
  * One function answers every request (there is no router to add a route
  * to), in this order, and whatever it answers carries the security headers

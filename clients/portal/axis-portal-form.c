@@ -9,6 +9,7 @@
 #include <string.h>
 
 #include "api/axis-portal-proto.h"
+#include "web/axis-web-auth-input.h"
 
 /* ── Paths ──────────────────────────────────────────────────────── */
 
@@ -379,4 +380,34 @@ axis_portal_form_seasons(
 		picked[(*n_picked)++] = (gint)number;
 	}
 	return *n_picked > 0;
+}
+
+gchar *
+axis_portal_form_safe_next(const gchar *candidate)
+{
+	g_autofree gchar *path = NULL;
+	g_autofree gchar *request_id = NULL;
+	AxisPortalRoute route;
+	gint64 id = 0;
+
+	if (candidate == NULL || strlen(candidate) > AXIS_PORTAL_NEXT_MAX || strchr(candidate, '#') != NULL ||
+	    !axis_auth_next_is_safe(candidate))
+		return NULL;
+	path = g_strndup(candidate, strcspn(candidate, "?"));
+	route = axis_portal_route_parse(path, &id, &request_id);
+	if (route != AXIS_PORTAL_ROUTE_HOME && route != AXIS_PORTAL_ROUTE_SEARCH && route != AXIS_PORTAL_ROUTE_TITLE &&
+	    route != AXIS_PORTAL_ROUTE_REQUESTS)
+		return NULL;
+	return g_strdup(candidate);
+}
+
+gboolean
+axis_portal_form_is_urlencoded(const gchar *content_type)
+{
+	static const gchar type[] = "application/x-www-form-urlencoded";
+
+	if (content_type == NULL || g_ascii_strncasecmp(content_type, type, sizeof(type) - 1) != 0)
+		return FALSE;
+	return content_type[sizeof(type) - 1] == '\0' || content_type[sizeof(type) - 1] == ';' ||
+		content_type[sizeof(type) - 1] == ' ';
 }

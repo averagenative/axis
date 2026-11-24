@@ -21,6 +21,13 @@
  * own reader (api/axis-portal-proto.h) takes whole, or does not go at all:
  * a search for what was typed, a login with the name and the password that
  * were typed, a request with the seasons that were ticked.
+ *
+ * The same input is also read as the other things a browser sends, by the
+ * readers axis-portal uses for them (after the review of P3, M15): a Cookie
+ * header and a session cookie's value (the proof and its seal), a `next`, a
+ * Content-Type, an Origin with a Host, and the forwarding headers of a
+ * trusted proxy.  Only the request handler itself, serve(), is not reached
+ * here: it needs a server (tests/test-portal.c tries it).
  */
 
 #include <glib.h>
@@ -32,6 +39,8 @@
 #include "../../clients/portal/axis-portal-form.h"
 #include "../../clients/portal/axis-portal-wire.h"
 #include "api/axis-portal-proto.h"
+#include "core/axis-proxy.h"
+#include "web/axis-web-auth-input.h"
 
 #define PROOF "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"
 
@@ -219,11 +228,89 @@ check_form(
 	}
 }
 
+/* A session cookie's value: "<proof>.<seal>" and nothing else. */
+static void
+check_session_cookie(const gchar *value)
+{
+	gchar *proof = NULL;
+	gchar *seal = NULL;
+
+	if (!axis_portal_wire_split_session_cookie(value, &proof, &seal)) {
+		if (proof != NULL || seal != NULL)
+			abort();
+		return;
+	}
+	{
+		g_autofree gchar *joined = g_strconcat(proof, ".", seal, NULL);
+
+		if (!axis_portal_wire_is_proof(proof) || !axis_portal_wire_is_proof(seal) || strcmp(joined, value) != 0)
+			abort();
+	}
+	axis_portal_wire_free(proof);
+	axis_portal_wire_free(seal);
+}
+
+/* What else a browser sends, read as the portal reads it. */
+static void
+check_browser(const gchar *text)
+{
+	static AxisProxyList *trusted = NULL;
+
+	/* A Cookie header, and the session cookie in it. */
+	{
+		g_autofree gchar *value = axis_cookie_find(text, "__Host-axis_portal_session");
+
+		if (value != NULL && strchr(value, ';') != NULL)
+			abort();
+		check_session_cookie(value != NULL ? value : text);
+	}
+	/* A `next`: a path of the portal's own, and nothing else. */
+	{
+		g_autofree gchar *next = axis_portal_form_safe_next(text);
+
+		if (next != NULL && (next[0] != '/' || next[1] == '/' || strpbrk(next, "#\\\r\n") != NULL ||
+		    strlen(next) > AXIS_PORTAL_NEXT_MAX || strcmp(next, text) != 0))
+			abort();
+	}
+	/* A Content-Type. */
+	if (axis_portal_form_is_urlencoded(text) &&
+	    g_ascii_strncasecmp(text, "application/x-www-form-urlencoded", strlen("application/x-www-form-urlencoded")) != 0)
+		abort();
+	/* An Origin and a Host, one on each side of the first newline: over
+	 * HTTPS, only an https origin can match. */
+	{
+		const gchar *newline = strchr(text, '\n');
+		g_autofree gchar *origin = newline != NULL ? g_strndup(text, (gsize)(newline - text)) : g_strdup(text);
+		const gchar *host = newline != NULL ? newline + 1 : "portal.example.net";
+
+		if (axis_auth_origin_matches(origin, host, TRUE) && g_ascii_strncasecmp(origin, "https://", 8) != 0)
+			abort();
+	}
+	/* The forwarding headers of a trusted proxy: the client is an address
+	 * or the unknown one, and a host is one by the proxies' rule. */
+	{
+		g_autofree gchar *client = NULL;
+		g_autofree gchar *host = NULL;
+		gboolean https = FALSE;
+
+		if (trusted == NULL)
+			trusted = axis_proxy_list_parse("127.0.0.1, 10.0.0.0/8, fd00::/8", NULL);
+		axis_proxy_resolve_full(trusted, "127.0.0.1", FALSE, text, text, text, &client, &https, &host);
+		if (client == NULL || (strcmp(client, AXIS_PROXY_UNKNOWN_CLIENT) != 0 && !axis_ip_address_parse(client, NULL)))
+			abort();
+		if (host != NULL && !axis_proxy_host_is_valid(host))
+			abort();
+	}
+}
+
 int
 LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 {
 	g_autofree gchar *text = g_strndup((const gchar *)data, size);
 	gint64 number = 0;
+
+	/* As the other things a browser sends. */
+	check_browser(text);
 
 	/* As a path (up to its first NUL, as a path arrives). */
 	check_route(text);

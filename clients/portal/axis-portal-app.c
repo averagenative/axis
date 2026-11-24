@@ -34,9 +34,6 @@
  * the token (AXIS_PORTAL_SEAL_KEY_PURPOSE). */
 #define SEAL_PURPOSE         "axis portal session cookie seal v1:"
 
-/* The longest `next` that is kept. */
-#define NEXT_MAX 512
-
 /* The kinds of line the log has a budget for (axis-portal-log.h): each
  * refusal, each failed login, each failure of the daemon's answer. */
 typedef enum
@@ -533,29 +530,9 @@ seconds_of(gint64 wait_us)
 	return MAX((wait_us + G_USEC_PER_SEC - 1) / G_USEC_PER_SEC, 1);
 }
 
-/* @candidate if it may be gone to after a login: a path of the portal's own
- * pages, and nothing a browser could read as another site. */
-static gchar *
-safe_next(const gchar *candidate)
-{
-	g_autofree gchar *path = NULL;
-	g_autofree gchar *request_id = NULL;
-	AxisPortalRoute route;
-	gint64 id = 0;
-
-	if (candidate == NULL || strlen(candidate) > NEXT_MAX || strchr(candidate, '#') != NULL ||
-	    !axis_auth_next_is_safe(candidate))
-		return NULL;
-	path = g_strndup(candidate, strcspn(candidate, "?"));
-	route = axis_portal_route_parse(path, &id, &request_id);
-	if (route != AXIS_PORTAL_ROUTE_HOME && route != AXIS_PORTAL_ROUTE_SEARCH && route != AXIS_PORTAL_ROUTE_TITLE &&
-	    route != AXIS_PORTAL_ROUTE_REQUESTS)
-		return NULL;
-	return g_strdup(candidate);
-}
 
 /* A redirect to one of the portal's own paths: @location is a literal of
- * this file or came through safe_next(). */
+ * this file or came through axis_portal_form_safe_next(). */
 static HtmxResponse *
 see_other(const gchar *location)
 {
@@ -575,7 +552,7 @@ to_login(
 	const Visit *visit,
 	gboolean     ended
 ){
-	g_autofree gchar *next = safe_next(visit->back);
+	g_autofree gchar *next = axis_portal_form_safe_next(visit->back);
 	g_autofree gchar *location = NULL;
 	HtmxResponse *response;
 
@@ -1615,17 +1592,6 @@ same_origin(
 	return TRUE;
 }
 
-/* Whether a posted body is declared an urlencoded form. */
-static gboolean
-is_form(const gchar *content_type)
-{
-	static const gchar type[] = "application/x-www-form-urlencoded";
-
-	if (content_type == NULL || g_ascii_strncasecmp(content_type, type, sizeof(type) - 1) != 0)
-		return FALSE;
-	return content_type[sizeof(type) - 1] == '\0' || content_type[sizeof(type) - 1] == ';' ||
-		content_type[sizeof(type) - 1] == ' ';
-}
 
 static HtmxResponse *
 method_refused(const gchar *allow)
@@ -1669,7 +1635,7 @@ handle_login(
 	gboolean ok;
 
 	if (!visit->post) {
-		next = safe_next(axis_portal_form_get(visit->query, "next"));
+		next = axis_portal_form_safe_next(axis_portal_form_get(visit->query, "next"));
 		return login_page(self, visit, 200, next, NULL);
 	}
 	/* The form's token: bound to the cookie that was set with the form. */
@@ -1690,7 +1656,7 @@ handle_login(
 		note(self, NOTE_LOGIN_ADDRESS, "login: refused %s, which has too many failed logins", visit->client);
 		return too_many(limit_words(AXIS_PORTAL_REFUSED_THROTTLED), seconds_of(wait));
 	}
-	next = safe_next(axis_portal_form_get(visit->form, "next"));
+	next = axis_portal_form_safe_next(axis_portal_form_get(visit->form, "next"));
 	username = axis_portal_form_get(visit->form, "username");
 	password = axis_portal_form_get(visit->form, "password");
 	/* The address is reported as decided; when it is not known, as no
@@ -2111,7 +2077,7 @@ serve(
 		const gchar *data = NULL;
 		gsize length = 0;
 
-		if (!is_form(htmx_request_get_content_type(request))) {
+		if (!axis_portal_form_is_urlencoded(htmx_request_get_content_type(request))) {
 			response = say(415, "That cannot be done", "This address takes a posted form only.");
 			goto out;
 		}

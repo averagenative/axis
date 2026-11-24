@@ -164,6 +164,26 @@ axis_portal_form_seasons(
 	guint                *n_picked
 );
 
+/* The longest `next` that is kept. */
+#define AXIS_PORTAL_NEXT_MAX 512
+
+/**
+ * axis_portal_form_safe_next:
+ * @candidate: (nullable): where a login is to send the browser afterwards
+ *
+ * Returns: (transfer full) (nullable): @candidate when it is a path of one
+ *   of the portal's own pages (the lists, a search, a title, my requests),
+ *   with its query, at most AXIS_PORTAL_NEXT_MAX characters, without a
+ *   fragment, and nothing a browser could read as another site; else %NULL
+ */
+gchar *
+axis_portal_form_safe_next(const gchar *candidate);
+
+/* Whether @content_type (nullable) declares an urlencoded form, with or
+ * without parameters. */
+gboolean
+axis_portal_form_is_urlencoded(const gchar *content_type);
+
 G_END_DECLS
 
 #endif /* AXIS_PORTAL_FORM_H */
