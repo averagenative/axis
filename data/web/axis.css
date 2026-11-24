@@ -1750,6 +1750,48 @@ p.help {
 	accent-color: var(--link);
 }
 
+/* A conversion's progress, and a run's: the bar with its words beside it.
+ * The bar takes its colour from the theme's link colour (accent-color, as
+ * every progress element does), on the theme's own track, so it reads in
+ * every theme; the words say everything the bar does. */
+.conversion-progress {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 0.25rem 0.75rem;
+	margin: 0.5rem 0;
+}
+
+.conversion-progress progress {
+	flex: 1 1 12rem;
+	min-width: 6rem;
+	max-width: 28rem;
+	height: 0.75rem;
+	accent-color: var(--link);
+}
+
+.conversion-progress-text {
+	flex: 2 1 14rem;
+	font-variant-numeric: tabular-nums;
+	color: var(--text-muted);
+}
+
+/* In a table cell and in a list of files: the short bar, under the state. */
+.data-table .conversion-progress,
+li > .conversion-progress {
+	margin: 0.25rem 0 0;
+}
+
+.data-table .conversion-progress progress {
+	flex: 0 0 4rem;
+	min-width: 4rem;
+	height: 0.5rem;
+}
+
+.data-table .conversion-progress-text {
+	flex: 1 1 8rem;
+}
+
 /* In the list the bar is the tables' short one, so that it and the
  * figure fit the column side by side. */
 .data-table .job-progress progress {

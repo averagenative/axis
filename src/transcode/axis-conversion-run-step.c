@@ -414,11 +414,24 @@ fail_lost_lists(
 	AxisConversionRuns  *self,
 	GError             **error
 ){
+	/* A run to whose list the kept files were being added (convert-kept-
+	 * files) is as it was before: its state, its list, the choice off.  The
+	 * job works in one transaction, so nothing of it is there. */
+	if (!exec(self, "UPDATE conversion_run r SET state = r.relist_state, relist_state = NULL, convert_kept = false,"
+	        " convert_kept_by = NULL, convert_kept_at = NULL, updated_at = now(),"
+	        " list_text = left('The files Axis keeps were not added, and the run is as it was: the job ended without "
+	        "adding them (' || coalesce(j.state::text, 'gone') || coalesce(': ' || j.last_error, '') || ').', 2000)"
+	        " FROM conversion_run r2 LEFT JOIN job j ON j.id = r2.list_job_id"
+	        " WHERE r.id = r2.id AND r.state = 'listing' AND r.relist_state IS NOT NULL"
+	        "  AND (j.id IS NULL OR j.state IN ('failed', 'cancelled', 'succeeded'))"
+	        "  AND r.updated_at < now() - interval '5 seconds'", 0, NULL, NULL, error))
+		return FALSE;
 	return exec(self, "UPDATE conversion_run r SET state = 'failed', finished_at = now(), updated_at = now(),"
 		" list_text = left('The list job ended without a list (' || coalesce(j.state::text, 'gone')"
 		"  || coalesce(': ' || j.last_error, '') || '). Make a new run.', 2000)"
 		" FROM conversion_run r2 LEFT JOIN job j ON j.id = r2.list_job_id"
-		" WHERE r.id = r2.id AND r.state = 'listing' AND (j.id IS NULL OR j.state IN ('failed', 'cancelled', 'succeeded'))"
+		" WHERE r.id = r2.id AND r.state = 'listing' AND r.relist_state IS NULL"
+		"  AND (j.id IS NULL OR j.state IN ('failed', 'cancelled', 'succeeded'))"
 		"  AND r.created_at < now() - interval '5 seconds'", 0, NULL, NULL, error);
 }
 
@@ -787,6 +800,8 @@ ask_one(
 	g_autofree gchar *id = int_text(entry_id);
 	g_autofree gchar *run_text = int_text(run->id);
 	g_autofree gchar *name = file_text(rel_path);
+	g_autofree gchar *kept_by = NULL;
+	g_autofree gchar *entry_confirmed_by = NULL;
 	gboolean replace = g_strcmp0(run->outcome, "replace") == 0;
 	const gchar *user = replace ? run->confirmed_by : run->started_by;
 	const gchar *params[3];
@@ -805,16 +820,28 @@ ask_one(
 	params[0] = id;
 	params[1] = run_text;
 	params[2] = replace ? "replace" : "trial";
-	if (!exec(self, "UPDATE conversion_run_entry SET state = 'asked', outcome = $3, asked_at = now() WHERE id = $1::bigint"
-	        " AND run_id = $2::bigint AND state = 'waiting'"
-	        " AND EXISTS (SELECT 1 FROM conversion_run r WHERE r.id = $2::bigint AND r.state = 'running') RETURNING id", 3,
+	/* Marked asked, and read with it as the run is now (not as the step
+	 * found it when it began): who chose to convert kept files when the
+	 * choice covers this file (it was kept when it was listed, or added),
+	 * and who confirmed that its original is replaced when it was added to
+	 * a run that replaces originals. */
+	if (!exec(self, "UPDATE conversion_run_entry e SET state = 'asked', outcome = $3, asked_at = now()"
+	        " FROM conversion_run r WHERE e.id = $1::bigint AND e.run_id = $2::bigint AND e.state = 'waiting'"
+	        " AND r.id = e.run_id AND r.state = 'running'"
+	        " RETURNING e.id, CASE WHEN r.convert_kept AND e.convert_kept THEN r.convert_kept_by END, e.confirmed_by", 3,
 	        params, &marked, error))
 		return ASK_STOP;
 	if (axis_db_result_get_n_rows(marked) != 1)
 		return ASK_STOP;
+	kept_by = g_strdup(text_at(marked, 0, 1));
+	entry_confirmed_by = g_strdup(text_at(marked, 0, 2));
+	/* A file added to a replacing run is replaced on the confirmation given
+	 * for it, by the person who gave it. */
+	if (replace && entry_confirmed_by != NULL)
+		user = entry_confirmed_by;
 	if (axis_conversions_request_for_run(self->conversions, file_id, run->revision_id, replace ?
-	        AXIS_CONVERSION_REPLACE : AXIS_CONVERSION_TRIAL, replace && run->confirmed_by != NULL, user != NULL ? user :
-	        "?", run->id, entry_id, &conversion, &gate, &local)) {
+	        AXIS_CONVERSION_REPLACE : AXIS_CONVERSION_TRIAL, replace && user != NULL, kept_by,
+	        user != NULL ? user : "?", run->id, entry_id, &conversion, &gate, &local)) {
 		g_autoptr(AxisDbResult) state = NULL;
 		g_autofree gchar *conv = int_text(conversion);
 		const gchar *more[2];

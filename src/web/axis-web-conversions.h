@@ -13,8 +13,13 @@
  *                                     (?file=&revision=&outcome=): what will
  *                                     happen, every gate worked out now
  *   POST /conversions                 the request (every gate again)
+ *   GET  /conversions/latest          the table of the latest conversions, as
+ *                                     the page asks for it again while one is
+ *                                     in flight
  *   GET  /conversions/:id             a conversion: its checks with what each
  *                                     found, its placement, its files
+ *   GET  /conversions/:id/progress    the block that follows a conversion in
+ *                                     flight (its stage, a bar, the time left)
  *   POST /conversions/:id/cancel      stops one that is queued or encoding
  *   POST /conversions/:id/remove-trial removes a trial's kept file now
  *   GET  /conversions/prove/:revision the confirmation of proving a revision
@@ -53,6 +58,32 @@ axis_web_conversions_get_runs(AxisWebConversions *self);
  * convert.keep_original at @seconds. */
 gchar *
 axis_web_conversions_keep_sentence(gint64 seconds);
+
+/* The sentence of the choice to convert kept files, the same on a run's plan,
+ * a run's page and a single conversion's confirmation. */
+#define AXIS_WEB_CONVERT_KEPT_LABEL "Also convert files Axis keeps"
+#define AXIS_WEB_CONVERT_KEPT_HELP \
+	"A kept file is re-encoded in place after every check passes. It stays kept, so Axis still does not replace it " \
+	"with another release."
+
+/* Where a conversion in flight is, in words: "Encoding: 42%, 2.5 times real
+ * time, about 12 minutes left"; "Checking: no progress reported yet". */
+gchar *
+axis_web_conversions_progress_text(const AxisConversionProgress *progress);
+
+/* The same as a bar (a <progress> element: max 100 and the percent as its
+ * value, or no value while nothing is known, which draws it indeterminate)
+ * with the words beside it and as the bar's accessible name. */
+HtmxNode *
+axis_web_conversions_progress_node(const AxisConversionProgress *progress);
+
+/* A bar of @value of @max with @text beside it and as its accessible name. */
+HtmxNode *
+axis_web_conversions_bar(
+	gdouble      value,
+	gdouble      max,
+	const gchar *text
+);
 
 /* Waits (running the default main context) for the page work in flight. */
 void

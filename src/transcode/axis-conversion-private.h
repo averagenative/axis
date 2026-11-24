@@ -194,6 +194,7 @@ typedef struct
 	gchar   *plan_preset;	/* nullable: the software preset it was made with */
 	gint     plan_threads;	/* the software encoders' threads it was made with */
 	gint     checks_version;	/* the checks' rules it was judged by (0: before versions) */
+	gboolean convert_kept;	/* asked for although the file is kept (convert-kept-files) */
 } AxisConversionRow;
 
 void
@@ -293,6 +294,12 @@ axis_conversion_split(
 #define AXIS_CONVERSION_KEPT_TEXT \
 	"Kept: Axis does not replace this file. Let Axis upgrade it again on its links page to allow a conversion."
 
+/* What the same gate says of a kept file an administrator chose to convert
+ * (convert-kept-files): it holds, and the mark is not touched. */
+#define AXIS_CONVERSION_KEPT_CHOSEN_TEXT \
+	"The file is kept, and converting kept files was chosen for this conversion: it is converted in place and stays " \
+	"kept, so Axis still does not replace it with another release."
+
 /**
  * AxisConversionFacts:
  *
@@ -365,6 +372,10 @@ axis_conversion_facts_load(
  * @plan_machines: work out G8 for the registered workers' capabilities
  * @stamp: (nullable): the stamp recorded at request (G15), checked against
  *   the index (and, with @guard, the file)
+ * @convert_kept: an administrator chose to convert the file although it is
+ *   kept (the request's tick, or the run's choice; afterwards what the
+ *   conversion's row recorded).  It lifts the gate "kept" and no other: the
+ *   only place the kept mark is passed over.
  *
  * Every gate for @facts and @outcome, appended to @gates
  * (AxisConversionGate); the estimate and the encoder found, in @preview
@@ -377,6 +388,7 @@ axis_conversion_gates(
 	const AxisConversionFacts   *facts,
 	const AxisConversionInputs  *inputs,
 	AxisConversionOutcome        outcome,
+	gboolean                     convert_kept,
 	AxisVolumeGuard             *guard,
 	gboolean                     plan_machines,
 	const AxisConversionRow     *stamp,

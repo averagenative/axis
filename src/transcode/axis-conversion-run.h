@@ -14,6 +14,13 @@
  *    its ten checks, its placement and its page.  A replacement is asked
  *    for only once a person confirmed on the run's page that originals will
  *    be deleted, with a revision that is proven.
+ *  - One gate can be lifted, by an administrator's choice stored with the
+ *    run (convert-kept-files): "kept".  A run with the choice lists the
+ *    files Axis keeps and passes the choice to the request of each file it
+ *    covers (one kept when it was listed), where it lifts that gate and no
+ *    other; a file that becomes kept later is refused as without the
+ *    choice.  The kept mark itself is read, and never written, by anything
+ *    here.  Without the choice a run is as before.
  *  - The list is built by the estimator's own loader and decision
  *    (axis_estimator_load_files()'s columns, axis_estimate_eligibility()):
  *    there is no second estimator.  A file not in the list has exactly one
@@ -166,7 +173,13 @@ axis_conversion_runs_create(
  * revision that has not started yet (being listed, or ready) is that run:
  * *@run_id is it, nothing is stored and *@created is %FALSE (a second
  * click makes no second run).  Without @created, as
- * axis_conversion_runs_create(). */
+ * axis_conversion_runs_create().
+ *
+ * @convert_kept (convert-kept-files): the run also lists, and converts, the
+ * files Axis keeps (kept by hand, or brought over from Radarr or Sonarr);
+ * stored with the run with @user as who chose it.  It lifts the reason
+ * "kept" only; the kept mark of a file is never changed by a conversion.
+ * A run of the same selection with the other choice is another run. */
 gboolean
 axis_conversion_runs_create_full(
 	AxisConversionRuns     *self,
@@ -175,6 +188,7 @@ axis_conversion_runs_create_full(
 	guint                   n_roots,
 	gint64                  title_id,
 	gint64                  revision_id,
+	gboolean                convert_kept,
 	const gchar            *user,
 	gint64                 *run_id,
 	gboolean               *created,
@@ -299,9 +313,54 @@ axis_conversion_runs_cancel(
  * converted as trials are asked for again as replacements (a trial's file
  * is never put in a library).  A run paused because its trials could prove
  * the revision runs again.
+ *
+ * @kept_seen: the number of files Axis keeps, among those the switch
+ *   replaces, that the person saw when ticking; the switch is refused when
+ *   the list holds more now (checked under the run's lock).  -1 skips the check.
  */
 gboolean
 axis_conversion_runs_replace(
+	AxisConversionRuns  *self,
+	gint64               run_id,
+	gboolean             confirmed,
+	gint64               kept_seen,
+	const gchar         *user,
+	GError             **error
+);
+
+/**
+ * axis_conversion_runs_include_kept:
+ * @confirmed: the administrator ticked that the originals of the files added
+ *   are replaced (needed for a run that replaces originals)
+ * @user: the administrator who chooses it
+ *
+ * "Add these N files to the run": turns the choice to convert kept files on
+ * for a run made without it, and queues the job that adds the files left
+ * out as kept to its list.  Allowed for a run that is ready to start, paused
+ * or finished, with no file in flight; refused
+ * (%AXIS_CONVERSION_ERROR_STATE) for any other state, for a run with a file
+ * in flight, and for a run that has the choice already.  A run that
+ * replaces originals replaces the files added too: without @confirmed it is
+ * refused (%AXIS_CONVERSION_ERROR_REFUSED) and nothing changes; with it,
+ * each file added records @user's confirmation (who, when), and its
+ * replacement is asked for as @user.  A run of trials adds them as trials.
+ *
+ * The list is added to, not made again: nothing of the entries there are
+ * (done, skipped, failed, taken out, their conversions) is touched.  Each
+ * file left out as kept is decided as the first list decided it, with the
+ * kept mark passed over: listed (at the end of its series' unit, or as new
+ * units after those there are, the largest estimated saving first), or left
+ * out for its other reason.  The choice covers the files kept when they are
+ * added; one that becomes kept afterwards is refused when its turn comes.
+ * The run shows "Making the list" meanwhile and then goes back to ready or
+ * paused: it never starts by itself.  A finished run with files it can
+ * convert becomes paused, for a person to resume; one that can convert none
+ * of them (beyond its caps, taken out, its time budget used up) stays
+ * finished and says why.  When the job fails, the run is as it was, the
+ * choice off.
+ */
+gboolean
+axis_conversion_runs_include_kept(
 	AxisConversionRuns  *self,
 	gint64               run_id,
 	gboolean             confirmed,
@@ -442,6 +501,13 @@ typedef struct
 	gint64     wait_us;
 	gint       failed_in_row;
 	gint       refused_in_row;
+	/* The choice to convert kept files: on or off, who chose it and when,
+	 * and whether kept files are being added to a list there was (the state
+	 * the run goes back to, else NULL). */
+	gboolean   convert_kept;
+	gchar     *convert_kept_by;
+	gint64     convert_kept_us;
+	gchar     *relist_state;
 	/* The list: every unit and file not removed, and those within the caps. */
 	gint64     units;
 	gint64     files;
@@ -451,8 +517,16 @@ typedef struct
 	gint64     cap_files_in;
 	gint64     cap_bytes_in;
 	gint64     cap_mid_in;
-	/* Its files by what became of them. */
+	/* Its files by what became of them; and of those that wait, the ones
+	 * within its caps (what resuming it would ask for: axis_conversion_runs_get()
+	 * only). */
 	gint64     waiting;
+	gint64     waiting_in;
+	/* The files a switch to replacing originals would ask for within the
+	 * caps (those that wait and those converted as trials), and how many of
+	 * them are files Axis keeps (axis_conversion_runs_get() only). */
+	gint64     replace_in;
+	gint64     replace_kept_in;
 	gint64     asked;
 	gint64     done;
 	gint64     skipped;
@@ -615,6 +689,15 @@ typedef struct
 	gchar  *reason_code;
 	gchar  *reason_text;
 	gint64  settled_us;
+	/* Its conversion's jobs, for the progress of a file in flight (as
+	 * AxisConversionRecord's fields of the same names). */
+	gchar  *job_state;
+	gdouble job_fraction;
+	gint64  job_running_s;
+	gchar  *verify_state;
+	gdouble verify_fraction;
+	gint64  verify_running_s;
+	gint64  duration_ms;
 } AxisConversionRunEntry;
 
 void

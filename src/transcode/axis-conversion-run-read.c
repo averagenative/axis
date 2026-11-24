@@ -113,6 +113,8 @@ axis_conversion_run_info_free(AxisConversionRunInfo *info)
 	g_free(info->paused_by);
 	g_free(info->wait_code);
 	g_free(info->wait_text);
+	g_free(info->convert_kept_by);
+	g_free(info->relist_state);
 	if (info->waits != NULL)
 		g_ptr_array_unref(info->waits);
 	g_free(info);
@@ -142,6 +144,8 @@ axis_conversion_run_entry_free(AxisConversionRunEntry *entry)
 	g_free(entry->outcome);
 	g_free(entry->reason_code);
 	g_free(entry->reason_text);
+	g_free(entry->job_state);
+	g_free(entry->verify_state);
 	g_free(entry);
 }
 
@@ -167,8 +171,8 @@ axis_conversion_run_excluded_free(AxisConversionRunExcluded *file)
 
 /* ── A run ──────────────────────────────────────────────────────── */
 
-/* The run's row (0..41), then for a list the counts of its files by state
- * (42..47). */
+/* The run's row (0..45), then for a list the counts of its files by state
+ * (46..51). */
 #define RUN_COLUMNS \
 	"r.id, r.revision_id, pr.name, p.slug, pr.number," \
 	" EXISTS (SELECT 1 FROM conversion_profile_proof pf WHERE pf.revision_id = r.revision_id)," \
@@ -178,7 +182,8 @@ axis_conversion_run_excluded_free(AxisConversionRunExcluded *file)
 	" r.started_by, " US("r.started_at") ", r.confirmed_by, " US("r.confirmed_at") ", " US("r.finished_at") "," \
 	" r.finish_text, r.list_text, " US("r.listed_at") ", j.state::text, coalesce(j.progress, 0), j.progress_message," \
 	" r.scope_files, r.pause_code, r.pause_text, r.paused_by, " US("r.paused_at") ", r.wait_code, r.wait_text," \
-	" " US("r.wait_since") ", r.failed_in_row, r.refused_in_row, p.archived"
+	" " US("r.wait_since") ", r.failed_in_row, r.refused_in_row, p.archived," \
+	" r.convert_kept, r.convert_kept_by, " US("r.convert_kept_at") ", r.relist_state"
 
 #define RUN_FROM \
 	" FROM conversion_run r JOIN conversion_profile_revision pr ON pr.id = r.revision_id" \
@@ -232,6 +237,10 @@ info_from(
 	info->wait_us = int_at(result, i, 38);
 	info->failed_in_row = (gint)int_at(result, i, 39);
 	info->refused_in_row = (gint)int_at(result, i, 40);
+	info->convert_kept = bool_at(result, i, 42);
+	info->convert_kept_by = text_at(result, i, 43);
+	info->convert_kept_us = int_at(result, i, 44);
+	info->relist_state = text_at(result, i, 45);
 	return info;
 }
 
@@ -280,9 +289,9 @@ axis_conversion_runs_list(
 	for (i = 0; i < axis_db_result_get_n_rows(result); i++) {
 		AxisConversionRunInfo *info = info_from(result, i);
 
-		counts_from(info, result, i, 42);
+		counts_from(info, result, i, 46);
 		/* Saved for real: replacements done. */
-		info->done_after = int_at(result, i, 48);
+		info->done_after = int_at(result, i, 52);
 		g_ptr_array_add(list, info);
 	}
 	*out = list;
@@ -321,15 +330,22 @@ axis_conversion_runs_get(
 	revision = int_text(info->revision_id);
 
 	/* Its files by state, what the done ones came to, its units done (every
-	 * file of the unit settled and one done at least). */
+	 * file of the unit settled and one done at least), the files that wait
+	 * within its caps. */
+	params[1] = cap;
 	if (!exec(self, "SELECT " ENTRY_COUNTS ","
 	        " coalesce(sum(e.size) FILTER (WHERE e.state = 'done'), 0), coalesce(sum(e.mid) FILTER (WHERE e.state = 'done'), 0),"
 	        " coalesce(sum(e.result_size) FILTER (WHERE e.state = 'done'), 0),"
 	        " count(*) FILTER (WHERE e.state = 'done' AND e.outcome = 'trial'),"
 	        " (SELECT count(*) FROM (SELECT 1 FROM conversion_run_entry x WHERE x.run_id = $1::bigint GROUP BY x.unit_position"
 	        "   HAVING count(*) FILTER (WHERE x.state IN ('waiting', 'asked')) = 0"
-	        "   AND count(*) FILTER (WHERE x.state = 'done') > 0) d)"
-	        " FROM conversion_run_entry e WHERE e.run_id = $1::bigint", 1, params, &entries, error))
+	        "   AND count(*) FILTER (WHERE x.state = 'done') > 0) d),"
+	        " count(*) FILTER (WHERE e.state = 'waiting' AND ($2::integer < 0 OR e.unit_position <= $2::integer)),"
+	        " count(*) FILTER (WHERE (e.state = 'waiting' OR (e.state = 'done' AND e.outcome = 'trial'))"
+	        "   AND ($2::integer < 0 OR e.unit_position <= $2::integer)),"
+	        " count(*) FILTER (WHERE (e.state = 'waiting' OR (e.state = 'done' AND e.outcome = 'trial'))"
+	        "   AND e.convert_kept AND ($2::integer < 0 OR e.unit_position <= $2::integer))"
+	        " FROM conversion_run_entry e WHERE e.run_id = $1::bigint", 2, params, &entries, error))
 		return FALSE;
 	counts_from(info, entries, 0, 0);
 	info->done_before = int_at(entries, 0, 6);
@@ -337,8 +353,10 @@ axis_conversion_runs_get(
 	info->done_after = int_at(entries, 0, 8);
 	info->done_trials = int_at(entries, 0, 9);
 	info->units_done = int_at(entries, 0, 10);
+	info->waiting_in = int_at(entries, 0, 11);
+	info->replace_in = int_at(entries, 0, 12);
+	info->replace_kept_in = int_at(entries, 0, 13);
 
-	params[1] = cap;
 	if (!exec(self, "SELECT count(*), coalesce(sum(u.files), 0), coalesce(sum(u.bytes), 0), coalesce(sum(u.mid), 0),"
 	        " count(*) FILTER (WHERE $2::integer < 0 OR u.position <= $2::integer),"
 	        " coalesce(sum(u.files) FILTER (WHERE $2::integer < 0 OR u.position <= $2::integer), 0),"
@@ -590,11 +608,23 @@ axis_conversion_runs_unit(
 	"e.id, e.position, e.unit_position, coalesce(e.file_id, 0), coalesce(e.volume_id, 0), v.name, e.rel_path," \
 	" coalesce(e.season_number, -1), coalesce(e.episode_number, -1), e.size, e.low, e.mid, e.high, e.state," \
 	" coalesce(e.conversion_id, 0), c.state, coalesce(e.trial_id, 0), e.outcome, coalesce(e.result_size, -1)," \
-	" e.reason_code, e.reason_text, " US("e.settled_at")
+	" e.reason_code, e.reason_text, " US("e.settled_at") "," \
+	" j.state::text, coalesce(j.progress, -1)," \
+	" CASE WHEN j.state = 'running' AND j.started_at IS NOT NULL" \
+	"  THEN greatest(extract(epoch FROM now() - j.started_at), 0)::bigint ELSE -1 END," \
+	" vj.state::text, coalesce(vj.progress, -1)," \
+	" CASE WHEN vj.state = 'running' AND vj.started_at IS NOT NULL" \
+	"  THEN greatest(extract(epoch FROM now() - vj.started_at), 0)::bigint ELSE -1 END," \
+	" CASE WHEN e.state = 'asked' THEN coalesce((SELECT mi.duration_ms FROM media_info mi" \
+	"  WHERE mi.file_id = e.file_id), 0) ELSE 0 END"
 
+/* The jobs are those of a file in flight only: a settled entry's row joins
+ * none (its page of the list reads no job). */
 #define ENTRY_FROM \
 	" FROM conversion_run_entry e LEFT JOIN volume v ON v.id = e.volume_id" \
-	" LEFT JOIN conversion c ON c.id = e.conversion_id"
+	" LEFT JOIN conversion c ON c.id = e.conversion_id" \
+	" LEFT JOIN job j ON e.state = 'asked' AND j.id = c.job_id" \
+	" LEFT JOIN job vj ON e.state = 'asked' AND vj.id = c.verify_job_id"
 
 static AxisConversionRunEntry *
 entry_from(
@@ -625,6 +655,13 @@ entry_from(
 	e->reason_code = text_at(result, i, 19);
 	e->reason_text = text_at(result, i, 20);
 	e->settled_us = int_at(result, i, 21);
+	e->job_state = text_at(result, i, 22);
+	e->job_fraction = double_at(result, i, 23);
+	e->job_running_s = int_at(result, i, 24);
+	e->verify_state = text_at(result, i, 25);
+	e->verify_fraction = double_at(result, i, 26);
+	e->verify_running_s = int_at(result, i, 27);
+	e->duration_ms = int_at(result, i, 28);
 	return e;
 }
 

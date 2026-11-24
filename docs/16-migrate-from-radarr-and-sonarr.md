@@ -204,6 +204,14 @@ searched for until you start searching.
 To replace one kept file yourself, use **Manual search** on the movie. The
 page asks you to confirm that the file is replaced.
 
+A kept file is also left out of a conversion unless you choose otherwise. A
+conversion re-encodes the file you have. It does not download another
+release. To convert kept files and leave them kept, tick **Also convert
+files Axis keeps** when you plan a conversion run, or add them from the
+run's page
+([Convert a whole library with a conversion run](10-convert-a-whole-library.md)).
+You do not need to let the files go first.
+
 When Axis upgrades a movie, it puts the new file in a folder that Axis names,
 inside the movie's library folder. It then moves the old file, with its
 subtitles, to the recycle folder of the same disk. Axis keeps it there for

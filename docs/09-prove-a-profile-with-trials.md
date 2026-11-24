@@ -58,7 +58,17 @@ that load again by itself. Downloads, imports and scans go on.
    trial**.
 5. Open **Library**, then **Conversions**. The conversion
    moves through **Waiting for a worker**, **Being converted on a worker**,
-   **Being checked** and **Done**. Open it to see progress. The card **The ten
+   **Being checked** and **Done**. While it is in flight, the **Latest
+   conversions** table shows a progress bar beside its state, and the table
+   follows it. Open the conversion to see the same bar on the card
+   **Request, state and sizes**. The words beside the bar name the stage
+   (**Waiting for a worker**, **Encoding**, **Checking**, **Replacing** or
+   **Keeping the trial aside**), the percent, the speed as a multiple of
+   real time, and an estimate of the time left, for example "Encoding: 50%,
+   2.5 times real time, about 2 minutes left". A bar that shows no amount
+   means that the worker has not reported how far it is yet. The bar
+   follows the conversion without a reload. Load the page again to see
+   each check as it is made. The card **The ten
    checks of the converted file** lists ten checks, each **Passed**,
    **Failed**, **Not run** or **To come**:
 
@@ -114,12 +124,23 @@ the original**. The old file waits in the disk's recycle folder for the
 time **Keep replaced originals for** sets (the default is 0, which removes
 it as soon as the new file is in place).
 
+A file that Axis keeps (you keep it by hand, or it was migrated from Radarr
+or Sonarr) is not replaced unless you say so. When nothing else holds such
+a file back, the page **Replace a file with its conversion** offers **Also
+convert files Axis keeps** as a box of its own, not ticked. Tick it to
+convert the file: it is re-encoded in place after every check passes, and
+it stays kept, so Axis still does not replace it with another release. A
+trial of a kept file needs no tick, because a trial replaces nothing. To
+convert many kept files, see
+[Convert files that Axis keeps](10-convert-a-whole-library.md#convert-files-that-axis-keeps).
+
 ## What can go wrong
 
 | What you see | What to do |
 | --- | --- |
 | **Refused: a condition did not hold** | Read the conditions on the conversion's page. A common one is the playback verdict not being safe. |
 | **Rejected by a check** | Open the conversion and read the failed check and "What was found". Nothing was changed. |
+| "Kept: Axis does not replace this file." | Axis keeps the file. To convert it and leave it kept, tick **Also convert files Axis keeps** on the confirmation. To let Axis replace it with other releases too, let the file go with **Let Axis upgrade it again** ([Migrate from Radarr and Sonarr](16-migrate-from-radarr-and-sonarr.md)). |
 | **Failed**, "Not judged: ..." | Axis changed between the encode and the checks, so it could not judge the file against the plan it gave. Nothing was changed, and the profile can still be proven. Convert the file again. |
 | **Waiting for a worker** forever | No worker can reach the disk, or conversion work is paused after a restart. Open **Conversion workers**, and select **Resume conversion work**. |
 | "Storage is read-only (Settings, Read-only storage): nothing is converted until ..." | Switch **Read-only storage** off. |

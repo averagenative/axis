@@ -1028,8 +1028,8 @@ check_gates(
 		axis_conversion_inputs_clear(&inputs);
 		return FALSE;
 	}
-	ok = axis_conversion_gates(v->self, conn, &v->facts, &inputs, v->row->outcome, v->guard, FALSE, v->row, NULL,
-		gates, error);
+	ok = axis_conversion_gates(v->self, conn, &v->facts, &inputs, v->row->outcome, v->row->convert_kept, v->guard,
+		FALSE, v->row, NULL, gates, error);
 	axis_db_pool_release(v->self->pool, conn);
 	axis_conversion_inputs_clear(&inputs);
 	if (!ok)
