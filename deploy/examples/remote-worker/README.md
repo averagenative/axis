@@ -26,14 +26,32 @@ checks; you can have the worker make the heavy ones instead (step 7).
 Either way, Axis decides every check itself. The worker creates no file
 anywhere else, renames nothing and removes only its own output.
 
-The files here: this README, [`run`](run) (the worker with rootless Podman),
-and [`axis-worker.container`](axis-worker.container) (the same as a Quadlet
-unit, so that systemd runs it). Every name below (`axis.example.org`,
-`server.example.org`, `/mnt/server/disk1`, the user `you`) is an example:
-put yours in.
+The quickest way is the guide in Axis: on the **Conversion workers** page,
+select **Attach a worker**. It asks for the worker's name, its container
+tool (Docker, Docker Compose, Podman, or Podman Quadlet), its encoder (an
+NVIDIA GPU, an Intel or AMD GPU, or the CPU only) and its disks, and gives
+you the text of one of the files here with your values filled in, then
+shows when the worker has registered. This README explains what that text
+does and how to do the same by hand.
 
-`make check-examples` does not run this example: it needs two machines and
-a GPU.
+The files here:
+
+| File | What it is |
+| --- | --- |
+| [`run`](run) | The worker with rootless Podman. An NVIDIA GPU as written; set `encoder` for an Intel or AMD GPU or the CPU only |
+| [`axis-worker.container`](axis-worker.container) | The same as a Quadlet unit, so that systemd runs it. The lines marked `ENCODER` switch the encoder |
+| [`compose.yaml`](compose.yaml) | The same for Docker Compose. The lines marked `ENCODER` switch the encoder |
+
+Every name below (`axis.example.org`, `server.example.org`,
+`/mnt/server/disk1`, the user `you`) is an example: put yours in.
+[What has been run for real](#what-has-been-run-for-real) says which of
+these files ran on real hardware and which did not.
+
+`make check-examples` does not run the worker of this example: that needs
+two machines and, for two of the three encoders, a GPU. Its `worker` part
+checks only what can be checked without them: `run` is valid shell,
+`compose.yaml` is accepted by `compose config`, and Quadlet's generator
+accepts `axis-worker.container` in a dry run.
 
 ## What you need
 
@@ -45,18 +63,21 @@ a GPU.
   write the work area, and a replacement writes the library. Axis writes
   nothing until you allow it ([../../README.md](../../README.md), "The one
   layout rule").
-- On the desktop: Podman 4.4 or newer (Quadlet: Podman 5), the NVIDIA driver
-  and the NVIDIA Container Toolkit, and a way to mount the server's disks
-  (below).
+- On the desktop: Podman 4.4 or newer (Quadlet: Podman 5) or Docker with the
+  Compose plugin, and a way to mount the server's disks (below). For an
+  NVIDIA GPU, the NVIDIA driver and the NVIDIA Container Toolkit. For an
+  Intel or AMD GPU, the GPU's VA-API driver. For the CPU only, nothing more.
 - The same Axis version on both: the worker's image tag is the server's.
   A worker of another version is refused and says so ("When something goes
   wrong").
 
 ## 1. Add the worker and keep its token
 
-In Axis, open **Conversion workers** (Library), add a worker (for
-example `desk`), and copy the token it shows. It is shown once; Axis keeps
-only a hash of it.
+In Axis, open **Conversion workers** (Library). Either select **Attach a
+worker** and follow the guide (its fourth page shows the token), or, to do
+everything by hand, use **Add a worker without the guide**: enter a name
+(for example `desk`) and copy the token it shows. Either way the token is
+shown once; Axis keeps only a hash of it.
 
 On the desktop, as the user who will run the worker, put it in a file only
 that user can read:
@@ -186,6 +207,36 @@ what it can really encode when it starts (a one-second test encode per
 encoder, once per ffmpeg build) and reports it; the Conversion workers page shows
 `hevc_nvenc` as usable when it works.
 
+### An Intel or AMD GPU instead (VA-API)
+
+Give the container the GPU's render node and the group that owns it:
+
+```sh
+ls -l /dev/dri                      # renderD128 is usually the one
+stat -c %g /dev/dri/renderD128      # the group that owns it, as a number
+```
+
+- `run`: set `encoder=vaapi`. It passes `--device /dev/dri/renderD128
+  --group-add keep-groups`, so the container keeps your own groups; your
+  user must be in the group that owns the node (usually `render` or
+  `video`).
+- `axis-worker.container`: follow the two places marked `ENCODER`.
+- `compose.yaml`: follow the three places marked `ENCODER`, and write the
+  group's number to `.env` as `RENDER_GID`.
+
+If the node has another number on your machine, change it everywhere. The
+worker is told `AXIS_WORKER_ENCODER_FAMILIES=vaapi`, and the Conversion
+workers page shows `hevc_vaapi` as usable when it works.
+
+### The CPU only
+
+Set `encoder=cpu` in `run`, or follow the `ENCODER` marks in the other two
+files: no device is passed and the worker is told
+`AXIS_WORKER_ENCODER_FAMILIES=software`. Software encoding compresses best
+and is slow: expect a film to take hours, not minutes, and much longer on a
+small board. Remove the `--cpus` limit, or raise it, if the machine has
+nothing else to do.
+
 ## 5. Start the worker
 
 Change the lines marked `EDIT` in [`run`](run), then, as your user (never
@@ -207,6 +258,22 @@ systemctl --user daemon-reload
 systemctl --user start axis-worker
 loginctl enable-linger        # once: run while you are logged out
 ```
+
+Or, with Docker Compose, copy [`compose.yaml`](compose.yaml) to a directory
+of its own, change its `EDIT` lines, put the token in
+`secrets/axis_worker_token` there (mode 600, as in step 1), and:
+
+```sh
+printf 'PUID=%s\nPGID=%s\n' "$(id -u)" "$(id -g)" > .env
+docker compose up -d
+docker compose logs -f worker
+```
+
+`PUID` and `PGID` make the container run as your user, which can read the
+token file and writes through the mounts as you do. Docker has no
+`--userns=keep-id`; this is what stands in for it. On a host with SELinux
+enforcing, add `- label=disable` under `security_opt`, as `run` does for
+Podman.
 
 What the options are for:
 
@@ -373,6 +440,21 @@ are likely to meet:
 | A leftover named `.fuse_hidden...` or `.nfs...` on the Conversions page | A mount's own temporary name for a file removed while it was open, left when the mount went away at that moment. Axis lists it and never removes a name that is not its own: remove it on the server once no worker runs |
 
 ## What has been run for real
+
+| What | Run on real hardware? |
+| --- | --- |
+| `run` with `encoder=nvenc` (rootless Podman, an NVIDIA GPU, sshfs) | Yes, before the `encoder` switch was added to the script. With the switch, the script has been checked for syntax only |
+| `axis-worker.container` | No run is recorded. Quadlet's generator accepts it in a dry run |
+| `compose.yaml` (Docker Compose), with any encoder | No. `compose config` accepts it. No Docker host and no GPU were at hand when it was written |
+| `encoder=vaapi`, in any of the three files | No. No Intel or AMD GPU was at hand |
+| `encoder=cpu`, in any of the three files | No. The tests run a real `axis-worker` with the software encoders, but not in these containers |
+| NFS and SMB mounts | No. Only sshfs ran |
+
+The text that **Attach a worker** generates is the text of these files with
+your values in it, so the same holds for it: the Podman command for an
+NVIDIA GPU matches what ran, and the rest is written from the tools'
+documentation and not yet run. If one of them does not work for you, the
+worker's log and the last page of the guide say what is missing.
 
 On a desktop with rootless Podman and an NVIDIA GPU, the server's disk
 mounted with sshfs: the worker registered over https, measured `hevc_nvenc`

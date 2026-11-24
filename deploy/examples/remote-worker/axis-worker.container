@@ -1,5 +1,6 @@
-# axis-worker.container - axis-worker on a desktop with an NVIDIA GPU, as a
-# systemd user service
+# axis-worker.container - axis-worker on another machine than Axis, as a
+# systemd user service: an NVIDIA GPU as written, an Intel or AMD GPU or the
+# CPU only at the two places marked ENCODER
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # The same container as ./run, for Quadlet (Podman 5): copy it to
@@ -36,8 +37,14 @@ NoNewPrivileges=true
 # SELinux enforcing (Fedora): a FUSE or NFS mount is refused to the
 # container otherwise.
 SecurityLabelDisable=true
-# The GPU, by its CDI name (README.md, "The GPU").
+# ENCODER (1 of 2).  An NVIDIA GPU, by its CDI name (README.md, "The GPU"):
 AddDevice=nvidia.com/gpu=all
+# An Intel or AMD GPU instead: its render node, and your groups kept in the
+# container (the group that owns the node among them).  Replace the line
+# above with these two:
+# AddDevice=/dev/dri/renderD128
+# PodmanArgs=--group-add=keep-groups
+# The CPU only: remove the AddDevice line.
 # EDIT: the token file, only yours to read.
 Volume=%h/.config/axis-worker/token:/run/secrets/axis_worker_token:ro
 # EDIT: each of the server's disks as mounted here, at the path the worker
@@ -50,7 +57,9 @@ Environment=AXIS_WORKER_TOKEN_FILE=/run/secrets/axis_worker_token
 Environment=AXIS_WORKER_VOLUMES=/media/disk1,/media/disk2
 # EDIT: the disks mounted with sshfs or SMB; remove the line for NFS.
 Environment=AXIS_WORKER_VOLUMES_WITHOUT_FILE_IDENTITY=/media/disk1,/media/disk2
-# The GPU only: the CPU encoder would be chosen first if it were offered.
+# ENCODER (2 of 2): nvenc, vaapi, or software for the CPU only.  With a GPU,
+# name the GPU's family alone: the CPU encoder would be chosen first if it
+# were offered.
 Environment=AXIS_WORKER_ENCODER_FAMILIES=nvenc
 Environment=AXIS_WORKER_LOG_LEVEL=info
 # At most four cores, and at most 512 processes.

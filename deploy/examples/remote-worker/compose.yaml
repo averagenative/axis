@@ -1,0 +1,97 @@
+# compose.yaml - axis-worker on another machine than Axis, with Docker Compose
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# The same worker as ./run and ./axis-worker.container, for Docker Compose.
+# "Attach a worker" on Axis's Conversion workers page writes this file for
+# you, with your worker's name, address and disks filled in; this copy is
+# for reading and for doing it by hand.  Change the lines marked EDIT, put
+# the token in ./secrets/axis_worker_token (README.md, step 1), then:
+#
+#   printf 'PUID=%s\nPGID=%s\n' "$(id -u)" "$(id -g)" > .env
+#   docker compose up -d
+#   docker compose logs -f worker
+#
+# As written it uses an NVIDIA GPU.  For an Intel or AMD GPU (VA-API) or for
+# the CPU only, follow the three places marked ENCODER.
+
+services:
+  worker:
+    # EDIT: the same version as Axis on the server.
+    image: ${AXIS_IMAGE:-ghcr.io/averagenative/axis:0.1.0-rc2}
+    container_name: axis-worker
+    entrypoint: ["/usr/bin/axis-worker"]
+    restart: unless-stopped
+
+    # Your own user (PUID and PGID in .env): it reads the token file, and
+    # what it writes through the mounts is written as you.
+    user: "${PUID:-1000}:${PGID:-1000}"
+    # As locked down as Axis.  The worker writes only to /tmp (its scratch
+    # and state) and to the work area at the top of each disk.
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 512
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=256m,mode=1777
+
+    environment:
+      # EDIT: Axis through its reverse proxy, over https.
+      AXIS_WORKER_URL: "https://axis.example.org"
+      # The token, from a file (the secret below): never from the
+      # environment or the command line.
+      AXIS_WORKER_TOKEN_FILE: "/run/secrets/axis_worker_token"
+      # EDIT: the disks, at the paths the volumes below give them.
+      AXIS_WORKER_VOLUMES: "/media/disk1,/media/disk2"
+      # EDIT: those of them mounted with sshfs or SMB, which do not keep
+      # file identities.  Remove the line for NFS and for local disks.
+      AXIS_WORKER_VOLUMES_WITHOUT_FILE_IDENTITY: "/media/disk1,/media/disk2"
+      # ENCODER (1 of 3): nvenc for an NVIDIA GPU, vaapi for an Intel or AMD
+      # GPU, software for the CPU only.  A family not listed is never run,
+      # not even to measure it.
+      AXIS_WORKER_ENCODER_FAMILIES: "nvenc"
+      AXIS_WORKER_LOG_LEVEL: "info"
+      # ENCODER (2 of 3): for an NVIDIA GPU only; remove it otherwise.
+      # NVENC needs the "video" capability, which Docker's default leaves out.
+      NVIDIA_DRIVER_CAPABILITIES: "compute,video,utility"
+    secrets:
+      - axis_worker_token
+
+    # EDIT: each of the server's disks as mounted on this machine (README.md,
+    # step 3), at the path the worker is told above.  Writable: the worker
+    # writes its output into the disk's work area.
+    volumes:
+      - /mnt/server/disk1:/media/disk1
+      - /mnt/server/disk2:/media/disk2
+
+    # ENCODER (3 of 3).  An NVIDIA GPU, through the NVIDIA Container Toolkit:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    # An Intel or AMD GPU instead: remove "deploy" above and use these.
+    # RENDER_GID in .env is the group that owns the render node here:
+    #   printf 'RENDER_GID=%s\n' "$(stat -c %g /dev/dri/renderD128)" >> .env
+    # devices:
+    #   - /dev/dri/renderD128:/dev/dri/renderD128
+    # group_add:
+    #   - "${RENDER_GID}"
+    # The CPU only: remove "deploy" above and add nothing.
+
+    healthcheck:
+      test: ["CMD", "/usr/bin/axis-worker", "--healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 120s
+    # A worker gives its jobs back (at most a minute), then exits.
+    stop_grace_period: 75s
+
+# The worker's token, in a file only you can read, beside this file.
+secrets:
+  axis_worker_token:
+    file: ./secrets/axis_worker_token

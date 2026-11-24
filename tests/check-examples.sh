@@ -4,7 +4,7 @@
 #
 # Usage: tests/check-examples.sh [PART...]       (or: make check-examples)
 #
-# PART is compose, full, traefik or quadlet; with none, all four run.  Needs
+# PART is compose, full, traefik, quadlet or worker; with none, all five run.  Needs
 # the image `make container` builds (AXIS_XTEST_IMAGE, default
 # localhost/axis:latest).  It is NOT part of `make check` or `make
 # check-container`: it pulls public images (postgres, traefik, and for the
@@ -45,11 +45,18 @@
 #            root, a scan, stopped, removed.  Without a usable user systemd,
 #            Quadlet's generator dry run only.
 #
-# Not run: deploy/examples/remote-worker (Axis on a server, the worker on a
-# desktop with a GPU), which needs two machines, a mount of one's disks on
-# the other and an NVIDIA GPU.  Its worker is the one the compose part's
-# image carries, and its checks are the tests' (tests/test-conversion.c,
-# test-worker-*.c).
+#   worker   deploy/examples/remote-worker, as far as it can be checked on one
+#            machine without a GPU: `run` is valid shell; `compose config`
+#            accepts compose.yaml as written (an NVIDIA GPU), with its VA-API
+#            lines switched on, and with no GPU at all; Quadlet's generator
+#            accepts axis-worker.container in a dry run.  Nothing is started,
+#            installed or pulled.
+#
+# Not run: the worker of deploy/examples/remote-worker itself (Axis on a
+# server, the worker on another machine), which needs two machines, a mount
+# of one's disks on the other and, for two of its three encoders, a GPU.
+# Its worker is the one the compose part's image carries, and its checks
+# are the tests' (tests/test-conversion.c, test-worker-*.c).
 #
 # Everything made is named axis-xtest-* (Quadlet's own default names add the
 # prefix systemd-): containers, pods, networks, volumes, secrets, units and a
@@ -1117,6 +1124,87 @@ part_quadlet() {
 }
 
 # ---------------------------------------------------------------------------
+# Part: worker
+
+# worker_config DIR PROJECT OUT DESCRIPTION: `compose config` on the copy.
+worker_config() {
+	local dir=$1 proj=$2 out=$3 description=$4
+
+	if compose_in "$dir" "$proj" config > "$out" 2>&1; then
+		pass "$description"
+	else
+		fail "$description"
+		tail -n 10 "$out" >&2
+	fi
+}
+
+part_worker() {
+	local src=$repo/deploy/examples/remote-worker dir=$work/worker proj=$prefix-w
+	local quadlet=/usr/libexec/podman/quadlet units=$work/worker-quadlet
+
+	echo "worker: deploy/examples/remote-worker (without a second machine or a GPU)"
+	check "worker: run is valid shell" sh -n "$src/run"
+
+	if [ -z "$compose" ]; then
+		skip "worker: no Compose front end (podman compose or docker compose): compose.yaml is not checked"
+	else
+		cp -R "$src" "$dir" || { fail "worker: copy"; return; }
+		# README: the token's file beside compose.yaml, the user in .env.
+		mkdir -m 700 "$dir/secrets"
+		: > "$dir/secrets/axis_worker_token"
+		chmod 600 "$dir/secrets/axis_worker_token"
+		printf 'AXIS_IMAGE=%s\nPUID=%s\nPGID=%s\n' "$image" "$puid" "$pgid" > "$dir/.env"
+		worker_config "$dir" "$proj" "$work/worker-nvenc.out" \
+			"worker: compose config accepts compose.yaml as written (an NVIDIA GPU)"
+		check "worker: as written it asks for the nvidia driver" grep -q 'driver: nvidia' "$work/worker-nvenc.out"
+		check "worker: read-only, no capabilities, no new privileges, a process limit" \
+			sh -c "grep -q 'read_only: true' '$work/worker-nvenc.out' && grep -q 'no-new-privileges:true' '$work/worker-nvenc.out' && grep -q 'pids_limit: 512' '$work/worker-nvenc.out' && grep -A1 'cap_drop:' '$work/worker-nvenc.out' | grep -q 'ALL'"
+
+		# ENCODER, for an Intel or AMD GPU: "deploy" removed, the device and
+		# the group's lines uncommented, NVIDIA's variable removed, the family
+		# named, RENDER_GID in .env.
+		edit "$dir/compose.yaml" \
+			-e '/^    deploy:$/,/^              capabilities: \[gpu\]$/d' \
+			-e 's/^    # \(devices:\)$/    \1/' \
+			-e 's|^    #   \(- /dev/dri/renderD128:/dev/dri/renderD128\)$|      \1|' \
+			-e 's/^    # \(group_add:\)$/    \1/' \
+			-e 's/^    #   \(- "[$]{RENDER_GID}"\)$/      \1/' \
+			-e '/^      NVIDIA_DRIVER_CAPABILITIES: /d' \
+			-e 's/^\(      AXIS_WORKER_ENCODER_FAMILIES: \)"nvenc"$/\1"vaapi"/'
+		printf 'RENDER_GID=%s\n' 105 >> "$dir/.env"
+		worker_config "$dir" "$proj" "$work/worker-vaapi.out" \
+			"worker: compose config accepts compose.yaml with the VA-API lines"
+		check "worker: with them it passes the render node and the group, and no NVIDIA GPU" \
+			sh -c "grep -q '/dev/dri/renderD128:/dev/dri/renderD128' '$work/worker-vaapi.out' && grep -q '105' '$work/worker-vaapi.out' && ! grep -qi 'nvidia' '$work/worker-vaapi.out'"
+
+		# ENCODER, for the CPU only: those lines commented out again.
+		edit "$dir/compose.yaml" \
+			-e '/^    devices:$/,/^      - "[$]{RENDER_GID}"$/d' \
+			-e 's/^\(      AXIS_WORKER_ENCODER_FAMILIES: \)"vaapi"$/\1"software"/'
+		worker_config "$dir" "$proj" "$work/worker-cpu.out" \
+			"worker: compose config accepts compose.yaml for the CPU only"
+		check "worker: for the CPU only it passes no device" \
+			sh -c "! grep -q 'devices:' '$work/worker-cpu.out' && grep -q 'AXIS_WORKER_ENCODER_FAMILIES: software' '$work/worker-cpu.out'"
+	fi
+
+	if [ ! -x "$quadlet" ]; then
+		skip "worker: $quadlet is not installed (Podman 5 with Quadlet): axis-worker.container is not checked"
+		return
+	fi
+	mkdir -p "$units"
+	cp "$src/axis-worker.container" "$units/axis-xtest-worker.container"
+	if QUADLET_UNIT_DIRS="$units" "$quadlet" -dryrun -user > "$work/worker-quadlet.out" 2>&1 &&
+		grep -q '^---axis-xtest-worker.service---' "$work/worker-quadlet.out"; then
+		pass "worker: Quadlet's generator accepts axis-worker.container (dry run)"
+	else
+		fail "worker: Quadlet's generator accepts axis-worker.container (dry run)"
+		tail -n 10 "$work/worker-quadlet.out" >&2
+	fi
+	check "worker: the unit it makes runs the container read-only, without capabilities or new privileges" \
+		sh -c "grep '^ExecStart=' '$work/worker-quadlet.out' | grep -e '--read-only' | grep -e '--cap-drop all' | grep -q -e 'no-new-privileges'"
+}
+
+# ---------------------------------------------------------------------------
 # Main.
 
 echo "check-examples: image $image"
@@ -1136,14 +1224,14 @@ if podman compose version >/dev/null 2>&1; then
 	compose="podman compose"
 fi
 
-parts=${*:-compose full traefik quadlet}
+parts=${*:-compose full traefik quadlet worker}
 work=$(mktemp -d "${TMPDIR:-/tmp}/$prefix.XXXXXX") || exit 1
 chmod 755 "$work"
 
 remove_mine
 for part in $parts; do
 	case $part in
-	compose | full | traefik | quadlet) "part_$part" ;;
+	compose | full | traefik | quadlet | worker) "part_$part" ;;
 	*) echo "unknown part: $part" >&2; failed=$((failed + 1)) ;;
 	esac
 done
