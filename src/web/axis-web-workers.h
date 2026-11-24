@@ -72,6 +72,21 @@ axis_web_workers_set_conversions(
 	AxisConversions *conversions
 );
 
+/**
+ * axis_web_workers_note_registered:
+ * @name: the worker that has just registered
+ *
+ * Tells the open pages that wait for a worker ("Attach a worker") to look
+ * again: an event with no content on a topic only administrators may
+ * follow.  Main thread.  Without a hub it does nothing, and those pages ask
+ * again by themselves every few seconds anyway.
+ */
+void
+axis_web_workers_note_registered(
+	AxisWebWorkers *self,
+	const gchar    *name
+);
+
 void
 axis_web_workers_free(AxisWebWorkers *self);
 

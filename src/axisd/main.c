@@ -779,6 +779,15 @@ on_module_switched(
 		axis_job_queue_wake(user_data);
 }
 
+/* A worker registered: the pages that wait for one look again. */
+static void
+on_worker_registered(
+	const gchar *worker,
+	gpointer     user_data
+){
+	axis_web_workers_note_registered(user_data, worker);
+}
+
 static gboolean
 wake_jobs(gpointer user_data)
 {
@@ -1293,6 +1302,7 @@ serve(
 	axis_module_registry_add_listener(registry, on_module_switched, jobs);
 	worker_api = axis_worker_api_new(pool, job_registry, worker_tokens, estimator);
 	axis_worker_api_set_convert(worker_api, axis_web_conversions_worker_hooks(), conversions);
+	axis_worker_api_set_registered(worker_api, on_worker_registered, workers_ui);
 	/* Its claims and expiries need the daemon's lock, as the queue's do. */
 	axis_worker_api_set_fence(worker_api, jobs);
 	{
@@ -1470,6 +1480,7 @@ serve(
 	/* Worker requests in flight are answered; leases are left to the
 	 * database (a worker still running is adopted after a restart). */
 	axis_worker_api_stop(worker_api);
+	axis_worker_api_set_registered(worker_api, NULL, NULL);
 	axis_web_workers_stop(workers_ui);
 	/* Portal operations in flight are answered; a login among them ends with
 	 * the password work below, so this comes first. */

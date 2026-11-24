@@ -24,12 +24,51 @@
 
 /* ── The daemon's side ──────────────────────────────────────────── */
 
+/* As axisd does: the pages that wait for a worker hear of a registration. */
+static void
+on_registered(
+	const gchar *worker,
+	gpointer     user_data
+){
+	axis_web_workers_note_registered(user_data, worker);
+}
+
+static AxisTestDaemon *
+daemon_new(
+	AxisDbPool                *pool,
+	AxisEstimator             *estimator,
+	const AxisWorkerApiTiming *timing,
+	const gchar               *trusted_proxies,
+	gboolean                   with_hub
+);
+
 AxisTestDaemon *
 axis_test_daemon_new(
 	AxisDbPool                *pool,
 	AxisEstimator             *estimator,
 	const AxisWorkerApiTiming *timing,
 	const gchar               *trusted_proxies
+){
+	return daemon_new(pool, estimator, timing, trusted_proxies, FALSE);
+}
+
+AxisTestDaemon *
+axis_test_daemon_new_with_hub(
+	AxisDbPool                *pool,
+	AxisEstimator             *estimator,
+	const AxisWorkerApiTiming *timing,
+	const gchar               *trusted_proxies
+){
+	return daemon_new(pool, estimator, timing, trusted_proxies, TRUE);
+}
+
+static AxisTestDaemon *
+daemon_new(
+	AxisDbPool                *pool,
+	AxisEstimator             *estimator,
+	const AxisWorkerApiTiming *timing,
+	const gchar               *trusted_proxies,
+	gboolean                   with_hub
 ){
 	AxisTestDaemon *self = g_new0(AxisTestDaemon, 1);
 	g_autoptr(GError) error = NULL;
@@ -55,7 +94,12 @@ axis_test_daemon_new(
 	g_assert_true(htmx_server_listen_on(self->server, "127.0.0.1", 0, &error));
 	g_assert_no_error(error);
 	self->web = axis_web_new(self->server, self->modules, self->auth);
+	if (with_hub) {
+		self->hub = axis_web_hub_new(NULL);
+		axis_web_hub_install(self->hub, self->web, self->auth);
+	}
 	self->api = axis_worker_api_new(pool, self->registry, self->tokens, estimator);
+	axis_worker_api_set_registered(self->api, on_registered, self->workers_ui);
 	if (timing == NULL) {
 		memset(&defaults, 0, sizeof(defaults));
 		defaults.lease_ms = 2000;
@@ -90,6 +134,8 @@ axis_test_daemon_free(AxisTestDaemon *self)
 	while (g_main_context_iteration(NULL, FALSE))
 		;
 	axis_module_registry_stop_all(self->modules);
+	if (self->hub != NULL)
+		axis_web_hub_free(self->hub);
 	axis_web_free(self->web);
 	g_object_unref(self->server);
 	axis_worker_api_free(self->api);

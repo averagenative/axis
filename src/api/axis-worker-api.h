@@ -152,6 +152,27 @@ axis_worker_api_set_convert(
 	gpointer                      data
 );
 
+/**
+ * AxisWorkerRegisteredFunc:
+ * @worker: the name of the worker whose registration was just accepted
+ *
+ * Called on the main loop, after the registration is stored and before its
+ * answer is sent.
+ */
+typedef void (*AxisWorkerRegisteredFunc)(
+	const gchar *worker,
+	gpointer     user_data
+);
+
+/* Before start.  @func (nullable) hears of every accepted registration, so
+ * that a page waiting for a worker can look again. */
+void
+axis_worker_api_set_registered(
+	AxisWorkerApi            *self,
+	AxisWorkerRegisteredFunc  func,
+	gpointer                  user_data
+);
+
 /* Before start. */
 void
 axis_worker_api_set_timing(

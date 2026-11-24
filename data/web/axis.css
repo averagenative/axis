@@ -2129,6 +2129,21 @@ pre.worker-token {
 	user-select: all;
 }
 
+/* Text "Attach a worker" hands over to run or save: one click selects all
+ * of it, as for the token. */
+pre.attach-text {
+	margin: 0.75rem 0;
+	user-select: all;
+}
+
+/* One disk of that guide: its tick, how it is mounted, where. */
+fieldset.attach-disk {
+	margin: 0 0 1rem;
+	padding: 0.75rem;
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+}
+
 /* ── Dashboard ──────────────────────────────────────────────── */
 
 /*
