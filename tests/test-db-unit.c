@@ -11,6 +11,7 @@
 #include <glib.h>
 #include <string.h>
 
+#include "axis-test-db.h"
 #include "db/axis-db-conn.h"
 #include "db/axis-db-error.h"
 #include "db/axis-db-migrate.h"
@@ -22,24 +23,7 @@
 static guint16
 closed_port(void)
 {
-	g_autoptr(GSocket) socket = NULL;
-	g_autoptr(GSocketAddress) address = NULL;
-	g_autoptr(GSocketAddress) bound = NULL;
-	g_autoptr(GError) error = NULL;
-	guint16 port;
-
-	socket = g_socket_new(G_SOCKET_FAMILY_IPV4, G_SOCKET_TYPE_STREAM,
-		G_SOCKET_PROTOCOL_DEFAULT, &error);
-	g_assert_no_error(error);
-	address = g_inet_socket_address_new_from_string("127.0.0.1", 0);
-	g_socket_bind(socket, address, FALSE, &error);
-	g_assert_no_error(error);
-	bound = g_socket_get_local_address(socket, &error);
-	g_assert_no_error(error);
-	port = g_inet_socket_address_get_port(G_INET_SOCKET_ADDRESS(bound));
-	g_socket_close(socket, NULL);
-
-	return port;
+	return axis_test_free_port();
 }
 
 static void

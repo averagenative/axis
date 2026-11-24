@@ -141,6 +141,18 @@ axis_test_log_find(
 	const gchar    *pattern
 );
 
+/*
+ * A port on 127.0.0.1 for a daemon the test starts, or one that nothing
+ * listens on: free now, and picked at random below the kernel's range of
+ * ephemeral ports (32768 and up on Linux).  The test programs run many at
+ * a time (TEST_JOBS): a port got by binding port 0 and closing it again is
+ * one the kernel may hand, a moment later, to another program that binds
+ * port 0; one from here it does not hand out, and two programs that ask
+ * here at the same moment get the same one once in thousands of times.
+ */
+guint16
+axis_test_free_port(void);
+
 G_END_DECLS
 
 #endif /* AXIS_TEST_DB_H */
