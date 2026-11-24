@@ -76,6 +76,7 @@
 #include "import/axis-import.h"
 #include "indexer/axis-indexer.h"
 #include "indexer/axis-indexer-prowlarr.h"
+#include "jobs/axis-history.h"
 #include "jobs/axis-job-builtin.h"
 #include "jobs/axis-job-registry.h"
 #include "library/axis-analysis.h"
@@ -1272,6 +1273,7 @@ typedef struct
 
 	AxisDataDir          *data;
 	AxisSettings         *settings;
+	AxisHistory          *history;
 	AxisWebSettings      *web_settings;
 	AxisModuleRegistry   *registry;
 	AxisJobRegistry      *job_registry;
@@ -1405,6 +1407,9 @@ demo_build(Demo *d)
 	d->registry = axis_module_registry_new();
 	must(axis_module_registry_register(d->registry, axis_job_builtin_get_module(), d->settings, &error), error,
 		"the jobs module");
+	d->history = axis_history_new(d->settings);
+	must(axis_module_registry_register(d->registry, axis_history_get_module(), d->history, &error), error,
+		"the history module");
 	must(axis_module_registry_register(d->registry, axis_web_settings_get_module(), d->web_settings, &error), error,
 		"the settings pages");
 	d->hub = axis_web_hub_new(NULL);
