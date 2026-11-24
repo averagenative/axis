@@ -2,7 +2,7 @@
 
 > **Note.** The backup, checksum, and restore sections are tested (see [Verified](#verified)). The sections on finding out what is wrong, repairing, and running one Axis per database come from a review of how Axis behaves when its database fails. Where a step says **Not run**, treat it as untested.
 
-Axis keeps everything that it cannot fetch again in its PostgreSQL database: accounts, settings, the passwords and keys of your indexers and download clients, your movie and series lists, the reviews and trials you confirmed, and the history of every download, import, and conversion. This page shows you how to back up that database, check a backup, restore it, start again from an empty database, and find out what is wrong when the database is the problem. Allow about 15 minutes for a backup and a restore of a small library.
+Axis keeps everything that it cannot fetch again in its PostgreSQL database: accounts, settings, the passwords and keys of your indexers and download clients, your movie and series lists, the reviews and trials you confirmed, and the history of your downloads, imports, and conversions. This page shows you how to back up that database, check a backup, restore it, choose how long Axis keeps its history, start again from an empty database, and find out what is wrong when the database is the problem. Allow about 15 minutes for a backup and a restore of a small library.
 
 The commands use the names of [the Compose example](../deploy/examples/compose/README.md): the services `postgres` and `axis`, and the database user and database `axis`. If you run PostgreSQL yourself, run the same programs (`pg_dump`, `pg_restore`, `dropdb`, `createdb`, and `psql`) against your server.
 
@@ -139,6 +139,38 @@ If your disks changed after the backup, expect the following, and scan every lib
 
 These come from reading the code; the review did not run them.
 
+## Choose how long Axis keeps history
+
+Axis records what happens to each movie and series, each release it grabs, each download, and each import. Without a limit, these records grow for as long as Axis runs. Every hour, the job **Deleting old history of movies, series, downloads and imports** deletes the records that ended longer ago than your settings allow.
+
+To change how long Axis keeps history:
+
+1. Open **System**, then **Settings**, and find the **History settings** card.
+2. Change the durations, then select **Save History settings**.
+
+The following table describes the settings:
+
+| Setting | Default | What it keeps |
+| --- | --- | --- |
+| **Keep the history of what happened to movies and series for** | `365d` | The events on a movie's or a series' page and on the **History** pages, counted from when each happened. |
+| **Keep the record of each release grabbed for** | `365d` | The record of each grab, counted from when the grab ended. |
+| **Keep finished downloads on the Downloads page for** | `365d` | The downloads that finished, failed, or were removed, counted from when each ended. |
+| **Keep finished imports on the Imports page for** | `365d` | The imports that were imported or dismissed, with their files and decisions, counted from when each ended. |
+
+Each setting takes a duration from `30d` to `3650d`. Enter `0` to keep that kind of record forever. A change applies at the next hourly run, and you don't need to restart Axis.
+
+Axis never deletes a record that something still needs, however old the record is:
+
+- Anything that is still in progress: a grab that is open, a download that is still at its client, and an import that waits, runs, is blocked, or is partly imported.
+- The 30 latest events of each movie and series, so that a title's page shows what it showed before. Axis also keeps the events that say when a title was added or removed, and every event of something that a person did.
+- The 5 latest grabs of each movie and series, a grab whose release is on a blocklist, and a series' grab whose import left episodes without a file. Axis reads that last kind of grab so that it does not grab the same release again.
+- The import that each file in your library came by, an import that moved a file to the recycle folder, the latest import of each movie and series, and an import with work left at the download client, such as a torrent that you left seeding.
+- A grab, a download, or an import that another kept record still names. Axis deletes a download only after the grabs and the imports that name it are gone.
+
+Each run deletes a limited number of records at a time, in short steps, so that pages and imports do not wait for it. After an upgrade, a large backlog of old history goes over several runs: each hourly run deletes at most 50,000 records of each kind, and the rest waits for the next run.
+
+**Run:** each rule above runs in `tests/test-history-retention.c`, and the runs on a generated database of 3,000,000 events run in `tests/test-db-scale.c`. **Not run:** the hourly job on a real server.
+
 ## Start again from an empty database
 
 If you lost the database and have no backup, Axis starts on an empty one and builds its schema.
@@ -222,4 +254,5 @@ Axis needs a direct connection to PostgreSQL, or a pooler in session mode. A poo
 
 - `make check-examples` runs the Compose example for real, with Podman and `podman compose` only, and in it: the data checksums check, the backup, the listing of the backup, a change after the backup, the restore into a newly created empty database, and the start of Axis on it. It checks that the change is gone, that `/readyz` is ready, and that the administrator logs in. Docker was not used.
 - The review also showed that a `pg_restore --clean` over a database that a newer migration had changed leaves later data in it, and ran a restart of PostgreSQL, a full database disk, and a paused PostgreSQL under a running Axis, and two daemons on one database.
+- The deletion of old history ran in the tests only: each rule of what it keeps in `tests/test-history-retention.c`, and its runs on a generated database of 3,000,000 events, 257,000 grabs, 242,000 downloads, and 292,000 imports in `tests/test-db-scale.c`. It has not run on a real server.
 - Nothing ran the Quadlet, Kubernetes, or `docker run` forms of the commands, a restore of a large library, a restore after a newer Axis migrated the database in the same check, `pg_checksums`, or the adoption of a disk into an empty database.
