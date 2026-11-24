@@ -301,7 +301,7 @@ axis_history_read_keep(
 
 	if (self->settings == NULL) {
 		keep->events_s = keep->grabs_s = keep->downloads_s = keep->imports_s =
-			(gint64)AXIS_HISTORY_DEFAULT_DAYS * DAY_S;
+			(gint64)AXIS_HISTORY_DEFAULT_DAYS * DAY_S;	/* 0: kept forever */
 		return;
 	}
 	keep->events_s = axis_settings_get_duration(self->settings, AXIS_HISTORY_SETTING_KEEP_EVENTS);
@@ -437,22 +437,39 @@ axis_history_prune(
 	GError                **error
 ){
 	AxisHistoryReport report;
+	GError *first = NULL;
 	guint i;
 
 	g_return_val_if_fail(self != NULL && pool != NULL && keep != NULL, FALSE);
 
 	memset(&report, 0, sizeof(report));
 	for (i = 0; i < AXIS_HISTORY_N_PARTS; i++) {
+		GError *local = NULL;
 		gint64 keep_s = keep_of(keep, (AxisHistoryPart)i);
 
 		/* 0: kept forever. */
 		if (keep_s <= 0)
 			continue;
-		if (!prune_part(self, pool, (AxisHistoryPart)i, keep_s, cancellable, &report, error))
-			return FALSE;
+		/* A cancelled run stops at once, with what it deleted kept. */
+		if (cancellable != NULL && g_cancellable_is_cancelled(cancellable))
+			break;
+		if (prune_part(self, pool, (AxisHistoryPart)i, keep_s, cancellable, &report, &local))
+			continue;
+		/* An error in one table does not stop the others: the first is
+		 * returned at the end, the later ones are logged. */
+		if (first == NULL) {
+			first = local;
+		} else {
+			g_warning("deleting old history: %s", local->message);
+			g_error_free(local);
+		}
 	}
 	if (report_out != NULL)
 		*report_out = report;
+	if (first != NULL) {
+		g_propagate_error(error, first);
+		return FALSE;
+	}
 	return TRUE;
 }
 
@@ -508,8 +525,9 @@ static const AxisSettingInfo setting_table[] = {
 		"Keep the history of what happened to movies and series for",
 		"How long the events on a movie's or a series' page and on the History pages stay before the hourly "
 		"clean-up deletes them. The 30 latest events of each movie and series, when a title was added or removed, "
-		"and everything a person did are always kept. 0: kept forever.",
-		AXIS_SETTING_ZERO_OFF, "365d",
+		"and everything a person did are always kept. 0: kept forever, which is the default; a year (365d) is a "
+		"reasonable choice.",
+		AXIS_SETTING_ZERO_OFF, "0",
 		(gint64)AXIS_HISTORY_MIN_DAYS * 24 * 3600, (gint64)AXIS_HISTORY_MAX_DAYS * 24 * 3600, 0, 0, NULL
 	},
 	{
@@ -518,8 +536,8 @@ static const AxisSettingInfo setting_table[] = {
 		"How long the record of a grab that ended (imported, failed, given up) stays before the hourly clean-up "
 		"deletes it, counted from when it ended. A grab that an import, a blocklist entry or a kept event still "
 		"names, or whose download is still at its client, is kept, and so are the 5 latest of each movie and "
-		"series. 0: kept forever.",
-		AXIS_SETTING_ZERO_OFF, "365d",
+		"series. 0: kept forever, which is the default; a year (365d) is a reasonable choice.",
+		AXIS_SETTING_ZERO_OFF, "0",
 		(gint64)AXIS_HISTORY_MIN_DAYS * 24 * 3600, (gint64)AXIS_HISTORY_MAX_DAYS * 24 * 3600, 0, 0, NULL
 	},
 	{
@@ -527,8 +545,8 @@ static const AxisSettingInfo setting_table[] = {
 		"Keep finished downloads on the Downloads page for",
 		"How long a download that finished, failed or was removed stays listed before the hourly clean-up deletes "
 		"it, counted from when it ended. A download that a grab or an import still names, or whose folder is still "
-		"to be cleaned up, is kept. 0: kept forever.",
-		AXIS_SETTING_ZERO_OFF, "365d",
+		"to be cleaned up, is kept. 0: kept forever, which is the default; a year (365d) is a reasonable choice.",
+		AXIS_SETTING_ZERO_OFF, "0",
 		(gint64)AXIS_HISTORY_MIN_DAYS * 24 * 3600, (gint64)AXIS_HISTORY_MAX_DAYS * 24 * 3600, 0, 0, NULL
 	},
 	{
@@ -537,8 +555,9 @@ static const AxisSettingInfo setting_table[] = {
 		"How long an import that was imported or dismissed stays, with its files and decisions, before the hourly "
 		"clean-up deletes it, counted from when it ended. An import that a file in the library came by, that "
 		"retired a file to the recycle folder, that has work left at its download client, or that is the latest of "
-		"its movie or series is kept. 0: kept forever.",
-		AXIS_SETTING_ZERO_OFF, "365d",
+		"its movie or series is kept. 0: kept forever, which is the default; a year (365d) is a reasonable "
+		"choice.",
+		AXIS_SETTING_ZERO_OFF, "0",
 		(gint64)AXIS_HISTORY_MIN_DAYS * 24 * 3600, (gint64)AXIS_HISTORY_MAX_DAYS * 24 * 3600, 0, 0, NULL
 	},
 	{ NULL, 0, NULL, NULL, 0, NULL, 0, 0, 0, 0, NULL }

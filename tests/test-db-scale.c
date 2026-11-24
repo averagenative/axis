@@ -2087,7 +2087,7 @@ test_retention(Fixture *fx, gconstpointer data)
 	}
 	make_database(fx);
 
-	/* Half of every kind ended 400 days ago, beyond the default of 365. */
+	/* Half of every kind ended 400 days ago, beyond the 365 days the run below keeps. */
 	sql(fx, "UPDATE series_event SET created_at = created_at - interval '400 days' WHERE id %% 2 = 0");
 	sql(fx, "UPDATE movie_event SET created_at = created_at - interval '400 days' WHERE id %% 2 = 0");
 	sql(fx, "UPDATE series_grab SET closed_at = closed_at - interval '400 days' WHERE id %% 2 = 0");
@@ -2124,7 +2124,9 @@ test_retention(Fixture *fx, gconstpointer data)
 		gdouble ms;
 		guint k;
 
-		axis_history_read_keep(history, &keep);
+		/* The defaults keep everything; the run is of a year, as an
+		 * administrator may choose. */
+		keep.events_s = keep.grabs_s = keep.downloads_s = keep.imports_s = (gint64)365 * 86400;
 		listen_begin();
 		began = g_get_monotonic_time();
 		g_assert_true(axis_history_prune(history, fx->t->pool, &keep, NULL, &report, &error));

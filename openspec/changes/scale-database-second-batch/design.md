@@ -174,14 +174,14 @@ A new required module, **History** (`src/jobs/axis-history.c`), with its own car
 
 | Key | Label | Default |
 | --- | --- | --- |
-| `history.keep_events` | Keep the history of what happened to movies and series for | 365d |
-| `history.keep_grabs` | Keep the record of each release grabbed for | 365d |
-| `history.keep_downloads` | Keep finished downloads on the Downloads page for | 365d |
-| `history.keep_imports` | Keep finished imports on the Imports page for | 365d |
+| `history.keep_events` | Keep the history of what happened to movies and series for | 0 |
+| `history.keep_grabs` | Keep the record of each release grabbed for | 0 |
+| `history.keep_downloads` | Keep finished downloads on the Downloads page for | 0 |
+| `history.keep_imports` | Keep finished imports on the Imports page for | 0 |
 
-Each takes 30 days to 3,650 days, or 0 for "kept forever". A duration could not have both a minimum and a 0, so the settings got a flag, `AXIS_SETTING_ZERO_OFF`.
+Each takes 30 days to 3,650 days, or 0 for "kept forever", which is the default. A duration could not have both a minimum and a 0, so the settings got a flag, `AXIS_SETTING_ZERO_OFF`.
 
-A year is long enough that nothing a person looks at in the ordinary way goes, and it bounds every table by a year's activity plus what the rules below keep. It is a default that deletes, where before nothing was deleted: an upgrade starts deleting history older than a year at its first hourly run. Setting a time to 0 keeps that kind forever.
+The default deletes nothing: an upgrade keeps all history until an administrator chooses a time, and the help text says so. It suggests a year, which is long enough that nothing a person looks at in the ordinary way goes, and which bounds every table by a year's activity plus what the rules below keep.
 
 ### The job
 
@@ -190,6 +190,7 @@ A year is long enough that nothing a person looks at in the ordinary way goes, a
 - One statement a table, sent again and again. It takes the oldest 1,000 rows that ended before the keeping time (250 imports: each takes up to 200 files with it), after where the statement before stopped, through an index on (ended at, id). It deletes those of them that nothing needs, in its own transaction.
 - The place it stopped at is kept in memory. Rows that are kept for good are therefore passed once a sweep, and never stand in front of rows that may go. A restart sweeps from the oldest again.
 - At most 50 statements a table a run. About 50,000 rows of each kind go an hour, so a backlog of a million goes in a day.
+- An error in one table does not stop the others: the run remembers the first error, goes on, logs the later ones and ends as failed with the first. A cancelled run stops at once.
 - Order in a run: events, imports, grabs, downloads. A row goes only after what named it.
 
 ### What is never deleted
@@ -205,7 +206,7 @@ Together these keep the whole record of every file that is in the library now: i
 
 Not deleted at all, and said so: `import_recycle` (and with it every import that retired a file, its grab and its download). The stored searches are not this job's; section 5 prunes them.
 
-One race is accepted: a person who blocks a year-old closed grab, or imports a year-old finished download by hand, in the same milliseconds as the batch that deletes it, gets a row whose link to it is NULL. Locking the rows looked at would write to every one of them.
+One race is accepted: a person who blocks a year-old closed grab, or imports a year-old finished download by hand, in the same milliseconds as the batch that deletes it, gets a row that names a grab that is gone. For a blocklist entry (`series_blocklist.grab_id`, `movie_blocklist.grab_id`: foreign keys, `ON DELETE SET NULL`) the link becomes NULL. For the plain columns `series_event.grab_id`, `movie_event.grab_id` and `import.grab_id` (no foreign key) the id stays and names no row. Every reader tolerates that: the pages never read an event's `grab_id` (their column lists leave it out), an import's `grab_id` is loaded into `AxisImportInfo` and not used, `axis-tv-place.c` only tests it for NULL to order the open imports, an import finds its grab by its download and never by that column, and this job's own checks (`NOT EXISTS ... grab_id = g.id`) only look for rows that name an existing grab. Locking the rows looked at would write to every one of them.
 
 ### The migration
 
@@ -226,7 +227,7 @@ The last six are small only because the generated database leaves those columns 
 
 ### Figures
 
-Half of every kind aged 400 days, the settings at their defaults:
+Half of every kind aged 400 days, every keeping time at a year (the defaults keep everything and would delete nothing):
 
 | Run | Time | Statements | Longest | Events | Imports | Grabs | Downloads |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -249,7 +250,7 @@ Every batch is an Index Only Scan on its age index (backward on `import_ended`),
 
 ## What a reviewer should check
 
-- The default of 365 days deletes history that was kept forever until now.
+- The defaults are 0: nothing is deleted until an administrator sets a time. A run whose deletion fails in one table goes on with the others and fails with the first error.
 - `report.considered` in the scheduler's log line means something narrower.
 - `candidate_stored()` became `candidates_stored()`: a module's hook is called once for all the releases of a search.
 - The prune's time is kept in memory, so each start prunes once at the first follow-up.

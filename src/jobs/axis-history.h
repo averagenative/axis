@@ -15,7 +15,8 @@
  *   over several runs, never in one long lock.
  *
  * The settings, durations from 30 days to 10 years, or 0 for "kept for
- * ever" (365 days by default):
+ * ever", which is the default: nothing is deleted until an administrator
+ * chooses a time:
  *
  *   history.keep_events     the events of movies and series (created_at)
  *   history.keep_grabs      grabs that are closed (closed_at)
@@ -55,7 +56,7 @@ G_BEGIN_DECLS
 /* The settings' limits, in days (0, kept forever, besides). */
 #define AXIS_HISTORY_MIN_DAYS     30
 #define AXIS_HISTORY_MAX_DAYS     3650
-#define AXIS_HISTORY_DEFAULT_DAYS 365
+#define AXIS_HISTORY_DEFAULT_DAYS 0
 
 /* The rows one statement looks at, at most: as many parents may go in it.
  * An import takes its files with it (at most AXIS_IMPORT_MAX_FILES each),
@@ -187,6 +188,9 @@ axis_history_read_keep(
  * One run: each table in the order of #AxisHistoryPart, its statements
  * until one finds no more old rows or the run's bound is reached.  Each
  * statement is a transaction of its own.
+ *
+ * An error in one table does not stop the others: the run goes on, and the
+ * first error is returned at the end (the later ones are logged).
  *
  * Returns: %TRUE on success (also when cancelled)
  */

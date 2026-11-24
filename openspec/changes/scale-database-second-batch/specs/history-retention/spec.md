@@ -1,11 +1,11 @@
 ## ADDED Requirements
 
 ### Requirement: Each kind of history has a keeping time
-Axis SHALL have four settings, on a **History settings** card of the Settings page, that say how long history is kept: the events of movies and series (`history.keep_events`), the records of grabs (`history.keep_grabs`), finished downloads (`history.keep_downloads`) and finished imports (`history.keep_imports`). Each SHALL default to 365 days, SHALL accept 30 days to 3,650 days, and SHALL accept 0, which means kept forever. Age SHALL be counted from when the row ended (an event's time, a grab's closing, a download's or an import's finish), never while it is open.
+Axis SHALL have four settings, on a **History settings** card of the Settings page, that say how long history is kept: the events of movies and series (`history.keep_events`), the records of grabs (`history.keep_grabs`), finished downloads (`history.keep_downloads`) and finished imports (`history.keep_imports`). Each SHALL default to 0, which means kept forever, and SHALL accept 30 days to 3,650 days; the card's help text SHALL say that history is kept forever until a time is chosen and suggest a year as a reasonable choice. Age SHALL be counted from when the row ended (an event's time, a grab's closing, a download's or an import's finish), never while it is open.
 
 #### Scenario: The defaults
 - **WHEN** Axis is installed or upgraded and nothing is set
-- **THEN** each of the four keeping times is 365 days
+- **THEN** each of the four keeping times is 0, and a run deletes nothing, however old the history is
 
 #### Scenario: Kept forever
 - **WHEN** an administrator sets a keeping time to 0
@@ -21,6 +21,10 @@ An upkeep job, run every hour, SHALL delete the history that is older than its k
 #### Scenario: A backlog after an upgrade
 - **WHEN** half of 3,000,000 events are older than the keeping time
 - **THEN** a run deletes about 50,000 of them in statements of a few milliseconds each, and later runs the rest
+
+#### Scenario: An error in one table
+- **WHEN** deleting from one table fails
+- **THEN** the run goes on with the other tables, logs the later errors, and ends as failed with the first error
 
 #### Scenario: Kept rows do not block
 - **WHEN** the oldest rows of a table are all rows that are kept for good

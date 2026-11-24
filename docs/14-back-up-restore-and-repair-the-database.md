@@ -141,9 +141,9 @@ These come from reading the code; the review did not run them.
 
 ## Choose how long Axis keeps history
 
-Axis records what happens to each movie and series, each release it grabs, each download, and each import. Without a limit, these records grow for as long as Axis runs. Every hour, the job **Deleting old history of movies, series, downloads and imports** deletes the records that ended longer ago than your settings allow.
+Axis records what happens to each movie and series, each release it grabs, each download, and each import. Axis keeps these records forever until you choose a time, so they grow for as long as Axis runs. Once you choose a time, the job **Deleting old history of movies, series, downloads and imports** runs every hour and deletes the records that ended longer ago than that time. A year (`365d`) is a reasonable choice.
 
-To change how long Axis keeps history:
+To choose how long Axis keeps history:
 
 1. Open **System**, then **Settings**, and find the **History settings** card.
 2. Change the durations, then select **Save History settings**.
@@ -152,12 +152,12 @@ The following table describes the settings:
 
 | Setting | Default | What it keeps |
 | --- | --- | --- |
-| **Keep the history of what happened to movies and series for** | `365d` | The events on a movie's or a series' page and on the **History** pages, counted from when each happened. |
-| **Keep the record of each release grabbed for** | `365d` | The record of each grab, counted from when the grab ended. |
-| **Keep finished downloads on the Downloads page for** | `365d` | The downloads that finished, failed, or were removed, counted from when each ended. |
-| **Keep finished imports on the Imports page for** | `365d` | The imports that were imported or dismissed, with their files and decisions, counted from when each ended. |
+| **Keep the history of what happened to movies and series for** | `0` (forever) | The events on a movie's or a series' page and on the **History** pages, counted from when each happened. |
+| **Keep the record of each release grabbed for** | `0` (forever) | The record of each grab, counted from when the grab ended. |
+| **Keep finished downloads on the Downloads page for** | `0` (forever) | The downloads that finished, failed, or were removed, counted from when each ended. |
+| **Keep finished imports on the Imports page for** | `0` (forever) | The imports that were imported or dismissed, with their files and decisions, counted from when each ended. |
 
-Each setting takes a duration from `30d` to `3650d`. Enter `0` to keep that kind of record forever. A change applies at the next hourly run, and you don't need to restart Axis.
+Each setting takes a duration from `30d` to `3650d`. Enter `0` to keep that kind of record forever, which is the default. A change applies at the next hourly run, and you don't need to restart Axis.
 
 Axis never deletes a record that something still needs, however old the record is:
 
@@ -167,7 +167,7 @@ Axis never deletes a record that something still needs, however old the record i
 - The import that each file in your library came by, an import that moved a file to the recycle folder, the latest import of each movie and series, and an import with work left at the download client, such as a torrent that you left seeding.
 - A grab, a download, or an import that another kept record still names. Axis deletes a download only after the grabs and the imports that name it are gone.
 
-Each run deletes a limited number of records at a time, in short steps, so that pages and imports do not wait for it. After an upgrade, a large backlog of old history goes over several runs: each hourly run deletes at most 50,000 records of each kind, and the rest waits for the next run.
+Each run deletes a limited number of records at a time, in short steps, so that pages and imports do not wait for it. After an upgrade, a large backlog of old history goes over several runs: each hourly run deletes at most 50,000 events of series, 50,000 events of movies, 50,000 grabs of series, 50,000 grabs of movies, 12,500 imports, and 50,000 downloads, and the rest waits for the next run.
 
 **Run:** each rule above runs in `tests/test-history-retention.c`, and the runs on a generated database of 3,000,000 events run in `tests/test-db-scale.c`. **Not run:** the hourly job on a real server.
 
