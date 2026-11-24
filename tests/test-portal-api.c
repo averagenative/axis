@@ -680,10 +680,15 @@ test_listener(Fixture *fx, gconstpointer data)
 	};
 	static const gchar *const methods[] = { "GET", "POST", "HEAD", NULL };
 	g_autofree gchar *admin = engine_session(fx, "root", ADMIN_PASSWORD);
-	gint64 sessions = N("SELECT count(*) FROM web_session");
+	gint64 sessions;
 	AxisTestReply reply;
 	guint i;
 	guint m;
+
+	/* The administrator's own session is written behind its login: counted
+	 * only once that write has landed. */
+	axis_web_auth_wait_writes(fx->auth);
+	sessions = N("SELECT count(*) FROM web_session");
 
 	/* Nothing of the daemon's own on the portal listener: with the token,
 	 * with an administrator's session, with neither. */
