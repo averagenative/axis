@@ -219,7 +219,7 @@ PRIVATE_ADDRESSES = frozenset((
     # The portal's addresses (AXIS_PORTAL_PEERS) in the same examples: the
     # portal's on its two networks and Traefik's beside it (Compose), and a
     # portal pod's fixed address (Kubernetes).
-    "172.30.1.3", "172.30.2.2", "172.30.2.3", "10.42.250.2",
+    "172.30.1.3", "172.30.2.2", "172.30.2.3", "10.44.250.2",
 ))
 
 

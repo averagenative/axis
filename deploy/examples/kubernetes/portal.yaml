@@ -89,12 +89,15 @@ spec:
       # EDIT: the portal's pods need addresses from a range of their own,
       # which the daemon is told (AXIS_PORTAL_PEERS in portal-axisd.yaml).
       # How depends on the network plugin; two examples, to check against
-      # your plugin's documentation (these manifests were not applied to a
-      # cluster):
-      #   Calico, an IPPool named axis-portal with the range, then:
+      # your plugin's documentation.  These manifests were not applied to a
+      # cluster, and the annotations below were written from the plugins'
+      # documentation as remembered: none of them was tried with either
+      # plugin.
+      #   Calico, an IPPool named axis-portal with the range (10.44.250.0/28
+      #   as shipped: a pool of its own, outside the other pods' range), then:
       #     cni.projectcalico.org/ipv4pools: '["axis-portal"]'
-      #   Calico, one fixed address (with replicas: 1):
-      #     cni.projectcalico.org/ipAddrs: '["10.42.250.2"]'
+      #   Calico, one fixed address from such a pool (with replicas: 1):
+      #     cni.projectcalico.org/ipAddrs: '["10.44.250.2"]'
       #   Cilium with multi-pool IPAM, a pool named axis-portal:
       #     ipam.cilium.io/ip-pool: axis-portal
       # annotations:
@@ -114,6 +117,21 @@ spec:
         fsGroup: 1000
         seccompProfile:
           type: RuntimeDefault
+        # IPv6 off in the portal's pod, as the Compose and Quadlet examples
+        # have it: the daemon knows the portal by the addresses the plugin
+        # gives it, and an interface also gives itself an IPv6 link-local
+        # address, which is none of them.  Commented out because Kubernetes
+        # counts these two among the "unsafe" sysctls: a pod that asks for
+        # them does not start unless the kubelet allows them
+        # (--allowed-unsafe-sysctls=net.ipv6.conf.all.disable_ipv6,
+        # net.ipv6.conf.default.disable_ipv6).  Without them the daemon's own
+        # rule stands: with AXIS_PORTAL_PEERS set it takes no login that came
+        # from or by way of a link-local address.  Not tried on a cluster.
+        # sysctls:
+        #   - name: net.ipv6.conf.all.disable_ipv6
+        #     value: "1"
+        #   - name: net.ipv6.conf.default.disable_ipv6
+        #     value: "1"
       containers:
         - name: axis-portal
           # EDIT: the same image as in axisd.yaml.

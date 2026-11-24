@@ -91,7 +91,8 @@ spec:
             # pod network, which is right only until you know the
             # controller's addresses: every pod in it can name any client.
             # With the request portal (portal-axisd.yaml), the portal's pods
-            # must not be inside this range.
+            # must not be inside this range; as shipped they are not (their
+            # range there is 10.44.250.0/28).
             - name: AXIS_TRUSTED_PROXIES
               value: 10.42.0.0/16
             - name: AXIS_LOG_FORMAT

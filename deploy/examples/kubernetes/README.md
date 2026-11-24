@@ -141,7 +141,21 @@ The range must hold the portal's pods and no other pod. Above all, it must
 not hold your ingress controller's pods: Axis refuses every login that
 arrives from an address in the range, so nobody could log in through the
 controller. Axis warns in its log, and under **Needs attention**, when
-`AXIS_PORTAL_PEERS` and `AXIS_TRUSTED_PROXIES` share an address.
+`AXIS_PORTAL_PEERS` and `AXIS_TRUSTED_PROXIES` share an address. As shipped
+they do not: the portal's range is `10.44.250.0/28`, a pool of its own, and
+the trusted range is the pod network `10.42.0.0/16`. Keep the portal's
+range outside the trusted range when you change either.
+
+IPv6. On a dual-stack cluster, the portal's pods need a range of their own
+in each family, and `AXIS_PORTAL_PEERS` must hold both: the pool annotations
+in `portal.yaml` name an IPv4 pool only. A pod's interface also gives itself
+an IPv6 link-local address (`fe80::...`), which no range can hold. The
+Compose and Quadlet examples switch IPv6 off in the portal's container.
+Kubernetes counts the two settings for that among its unsafe sysctls, so
+`portal.yaml` has them commented out: a pod that asks for them starts only
+if the kubelet allows them. Without them, one rule of Axis stands in: while
+`AXIS_PORTAL_PEERS` is set, Axis takes no login that came from, or by way
+of, an IPv6 link-local address.
 
 If your network plugin can do neither, the portal has no address that you
 can name ahead of time, and this example does not fit your cluster as it
@@ -156,9 +170,11 @@ What holds on a cluster that does not enforce NetworkPolicy:
   daemon's main port, the ingress controller and the database. The database
   still needs its password, which the portal does not have.
 - Axis still refuses a login from the portal's range. It compares the
-  address of the connection, and the client that the ingress controller
-  names, so a login is refused directly and through the controller, also
-  when the portal's pod sends forwarding headers of its own.
+  address of the connection, the client that the ingress controller names,
+  and every address in `X-Forwarded-For`. So a login is refused directly
+  and through the controller, also when the portal's pod sends forwarding
+  headers of its own and the controller adds to them instead of replacing
+  them.
 - Every pod can reach the portal's port and the daemon's port 7801. The
   daemon answers port 7801 only to the portal's range.
 
@@ -182,7 +198,7 @@ What to edit (marked `EDIT`):
   addresses, a range that holds only them, or the name of a headless
   Service that resolves to them. The files ship with a whole pod network,
   which lets every pod in it name any client. The portal's pods must not be
-  inside `AXIS_TRUSTED_PROXIES`.
+  inside `AXIS_TRUSTED_PROXIES`; as shipped, they are not.
 - The DNS rule of the policy `portal-to-axisd-portal-api` admits every pod
   of `kube-system` on port 53. On a cluster with a node-local DNS cache,
   the pods ask a link-local address that the rule does not match: add an
