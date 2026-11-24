@@ -1153,9 +1153,9 @@ axis_conversion_runs_include_kept(
 	params[1] = user;
 	params[2] = row.state;
 	params[3] = job_text;
-	/* created_at is what a lost list job is counted from: it is not the
-	 * run's making any more, so the job's own time is asked instead
-	 * (fail_lost_lists reads updated_at for a run being added to). */
+	/* relist_state is what the list job goes by: it adds to the list there
+	 * is, and the run goes back to this state.  updated_at is what a lost
+	 * job is counted from (the step's fail_lost_lists). */
 	if (!axis_db_conn_exec(conn, "UPDATE conversion_run SET convert_kept = true, convert_kept_by = $2,"
 	        " convert_kept_at = now(), relist_state = $3, state = 'listing', list_job_id = $4::bigint, list_text = NULL,"
 	        " updated_at = now() WHERE id = $1::bigint", 4, params, NULL, error))

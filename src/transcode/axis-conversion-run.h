@@ -14,6 +14,11 @@
  *    its ten checks, its placement and its page.  A replacement is asked
  *    for only once a person confirmed on the run's page that originals will
  *    be deleted, with a revision that is proven.
+ *  - One gate can be lifted, by an administrator's choice stored with the
+ *    run (convert-kept-files): "kept".  A run with the choice lists the
+ *    files Axis keeps and passes the choice to every request, where it
+ *    lifts that gate and no other; the kept mark itself is read, and never
+ *    written, by anything here.  Without the choice a run is as before.
  *  - The list is built by the estimator's own loader and decision
  *    (axis_estimator_load_files()'s columns, axis_estimate_eligibility()):
  *    there is no second estimator.  A file not in the list has exactly one

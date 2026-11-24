@@ -2411,6 +2411,21 @@ test_kept_added_to_ready(Fixture *fx, gconstpointer data)
 	g_assert_cmpstr(Q(fx, "SELECT state || ' ' || convert_kept::text FROM conversion_run WHERE id = %" G_GINT64_FORMAT,
 		other), ==, "cancelled false");
 	g_assert_cmpstr(reasons_of(fx, other), ==, "kept:4");
+
+	/* Cancelled while the files are being added: the run is cancelled, and
+	 * the job that comes afterwards adds nothing. */
+	other = make_run(fx, AXIS_CONVERSION_RUN_MOVIES, NULL, 0, 0, fx->space_saver);
+	g_assert_true(axis_conversion_runs_include_kept(fx->runs, other, "dora", &error));
+	g_assert_no_error(error);
+	g_assert_true(axis_conversion_runs_cancel(fx->runs, other, "alice", &error));
+	g_assert_no_error(error);
+	g_assert_true(axis_conversion_runs_build_list(fx->runs, other, NULL, &error));
+	g_assert_no_error(error);
+	g_assert_cmpstr(Q(fx, "SELECT state || ' ' || coalesce(relist_state, '-') FROM conversion_run WHERE id = %"
+		G_GINT64_FORMAT, other), ==, "cancelled -");
+	g_assert_cmpstr(reasons_of(fx, other), ==, "kept:4");
+	g_assert_cmpint(N(fx, "SELECT count(*) FROM conversion_run_entry WHERE run_id = %" G_GINT64_FORMAT, other), ==, 1);
+	g_assert_cmpint(kept_marks(fx), ==, 4);
 }
 
 /*
