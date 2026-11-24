@@ -114,15 +114,20 @@ What the file adds:
 | Piece | What it is |
 | --- | --- |
 | `portal` | `axis-portal` from the same image, read-only, with no capability, no volume and no secret but its token |
-| `axis-portal` (network) | The daemon and the portal, and nobody else |
-| `axis-portal-proxy` (network) | Traefik and the portal, and nobody else |
+| `axis-portal` (network) | The daemon and the portal, and nobody else. Internal: it has no way out |
+| `axis-portal-proxy` (network) | Traefik and the portal, and nobody else. Internal too |
 | On `axis` | The portal API on port 7801, on the daemon's address on `axis-portal` alone; the main port on the daemon's address on `axis-proxy` alone |
 
-The portal is not on `axis-proxy` or on `private`, so it can reach neither
-PostgreSQL nor the pages of Axis. It reaches the daemon's port 7801 and
-nothing else. The portal's token and the requesters' passwords cross
-`axis-portal` over plain HTTP, which is why that network holds only the
-daemon and the portal.
+The portal is not on `axis-proxy` or on `private`, and both of its networks
+are internal, so its container has no route to anything else: not to
+PostgreSQL, not to the pages of Axis, and not to the internet. It reaches
+the daemon's port 7801 and nothing else of the stack. Keep `internal: true`
+on both networks. Without it, a container can reach the other networks of
+the same host by address even when no name resolves: with Podman, the
+portal's container could then open PostgreSQL's port.
+
+The portal's token and the requesters' passwords cross `axis-portal` over
+plain HTTP, which is why that network holds only the daemon and the portal.
 
 What to edit in `compose.portal.yaml` (marked `EDIT`): the host name of the
 portal in the router rule, the image line, and the subnet if `172.30.1.0/24`

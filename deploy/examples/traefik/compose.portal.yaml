@@ -133,14 +133,24 @@ networks:
   # alone.
   # EDIT: another subnet if 172.30.1.0/24 is in use on this host (and then
   # the two 172.30.1.2 above).
+  #
+  # internal: the network has no way out.  Both of the portal's networks are
+  # internal, so its container has no route to anything but them: not to the
+  # internet, and not to the addresses of the other networks of this host
+  # (PostgreSQL's, or the daemon's on Traefik's network), which a container
+  # on an ordinary network can reach by address even when no name resolves.
+  # Do not remove these two lines.
   axis-portal:
     name: axis-portal
+    internal: true
     ipam:
       config:
         - subnet: 172.30.1.0/24
-  # Traefik and the portal, and nobody else.
+  # Traefik and the portal, and nobody else.  Internal too: Traefik has its
+  # way out, and its published ports, through axis-proxy.
   axis-portal-proxy:
     name: axis-portal-proxy
+    internal: true
 
 secrets:
   axis_portal_token:

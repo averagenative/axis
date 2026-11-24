@@ -885,6 +885,12 @@ Each example that has the portal builds the same layout:
 - The portal and the daemon share a network that holds those two alone.
 - The portal is not on PostgreSQL's network or on any download client's
   network, and it has no media mount.
+- In the Compose and Quadlet examples, the portal's networks are internal:
+  they have no way out. Leaving a container off a network is not enough. A
+  container on an ordinary network can reach the other networks of the same
+  host by address, even when no name resolves. With Podman, a portal on
+  ordinary networks can open PostgreSQL's port that way. Do not remove
+  `internal` from the portal's networks.
 - The daemon's main port stays where it was. It is not published through the
   portal's host name.
 
@@ -899,9 +905,9 @@ What the portal's container can reach differs by example:
 
 | Example | The portal reaches | How |
 | --- | --- | --- |
-| [Traefik, Compose](examples/traefik/README.md#the-request-portal) | The daemon's portal port only | The portal API listens on the daemon's address on the shared network. The main port listens on the daemon's address on Traefik's network. |
+| [Traefik, Compose](examples/traefik/README.md#the-request-portal) | The daemon's portal port only (and Traefik, which reaches it) | The portal's two networks are internal. The portal API listens on the daemon's address on the shared network. The main port listens on the daemon's address on Traefik's network. |
 | [Kubernetes](examples/kubernetes/README.md#the-request-portal) | The daemon's portal port and the cluster's DNS only | A NetworkPolicy allows that port and nothing else. Your network plugin must enforce NetworkPolicy. |
-| [Podman Quadlet](examples/quadlet/README.md#the-request-portal) | The daemon's portal port and its main port | The portal API listens on the daemon's address on the shared network. The main port listens on every address, so the portal's container can open the login page of Axis. A login from it is refused (see [If the portal is taken over](#if-the-portal-is-taken-over)). |
+| [Podman Quadlet](examples/quadlet/README.md#the-request-portal) | The daemon's portal port and its main port | The shared network is internal, so the portal reaches the daemon and nothing else. The portal API listens on the daemon's address on that network. The main port listens on every address, so the portal's container can open the login page of Axis. A login from it is refused (see [If the portal is taken over](#if-the-portal-is-taken-over)). |
 
 The minimal and full-stack Compose examples and the run commands have no
 reverse proxy with TLS, so they have no portal. Use the Traefik example.
@@ -1029,8 +1035,10 @@ limit of failed logins in an hour or its limit of requests in a day. The
   does not know, and logs in and asks for a title through it.
 - `make check-examples` starts the Traefik example with the portal, logs in
   through Traefik over HTTPS, asks for a title, and tries the database and
-  the daemon's main port from the portal's container. It starts the Quadlet
-  example with the portal too.
+  the daemon's main port from the portal's container, by name and by
+  address. It starts the Quadlet example with the portal too, without a
+  reverse proxy: it sends one request as the proxy would, and tries the
+  database from the portal's container.
 - The Kubernetes manifests of the portal are only rendered
   (`kubectl kustomize`). They have not been applied to a cluster, and their
   NetworkPolicy has not been exercised.

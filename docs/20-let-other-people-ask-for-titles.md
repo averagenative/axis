@@ -434,11 +434,15 @@ ask for the title either.
 - The portal program is covered by the test suite, under the sanitizers,
   against a stand-in for Axis and against a real Axis: its pages, its
   cookies, its limits, and what it sends on.
-- The setup steps were run once by hand with rootless Podman: the image was
-  built, the Traefik example was started with the portal, a requester logged
-  in at the portal's host name through Traefik over HTTPS and asked for a
-  movie, and the request waited on the **Requests** page. From the portal's
-  container, PostgreSQL and the daemon's main port could not be reached.
+- The setup steps were run with rootless Podman, by a script that does what
+  the steps say: the image was built, the Traefik example was started with
+  the portal, a requester logged in at the portal's host name through
+  Traefik over HTTPS and asked for a movie, and the request waited on the
+  **Requests** page. From the portal's container, PostgreSQL and the
+  daemon's main port could not be reached, by name or by address.
+- The Quadlet example was started with the portal the same way. It has no
+  reverse proxy, so nobody logged in: the script sent one request as a proxy
+  would, and the portal served its login form.
 - Not run: Docker, the Kubernetes manifests of the portal on a cluster, a
   reverse proxy in front of the Quadlet example, a certificate from a real
   certificate authority, a real browser, and a phone.

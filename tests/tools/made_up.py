@@ -211,8 +211,8 @@ PRIVATE_ADDRESSES = frozenset((
     "10.89.1.2",
     # The request portal in the deployment examples: the daemon's fixed
     # addresses on Traefik's network and on the portal's (Compose), and the
-    # daemon's address and the gateway of the portal's network (Quadlet).
-    "172.30.0.3", "172.30.1.2", "172.31.78.1", "172.31.78.2",
+    # daemon's address and the portal's on the portal's network (Quadlet).
+    "172.30.0.3", "172.30.1.2", "172.31.78.2", "172.31.78.3",
 ))
 
 

@@ -79,7 +79,9 @@ The portal needs an image that contains `axis-portal`: a release after
 0.1.0-rc2, or `localhost/axis:latest` from `make container`.
 
 The network `axis-portal` holds the daemon and the portal, and nobody else.
-The portal is not on the network `axis`, so it cannot reach PostgreSQL. The
+It is an internal network: it has no way out, so the portal's container
+reaches the daemon and nothing else. It cannot reach PostgreSQL on the
+network `axis`, by name or by address, and it cannot reach the internet. The
 portal's token and the requesters' passwords cross `axis-portal` over plain
 HTTP, which is why it holds only those two.
 
@@ -132,19 +134,23 @@ Check that it worked:
 ```sh
 systemctl --user status axis-portal.service
 podman healthcheck run axis-portal && echo healthy
-curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:7802/login     # 403: HTTPS only
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:7802/login     # 503, or 403
 ```
 
-The `403` is right: without your proxy the portal serves no login. Through
-the proxy, the login page answers `200`.
+The `503` is right: without your proxy the portal serves no login. A plain
+request through the published port says nothing of who the client is, and
+the portal refuses it. From an address that is not the listed proxy's, the
+answer is `403` and "This portal answers over HTTPS only". Through the
+proxy, the login page answers `200`.
 
 If the login page says "This portal answers over HTTPS only" through your
 proxy too, the portal does not believe the proxy. Run
 `journalctl --user -u axis-portal.service`: one line names the address that
 forwarded headers came from. Put that address in
 `AXIS_PORTAL_TRUSTED_PROXIES` in `axis-portal.container`. The example names
-the gateway of the network, `172.31.78.1`, which is where a request through
-the published port of rootless Podman arrives from.
+the portal's own address on its network, `172.31.78.3`, which is where a
+request through the published port of rootless Podman arrives from. A
+system-wide install can see another address.
 
 Every program on this machine can reach `127.0.0.1:7802` and can claim to be
 the proxy. Run the portal this way only on a machine whose users you trust.
