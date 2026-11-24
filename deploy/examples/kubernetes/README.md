@@ -107,36 +107,107 @@ The portal needs an image that contains `axis-portal`: a release after
 
 | File | What it is |
 | --- | --- |
-| `portal-axisd.yaml` | A patch: the daemon answers the portal API on port 7801 |
+| `portal-axisd.yaml` | A patch: the daemon answers the portal API on port 7801, to the addresses in `AXIS_PORTAL_PEERS` |
 | `portal.yaml` | The Service `axisd-portal` for that port, the portal's Deployment, Service and Ingress, and three NetworkPolicies |
 
 The NetworkPolicies allow the portal to reach the daemon's port 7801 and the
-cluster's DNS, and nothing else: not the daemon's main port, not the
-database, and nothing outside the cluster. Only the ingress controller
-reaches the portal, and only the portal reaches port 7801. Your network
-plugin must enforce NetworkPolicy, or none of this holds.
+cluster's DNS, and nothing else: not the daemon's main port, not the ingress
+controller, not the database, and nothing outside the cluster. Only the
+ingress controller reaches the portal, and only the portal reaches port
+7801. Your network plugin must enforce NetworkPolicy for this to hold.
+
+### The portal's addresses
+
+`AXIS_PORTAL_PEERS` in `portal-axisd.yaml` tells the daemon which addresses
+are the portal's. The daemon answers the portal API to those addresses
+alone, and refuses a login to Axis itself from them. Kubernetes gives a pod
+any free address of the pod network, so you must give the portal's pods a
+range of their own:
+
+- **An address pool for the portal's pods.** With Calico, make an `IPPool`
+  for the range and name it in the annotation
+  `cni.projectcalico.org/ipv4pools` on the portal's pod template. With
+  Cilium in multi-pool IPAM mode, make a pool and name it in
+  `ipam.cilium.io/ip-pool`. `portal.yaml` has the lines, commented. Set
+  `AXIS_PORTAL_PEERS` to the pool's range.
+- **One fixed address**, where the plugin can pin one (Calico:
+  `cni.projectcalico.org/ipAddrs`), with `replicas: 1`. Set
+  `AXIS_PORTAL_PEERS` to that address.
+
+These annotations come from the plugins' documentation. They were not tried:
+check them against the version that you run.
+
+The range must hold the portal's pods and no other pod. Above all, it must
+not hold your ingress controller's pods: Axis refuses every login that
+arrives from an address in the range, so nobody could log in through the
+controller. Axis warns in its log, and under **Needs attention**, when
+`AXIS_PORTAL_PEERS` and `AXIS_TRUSTED_PROXIES` share an address.
+
+If your network plugin can do neither, the portal has no address that you
+can name ahead of time, and this example does not fit your cluster as it
+is. You can write the address that the portal's pod has now, and change it
+each time the pod is replaced: until you do, the daemon answers the portal
+403 and writes the pod's new address to its log, and the portal serves
+nobody. Do not write the whole pod network instead.
+
+What holds on a cluster that does not enforce NetworkPolicy:
+
+- The portal's pod can open a connection to every pod, among them the
+  daemon's main port, the ingress controller and the database. The database
+  still needs its password, which the portal does not have.
+- Axis still refuses a login from the portal's range. It compares the
+  address of the connection, and the client that the ingress controller
+  names, so a login is refused directly and through the controller, also
+  when the portal's pod sends forwarding headers of its own.
+- Every pod can reach the portal's port and the daemon's port 7801. The
+  daemon answers port 7801 only to the portal's range.
+
+Do not run the portal on such a cluster for people outside your network.
 
 The portal's token and the requesters' passwords cross the pod network
 between the portal and the daemon over plain HTTP. The policies keep other
 pods from both ports, but they do not encrypt. On a cluster that other
 people share, use a network plugin that encrypts pod traffic.
 
-What to edit in `portal.yaml` (marked `EDIT`): the image,
-`AXIS_PORTAL_TRUSTED_PROXIES` (your ingress controller's pod addresses, as
-`AXIS_TRUSTED_PROXIES`), the ingress class, host name and TLS secret, and
-the namespaces of the ingress controller and of the cluster's DNS.
+What to edit (marked `EDIT`):
+
+- In `portal-axisd.yaml`: `AXIS_PORTAL_PEERS`, the range of the portal's
+  pods.
+- In `portal.yaml`: the image, the annotation that gives the portal's pods
+  their range, `AXIS_PORTAL_TRUSTED_PROXIES`, the ingress class, host name
+  and TLS secret, and the namespaces of the ingress controller and of the
+  cluster's DNS.
+- `AXIS_PORTAL_TRUSTED_PROXIES`, and `AXIS_TRUSTED_PROXIES` in
+  `axisd.yaml`: your ingress controller's pods and nothing else. Use their
+  addresses, a range that holds only them, or the name of a headless
+  Service that resolves to them. The files ship with a whole pod network,
+  which lets every pod in it name any client. The portal's pods must not be
+  inside `AXIS_TRUSTED_PROXIES`.
+- The DNS rule of the policy `portal-to-axisd-portal-api` admits every pod
+  of `kube-system` on port 53. On a cluster with a node-local DNS cache,
+  the pods ask a link-local address that the rule does not match: add an
+  `ipBlock` for it, or the portal cannot find the daemon and nobody can log
+  in.
 
 1. In `kustomization.yaml`, uncomment the `patches` block. Leave
    `- portal.yaml` commented for now. Apply: `kubectl apply -k .`. The
    daemon restarts with its portal listener.
-2. In Axis, open **System**, then **Request portal**. Select **Make a
-   token**, and copy the token that Axis shows once.
-3. Make the secret from a file:
+2. In Axis, open **System**, then **Request portal**. The page lists the
+   portal's addresses. Select **Make a token**, and copy the token that
+   Axis shows once.
+3. Make the secret from a file that only you can read. The second command
+   reads the token from your keyboard, so that it is in no command line and
+   not in your shell's history: paste the token, press Enter, and then press
+   Ctrl-D.
 
    ```sh
-   printf '%s' 'THE-TOKEN' > secrets-portal-token
-   kubectl -n axis create secret generic axis-portal-token --from-file=token=secrets-portal-token
-   rm secrets-portal-token
+   install -m 600 /dev/null portal-token
+   ( umask 077; cat > portal-token )
+   ```
+
+   ```sh
+   kubectl -n axis create secret generic axis-portal-token --from-file=token=portal-token
+   rm portal-token
    ```
 
 4. Create a requester account: open **System**, then **Users**, and set
@@ -169,8 +240,18 @@ To replace the token: make a second token in Axis, replace the secret
 `kubectl -n axis rollout restart deploy/axis-portal`, and then revoke the
 first token.
 
+If nobody can log in at the portal, read the daemon's log
+(`kubectl -n axis logs deploy/axisd`). A line "a connection from ... was
+refused before its token was looked at" names the address of the portal's
+pod: `AXIS_PORTAL_PEERS` does not hold it.
+
+If Axis refuses your own login after you set the portal up, see
+[the deployment guide](../../README.md#if-axis-refuses-your-own-login-after-you-set-the-portal-up).
+
 Not run: these manifests have been rendered with `kubectl kustomize` and
-never applied to a cluster. The NetworkPolicies have not been exercised.
+never applied to a cluster. The NetworkPolicies have not been exercised, and
+the annotations for the portal's address range have not been tried with any
+network plugin.
 
 ## Check that it worked
 

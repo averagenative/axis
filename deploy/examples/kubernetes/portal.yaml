@@ -11,8 +11,13 @@
 # its portal listener.  What is here:
 #
 #   Service axisd-portal    the daemon's portal API (port 7801), a Service of
-#                           its own so that the portal is given no name for
-#                           the daemon's main port
+#                           its own, so that the portal's configuration names
+#                           that port and no other.  (The cluster's DNS still
+#                           answers the name axisd to the portal's pod: what
+#                           keeps the portal from the daemon's main port is
+#                           the policy below, and what keeps a login from it
+#                           out, policy or no policy, is AXIS_PORTAL_PEERS in
+#                           portal-axisd.yaml.)
 #   Deployment axis-portal  the portal: the same image with another command,
 #                           no database address, no media, no volume but its
 #                           token, read-only, no capability
@@ -81,6 +86,19 @@ spec:
       labels:
         app.kubernetes.io/name: axis
         app.kubernetes.io/component: portal
+      # EDIT: the portal's pods need addresses from a range of their own,
+      # which the daemon is told (AXIS_PORTAL_PEERS in portal-axisd.yaml).
+      # How depends on the network plugin; two examples, to check against
+      # your plugin's documentation (these manifests were not applied to a
+      # cluster):
+      #   Calico, an IPPool named axis-portal with the range, then:
+      #     cni.projectcalico.org/ipv4pools: '["axis-portal"]'
+      #   Calico, one fixed address (with replicas: 1):
+      #     cni.projectcalico.org/ipAddrs: '["10.42.250.2"]'
+      #   Cilium with multi-pool IPAM, a pool named axis-portal:
+      #     ipam.cilium.io/ip-pool: axis-portal
+      # annotations:
+      #   cni.projectcalico.org/ipv4pools: '["axis-portal"]'
     spec:
       automountServiceAccountToken: false
       # Without this, Kubernetes gives the pod AXIS_PORTAL_* variables for
@@ -115,10 +133,16 @@ spec:
               value: /run/secrets/axis-portal/token
             - name: AXIS_PORTAL_WEB_LISTEN_HOST
               value: 0.0.0.0
-            # EDIT: the addresses your ingress controller's pods have, as
-            # AXIS_TRUSTED_PROXIES in axisd.yaml.  The portal serves a login
-            # only to a request that one of them reports as https, and takes
-            # the client's address from it.  Without it nobody can log in.
+            # EDIT: your ingress controller's pods, and nothing else: their
+            # addresses, a range that holds only them, or the name of a
+            # headless Service that resolves to them.  The portal serves a
+            # login only to a request that one of them reports as https, and
+            # takes the client's address from it.  Without it nobody can log
+            # in.  The value below is a whole pod network, which is right
+            # only until you know the controller's addresses: every pod in
+            # it that can reach port 7802 (any pod, on a cluster that does
+            # not enforce the policies below) can say that a visit was https
+            # and name any client.
             - name: AXIS_PORTAL_TRUSTED_PROXIES
               value: 10.42.0.0/16
             - name: AXIS_PORTAL_LOG_FORMAT
@@ -251,7 +275,14 @@ spec:
         - protocol: TCP
           port: 7801
     - to:
-        # EDIT: where your cluster's DNS runs (kube-system on most).
+        # EDIT: where your cluster's DNS runs (kube-system on most).  This
+        # admits every pod of that namespace on port 53; add a podSelector
+        # for the DNS pods (k8s-app: kube-dns on most) to admit only them.
+        # On a cluster with a node-local DNS cache the pods ask a link-local
+        # address on the node, which no selector here matches: add an ipBlock
+        # for it (169.254.20.10/32 by default).  A portal that cannot ask
+        # the DNS cannot find the daemon, and nobody can log in: its log
+        # says that the daemon cannot be reached.
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: kube-system

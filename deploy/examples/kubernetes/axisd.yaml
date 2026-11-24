@@ -82,13 +82,16 @@ spec:
               value: admin
             - name: AXIS_ADMIN_PASSWORD_FILE
               value: /run/secrets/axis/admin-password
-            # EDIT: the addresses your ingress controller's pods have (the
-            # pod network's range), so that Axis believes their
-            # X-Forwarded-* headers and nobody else's.  A host name works
-            # too if it resolves to the controller's pod addresses (a
-            # headless Service does; an ordinary Service's name gives its
-            # cluster address, which is not the address the pods connect
-            # from).
+            # EDIT: your ingress controller's pods, and nothing else, so that
+            # Axis believes their X-Forwarded-* headers and nobody else's:
+            # their addresses, a range that holds only them, or a host name
+            # that resolves to them (a headless Service does; an ordinary
+            # Service's name gives its cluster address, which is not the
+            # address the pods connect from).  The value below is a whole
+            # pod network, which is right only until you know the
+            # controller's addresses: every pod in it can name any client.
+            # With the request portal (portal-axisd.yaml), the portal's pods
+            # must not be inside this range.
             - name: AXIS_TRUSTED_PROXIES
               value: 10.42.0.0/16
             - name: AXIS_LOG_FORMAT
