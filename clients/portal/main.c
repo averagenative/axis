@@ -16,10 +16,13 @@
 #include <glib.h>
 #include <glib-unix.h>
 #include <htmx-glib.h>
+#include <errno.h>
 #include <libsoup/soup.h>
 #include <signal.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/prctl.h>
+#include <sys/resource.h>
 
 #include "axis-portal-app.h"
 #include "axis-portal-config.h"
@@ -48,6 +51,49 @@ forget_token_in_environment(gchar **envp)
 		memset(value, 0, strlen(value));
 		g_unsetenv(TOKEN_VARIABLE);
 	}
+}
+
+#if defined(__SANITIZE_ADDRESS__)
+/* A build with the leak checker stops its own threads through ptrace when
+ * it ends, which a process that is not dumpable refuses: such a build (the
+ * tests', never a release) is made dumpable again as it exits, after it has
+ * stopped serving, so that its leaks are still found.  Registered after the
+ * checker's own exit handler, so it runs before it. */
+static void
+dumpable_for_the_leak_check(void)
+{
+	(void)prctl(PR_SET_DUMPABLE, 1L, 0L, 0L, 0L);
+}
+#endif
+
+/*
+ * Before anything is read: the process can gain no privilege from a file it
+ * runs (PR_SET_NO_NEW_PRIVS; the container says the same, and this holds
+ * where no container does), it leaves no core file, and it is not dumpable,
+ * so that the passwords and proofs that pass through its memory cannot be
+ * read out of it by another process of the same user: no ptrace without
+ * CAP_SYS_PTRACE, and /proc/<pid>/mem, environ and the rest belong to root.
+ * A process that cannot be made so does not start.
+ */
+static gboolean
+harden_process(void)
+{
+	struct rlimit none = { 0, 0 };
+
+	if (prctl(PR_SET_NO_NEW_PRIVS, 1L, 0L, 0L, 0L) != 0) {
+		g_printerr("axis-portal: cannot set no-new-privileges: %s\n", g_strerror(errno));
+		return FALSE;
+	}
+	if (prctl(PR_SET_DUMPABLE, 0L, 0L, 0L, 0L) != 0) {
+		g_printerr("axis-portal: cannot make the process not dumpable: %s\n", g_strerror(errno));
+		return FALSE;
+	}
+	/* Not dumpable already means no core file; the limit says it twice. */
+	(void)setrlimit(RLIMIT_CORE, &none);
+#if defined(__SANITIZE_ADDRESS__)
+	atexit(dumpable_for_the_leak_check);
+#endif
+	return TRUE;
 }
 
 static gboolean
@@ -175,6 +221,9 @@ main(int argc, char **argv)
 		  "Exit 0 if the portal on this machine answers its probe", NULL },
 		{ NULL, 0, 0, G_OPTION_ARG_NONE, NULL, NULL, NULL }
 	};
+
+	if (!harden_process())
+		return 1;
 
 	g_option_context_set_summary(context, "Axis request portal: the pages people use to ask Axis for a title");
 	g_option_context_add_main_entries(context, entries, NULL);
