@@ -13,13 +13,19 @@
  * SQL (tests/axis-test-savings.h), and the worker is rows of the database
  * with measured software encoders.  No encoder runs: a conversion the run
  * asked for is ended by the test, the way its finish job would end it, so
- * that what the run makes of each ending can be shown.  Without a database
+ * that what the run makes of each ending can be shown.  Where the claim,
+ * check 10 and the placement themselves are shown (kept files), the test
+ * claims the work as a worker would, writes an output of its own to the
+ * disk's work area, and lets the real finish job check it again (checks 1,
+ * 2, 9 and 10, which need no encoder) and place it.  Without a database
  * every test skips; none needs ffmpeg.
  */
 
 #include <glib.h>
 #include <glib/gstdio.h>
+#include <fcntl.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "axis-test-analysis.h"
@@ -28,9 +34,13 @@
 #include "axis-test-library.h"
 #include "axis-test-savings.h"
 #include "axis-test-storage.h"
+#include "api/axis-worker-proto.h"
 #include "api/axis-worker-store.h"
+#include "jobs/axis-job-lifecycle.h"
 #include "library/axis-analysis.h"
 #include "probe/axis-probe.h"
+#include "storage/axis-file-check.h"
+#include "storage/axis-volume-write.h"
 #include "transcode/axis-conversion.h"
 #include "transcode/axis-conversion-run.h"
 #include "transcode/axis-convert-caps.h"
@@ -723,8 +733,8 @@ test_list_kept(Fixture *fx, gconstpointer data)
 	g_assert_cmpint(N(fx, "SELECT scope_files FROM conversion_run WHERE id = %" G_GINT64_FORMAT, run), ==, 3);
 	g_assert_cmpstr(axis_conversion_run_reason_label("kept"), ==, "Kept: Axis does not replace this file");
 	g_assert_cmpstr(axis_conversion_run_reason_help("kept"), ==,
-		"Axis does not replace these files with another release. To convert them in place, add them to this run: "
-		"they stay kept. Or let Axis upgrade a file again on its links page.");
+		"Axis does not replace these files with another release. A run with \"Also convert files Axis keeps\" "
+		"converts them in place, and they stay kept. Or let Axis upgrade a file again on its links page.");
 	/* The default is off, and nothing of the choice is recorded. */
 	g_assert_cmpstr(Q(fx, "SELECT convert_kept::text || coalesce(convert_kept_by, '-') FROM conversion_run WHERE id = %"
 		G_GINT64_FORMAT, run), ==, "false-");
@@ -1906,7 +1916,7 @@ test_link_after_stop(Fixture *fx, gconstpointer data)
 	sql(fx, "UPDATE conversion_run_entry SET state = 'asked', outcome = 'replace', asked_at = now() WHERE id = %"
 		G_GINT64_FORMAT, entry);
 	g_assert_true(axis_conversions_request_for_run(fx->conv, file, fx->space_saver, AXIS_CONVERSION_REPLACE, TRUE,
-		FALSE, "alice", run, entry, &replacement, &gate, &error));
+		NULL, "alice", run, entry, &replacement, &gate, &error));
 	g_assert_no_error(error);
 	g_assert_cmpint(replacement, >, trial);
 
@@ -2166,17 +2176,19 @@ kept_library(Fixture *fx)
 	g_assert_cmpint(kept_marks(fx), ==, 4);
 }
 
-/* Lets the list job of a run to which kept files are being added do its
- * work, as the job would. */
+/* "dora" adds the kept files to @run (@confirmed: she ticked that their
+ * originals are replaced), and the list job does its work, as the job
+ * would; the run is then @expected_state. */
 static void
-add_kept(
+add_kept_confirmed(
 	Fixture     *fx,
 	gint64       run,
+	gboolean     confirmed,
 	const gchar *expected_state
 ){
 	g_autoptr(GError) error = NULL;
 
-	g_assert_true(axis_conversion_runs_include_kept(fx->runs, run, "dora", &error));
+	g_assert_true(axis_conversion_runs_include_kept(fx->runs, run, confirmed, "dora", &error));
 	g_assert_no_error(error);
 	g_assert_cmpstr(Q(fx, "SELECT state || ' ' || convert_kept::text || ' ' || convert_kept_by FROM conversion_run"
 		" WHERE id = %" G_GINT64_FORMAT, run), ==, "listing true dora");
@@ -2188,13 +2200,25 @@ add_kept(
 		G_GINT64_FORMAT, run), ==, expected_state);
 }
 
+/* The same for a run of trials, or one not started: no tick. */
+static void
+add_kept(
+	Fixture     *fx,
+	gint64       run,
+	const gchar *expected_state
+){
+	add_kept_confirmed(fx, run, FALSE, expected_state);
+}
+
 /*
  * Spec (conversion-runs, Kept files are converted only by choice): off by
  * default, a run leaves every kept file out as today.  With the choice the
  * kept files are listed like any other; a kept file that has another reason
- * of its own stays out, under that reason; every request the run makes
- * carries the choice, so the gate "kept" holds for it; and the mark itself
- * is never changed, by listing, asking or a conversion that ended done.
+ * of its own stays out, under that reason; the request of every file the
+ * choice covers (kept when listed) carries it, so the gate "kept" holds for
+ * it, and a file that is not kept is asked for without it; and the mark
+ * itself is not changed by listing or asking.  (The claim, check 10 and the
+ * placement with the choice: /conversion-runs/kept/claim-check-place.)
  */
 static void
 test_kept_by_choice(Fixture *fx, gconstpointer data)
@@ -2236,11 +2260,15 @@ test_kept_by_choice(Fixture *fx, gconstpointer data)
 	g_assert_cmpstr(info->convert_kept_by, ==, "alice");
 	g_assert_cmpint(info->convert_kept_us, >, 0);
 	g_assert_cmpint(kept_marks(fx), ==, 4);
+	/* The entries the choice covers: the two kept files, not Glass Orchard. */
+	g_assert_cmpstr(Q(fx, "SELECT string_agg(regexp_replace(rel_path, '^.*/', '') || '=' || convert_kept::text, ','"
+		" ORDER BY position) FROM conversion_run_entry WHERE run_id = %" G_GINT64_FORMAT, chosen), ==,
+		"Copper Road (2002).mkv=true,Glass Orchard (2003).mkv=false,Lantern Hill (2001).mkv=true");
 
 	/* Without the choice the request of a kept file is refused by its gate,
 	 * for a run as for a person. */
 	g_assert_false(axis_conversions_request_for_run(fx->conv, copper, fx->space_saver, AXIS_CONVERSION_REPLACE, TRUE,
-		FALSE, "alice", chosen, N(fx, "SELECT id FROM conversion_run_entry WHERE run_id = %" G_GINT64_FORMAT
+		NULL, "alice", chosen, N(fx, "SELECT id FROM conversion_run_entry WHERE run_id = %" G_GINT64_FORMAT
 		" AND file_id = %" G_GINT64_FORMAT, chosen, copper), &refused, &gate, &error));
 	g_assert_error(error, AXIS_CONVERSION_ERROR, AXIS_CONVERSION_ERROR_REFUSED);
 	g_assert_cmpstr(gate, ==, "kept");
@@ -2259,9 +2287,12 @@ test_kept_by_choice(Fixture *fx, gconstpointer data)
 	g_assert_cmpuint(step(fx).asked, ==, 1);
 	g_assert_cmpstr(Q(fx, "SELECT state FROM conversion_run_entry WHERE conversion_id = %" G_GINT64_FORMAT, conversion),
 		==, "done");
-	/* A file that is not kept is asked for with the run's choice as well:
-	 * it is the run's, and makes no difference to a file without the mark. */
+	/* A file that is not kept is asked for without the choice: it does not
+	 * cover it, so a mark set on it later refuses it as without the choice. */
 	g_assert_cmpstr(asked_names(fx, chosen), ==, "Glass Orchard (2003).mkv");
+	g_assert_cmpstr(Q(fx, "SELECT outcome || ' ' || convert_kept::text || ' ' || requested_by FROM conversion"
+		" WHERE id = %" G_GINT64_FORMAT, asked_conversion(fx, chosen, "Glass Orchard (2003).mkv")), ==,
+		"replace false alice");
 	/* Nothing of it changed a mark. */
 	g_assert_cmpint(kept_marks(fx), ==, 4);
 	g_assert_cmpint(N(fx, "SELECT count(*) FROM series_file WHERE file_id = %" G_GINT64_FORMAT " AND kept"
@@ -2339,12 +2370,12 @@ test_kept_added_to_ready(Fixture *fx, gconstpointer data)
 
 	/* A job that ended without adding them: the run is ready as it was, the
 	 * choice off, and it says so. */
-	g_assert_true(axis_conversion_runs_include_kept(fx->runs, run, "dora", &error));
+	g_assert_true(axis_conversion_runs_include_kept(fx->runs, run, FALSE, "dora", &error));
 	g_assert_no_error(error);
 	g_assert_cmpstr(Q(fx, "SELECT state || ' ' || relist_state || ' ' || convert_kept::text || ' ' || convert_kept_by"
 		" FROM conversion_run WHERE id = %" G_GINT64_FORMAT, run), ==, "listing ready true dora");
 	/* Being listed: not again, and nothing else of it. */
-	g_assert_false(axis_conversion_runs_include_kept(fx->runs, run, "dora", &error));
+	g_assert_false(axis_conversion_runs_include_kept(fx->runs, run, FALSE, "dora", &error));
 	g_assert_error(error, AXIS_CONVERSION_ERROR, AXIS_CONVERSION_ERROR_STATE);
 	g_clear_error(&error);
 	sql(fx, "UPDATE job SET state = 'failed', finished_at = now(), last_error = 'stopped in a test' WHERE id ="
@@ -2379,33 +2410,33 @@ test_kept_added_to_ready(Fixture *fx, gconstpointer data)
 		" FROM conversion_run WHERE id = %" G_GINT64_FORMAT, run), ==, "true dora alice");
 	g_assert_cmpint(kept_marks(fx), ==, 4);
 	/* It has the choice now: not twice. */
-	g_assert_false(axis_conversion_runs_include_kept(fx->runs, run, "dora", &error));
+	g_assert_false(axis_conversion_runs_include_kept(fx->runs, run, FALSE, "dora", &error));
 	g_assert_error(error, AXIS_CONVERSION_ERROR, AXIS_CONVERSION_ERROR_STATE);
 	g_clear_error(&error);
 
 	/* Not for a run that is running, has a file in flight, or was cancelled;
 	 * not without a person; not for a run that is not there. */
 	other = make_run(fx, AXIS_CONVERSION_RUN_MOVIES, NULL, 0, 0, fx->space_saver);
-	g_assert_false(axis_conversion_runs_include_kept(fx->runs, other, "", &error));
+	g_assert_false(axis_conversion_runs_include_kept(fx->runs, other, FALSE, "", &error));
 	g_assert_error(error, AXIS_CONVERSION_ERROR, AXIS_CONVERSION_ERROR_REFUSED);
 	g_clear_error(&error);
-	g_assert_false(axis_conversion_runs_include_kept(fx->runs, other + 1000, "dora", &error));
+	g_assert_false(axis_conversion_runs_include_kept(fx->runs, other + 1000, FALSE, "dora", &error));
 	g_assert_error(error, AXIS_CONVERSION_ERROR, AXIS_CONVERSION_ERROR_NOT_FOUND);
 	g_clear_error(&error);
 	start(fx, other, AXIS_CONVERSION_TRIAL);
-	g_assert_false(axis_conversion_runs_include_kept(fx->runs, other, "dora", &error));
+	g_assert_false(axis_conversion_runs_include_kept(fx->runs, other, FALSE, "dora", &error));
 	g_assert_error(error, AXIS_CONVERSION_ERROR, AXIS_CONVERSION_ERROR_STATE);
 	g_clear_error(&error);
 	g_assert_cmpuint(step(fx).asked, ==, 1);
 	g_assert_true(axis_conversion_runs_pause(fx->runs, other, "alice", &error));
-	g_assert_false(axis_conversion_runs_include_kept(fx->runs, other, "dora", &error));
+	g_assert_false(axis_conversion_runs_include_kept(fx->runs, other, FALSE, "dora", &error));
 	g_assert_error(error, AXIS_CONVERSION_ERROR, AXIS_CONVERSION_ERROR_STATE);
 	g_assert_nonnull(strstr(error->message, "in flight"));
 	g_clear_error(&error);
 	g_assert_true(axis_conversion_runs_cancel(fx->runs, other, "alice", &error));
 	g_assert_no_error(error);
 	step(fx);
-	g_assert_false(axis_conversion_runs_include_kept(fx->runs, other, "dora", &error));
+	g_assert_false(axis_conversion_runs_include_kept(fx->runs, other, FALSE, "dora", &error));
 	g_assert_error(error, AXIS_CONVERSION_ERROR, AXIS_CONVERSION_ERROR_STATE);
 	g_clear_error(&error);
 	g_assert_cmpstr(Q(fx, "SELECT state || ' ' || convert_kept::text FROM conversion_run WHERE id = %" G_GINT64_FORMAT,
@@ -2415,7 +2446,7 @@ test_kept_added_to_ready(Fixture *fx, gconstpointer data)
 	/* Cancelled while the files are being added: the run is cancelled, and
 	 * the job that comes afterwards adds nothing. */
 	other = make_run(fx, AXIS_CONVERSION_RUN_MOVIES, NULL, 0, 0, fx->space_saver);
-	g_assert_true(axis_conversion_runs_include_kept(fx->runs, other, "dora", &error));
+	g_assert_true(axis_conversion_runs_include_kept(fx->runs, other, FALSE, "dora", &error));
 	g_assert_no_error(error);
 	g_assert_true(axis_conversion_runs_cancel(fx->runs, other, "alice", &error));
 	g_assert_no_error(error);
@@ -2456,7 +2487,7 @@ test_kept_added_later(Fixture *fx, gconstpointer data)
 	g_assert_true(axis_conversion_runs_pause(fx->runs, run, "alice", &error));
 	g_assert_no_error(error);
 	/* Paper Tide is in flight still. */
-	g_assert_false(axis_conversion_runs_include_kept(fx->runs, run, "dora", &error));
+	g_assert_false(axis_conversion_runs_include_kept(fx->runs, run, FALSE, "dora", &error));
 	g_assert_error(error, AXIS_CONVERSION_ERROR, AXIS_CONVERSION_ERROR_STATE);
 	g_clear_error(&error);
 	g_assert_cmpstr(Q(fx, "SELECT convert_kept::text FROM conversion_run WHERE id = %" G_GINT64_FORMAT, run), ==, "false");
@@ -2506,7 +2537,8 @@ test_kept_added_later(Fixture *fx, gconstpointer data)
 		add_kept(fx, finished, "paused");
 		assert_state(fx, finished, "paused/person");
 		g_assert_cmpstr(Q(fx, "SELECT pause_text FROM conversion_run WHERE id = %" G_GINT64_FORMAT, finished), ==,
-			"dora added 2 files Axis keeps to the list of this run, which had finished. Resume the run to convert them.");
+			"dora added 2 files Axis keeps to the list of this run, which had finished. Resume the run to convert them "
+			"as trials.");
 		g_assert_cmpint(N(fx, "SELECT count(*) FROM conversion_run WHERE id = %" G_GINT64_FORMAT
 			" AND finished_at IS NULL AND finish_text IS NULL AND paused_by = 'dora'", finished), ==, 1);
 		g_assert_true(axis_conversion_runs_resume(fx->runs, finished, "dora", &error));
@@ -2548,7 +2580,7 @@ test_kept_added_to_series(Fixture *fx, gconstpointer data)
 	order = unit_order(fx, run);
 	g_assert_cmpstr(order, ==, "series:Quiet Meadow,series:Harbour Lights");
 	g_clear_pointer(&order, g_free);
-	/* Quiet Meadow is taken out by a person; a cap of one file. */
+	/* Quiet Meadow is taken out by a person; a cap of three files. */
 	g_assert_true(axis_conversion_runs_remove_unit(fx->runs, run, 1, "alice", &error));
 	g_assert_no_error(error);
 	memset(&limits, 0, sizeof(limits));
@@ -2580,6 +2612,499 @@ test_kept_added_to_series(Fixture *fx, gconstpointer data)
 	g_assert_cmpint(kept_marks(fx), ==, 3);
 }
 
+/* ── The claim, check 10 and the placement, with no encoder ──────── */
+
+/* The path of @conversion's output in the disk's work area, by the name its
+ * claim gave it. */
+static gchar *
+output_path(
+	Fixture *fx,
+	gint64   conversion
+){
+	g_autofree gchar *name = QA(fx, "SELECT output_name FROM conversion WHERE id = %" G_GINT64_FORMAT, conversion);
+
+	g_assert_nonnull(name);
+	return g_build_filename(fx->disk, AXIS_VOLUME_WORK_DIR, name, NULL);
+}
+
+/* The path of @conversion's file in the Movies folder now, by the name the
+ * conversion gives it. */
+static gchar *
+movie_path(
+	Fixture *fx,
+	gint64   conversion
+){
+	g_autofree gchar *rel = QA(fx, "SELECT new_rel_path FROM conversion WHERE id = %" G_GINT64_FORMAT, conversion);
+
+	g_assert_nonnull(rel);
+	return g_build_filename(fx->disk, "Movies", rel, NULL);
+}
+
+/*
+ * The worker "garage" takes @conversion: the claim (the gates again, with
+ * what the conversion recorded, and the plan for its encoders); then, when
+ * the claim gave it the work, it writes an output of @ratio of the
+ * original's size to the disk's work area and reports it, and the
+ * conversion waits for its checks.  NULL when the claim gave the work, else
+ * why it did not (for the caller to free).
+ */
+static gchar *
+claim_and_encode(
+	Fixture *fx,
+	gint64   conversion,
+	gdouble  ratio
+){
+	g_autoptr(GError) error = NULL;
+	g_autoptr(AxisConvertWork) work = NULL;
+	g_autofree gchar *machine = axis_worker_machine("garage");
+	g_autofree gchar *path = NULL;
+	g_autofree gchar *bytes = NULL;
+	gchar *why_not = NULL;
+	AxisJobClaim claim;
+	AxisConvertResult result;
+	AxisDbConn *conn;
+	gboolean permanent = FALSE;
+	gsize size;
+	gsize i;
+
+	memset(&claim, 0, sizeof(claim));
+	claim.id = N(fx, "SELECT job_id FROM conversion WHERE id = %" G_GINT64_FORMAT, conversion);
+	claim.attempt = 1;
+	g_assert_cmpint(claim.id, >, 0);
+	conn = axis_db_pool_acquire(fx->t->pool, &error);
+	g_assert_no_error(error);
+	if (!axis_conversions_describe(fx->conv, conn, &claim, "garage", machine, &work, &why_not, &permanent, &error))
+		g_error("the claim of conversion %" G_GINT64_FORMAT ": %s", conversion, error->message);
+	if (work == NULL) {
+		axis_db_pool_release(fx->t->pool, conn);
+		g_assert_nonnull(why_not);
+		return why_not;
+	}
+	g_assert_null(why_not);
+	/* What it made: smaller than the original by @ratio, bytes of no format
+	 * (checks 3 to 8, which read it, passed in an earlier turn). */
+	size = (gsize)((gdouble)work->size * ratio);
+	bytes = g_malloc(size);
+	for (i = 0; i < size; i++)
+		bytes[i] = (gchar)((i * 31 + 7) & 0x7f);
+	path = g_build_filename(fx->disk, AXIS_VOLUME_WORK_DIR, work->output, NULL);
+	g_assert_true(g_file_set_contents(path, bytes, (gssize)size, &error));
+	g_assert_no_error(error);
+	memset(&result, 0, sizeof(result));
+	result.output = work->output;
+	result.size = (gint64)size;
+	g_assert_true(axis_db_conn_begin(conn, &error));
+	if (!axis_conversions_encoded(fx->conv, conn, claim.id, &result, "garage", &error) ||
+	    !axis_db_conn_commit(conn, &error))
+		g_error("the encode of conversion %" G_GINT64_FORMAT ": %s", conversion, error->message);
+	axis_db_pool_release(fx->t->pool, conn);
+	g_assert_cmpstr(Q(fx, "SELECT state FROM conversion WHERE id = %" G_GINT64_FORMAT, conversion), ==, "verifying");
+	return NULL;
+}
+
+/*
+ * Every check of @conversion passed in an earlier turn of its finish job,
+ * for its output as it is now, as a turn that stopped before placing leaves
+ * it: the next turn makes checks 1, 2, 9 and 10 again (none needs an
+ * encoder: the file asked for, the original unchanged, worth it, every
+ * condition of the request) and places the output.
+ */
+static void
+passed_before(
+	Fixture *fx,
+	gint64   conversion
+){
+	g_autofree gchar *path = output_path(fx, conversion);
+	g_autofree gchar *sample = NULL;
+	struct stat st;
+	gint err = 0;
+	gint fd;
+
+	g_assert_cmpint(stat(path, &st), ==, 0);
+	fd = open(path, O_RDONLY | O_CLOEXEC);
+	g_assert_cmpint(fd, >=, 0);
+	g_assert_true(axis_file_sample_digest(fd, (gint64)st.st_size, &sample, &err));
+	close(fd);
+	sql(fx, "INSERT INTO conversion_check (conversion_id, number, result, detail) SELECT %" G_GINT64_FORMAT ", n,"
+		" 'passed', 'as planned' FROM generate_series(1, 10) n", conversion);
+	sql(fx, "UPDATE conversion SET checked_where = 'server', passed_at = now(), passed_inode = %" G_GINT64_FORMAT
+		", passed_size = %" G_GINT64_FORMAT ", passed_mtime_sec = %" G_GINT64_FORMAT ", passed_mtime_nsec = %ld,"
+		" passed_ctime_sec = %" G_GINT64_FORMAT ", passed_ctime_nsec = %ld, passed_sample = '%s', checks_version = %d"
+		" WHERE id = %" G_GINT64_FORMAT, (gint64)st.st_ino, (gint64)st.st_size, (gint64)st.st_mtim.tv_sec,
+		(long)st.st_mtim.tv_nsec, (gint64)st.st_ctim.tv_sec, (long)st.st_ctim.tv_nsec, sample,
+		AXIS_CONVERSION_CHECKS_VERSION, conversion);
+}
+
+/* The finish job's turn for @conversion: its checks, then its placement. */
+static void
+finish(
+	Fixture *fx,
+	gint64   conversion
+){
+	g_autoptr(GError) error = NULL;
+
+	if (!axis_conversions_finish(fx->conv, conversion, NULL, &error))
+		g_error("the finish of conversion %" G_GINT64_FORMAT ": %s", conversion, error->message);
+}
+
+/*
+ * Spec (conversion-execution, A kept file is converted only by choice), with
+ * no encoder: a kept movie file asked for with the choice is taken by a
+ * worker (the claim works the conditions out again with the choice the
+ * conversion recorded); just before placement check 10 works them out
+ * again, with it, and the output takes its original's place; the file is as
+ * kept afterwards as before, in the same link and the same row.  The choice
+ * covers a file kept at the request only: one chosen but not kept then,
+ * and kept afterwards, is refused when a worker takes it; one asked for
+ * without the choice that becomes kept after the claim is rejected by check
+ * 10, the original as it was.
+ */
+static void
+test_kept_claim_check_place(Fixture *fx, gconstpointer data)
+{
+	static const gchar *const kept_text = "Kept: Axis does not replace this file.";
+	g_autoptr(GError) error = NULL;
+	g_autofree gchar *why = NULL;
+	g_autofree gchar *original = NULL;
+	g_autofree gchar *output = NULL;
+	struct stat before;
+	struct stat after;
+	gint64 lantern;
+	gint64 glass;
+	gint64 paper;
+	gint64 placed = 0;
+	gint64 refused = 0;
+	gint64 rejected = 0;
+
+	kept_library(fx);
+	movie(fx, "Paper Tide (2004)", 9);
+	settle(fx);
+	sql(fx, "INSERT INTO conversion_profile_proof (revision_id, method) VALUES (%" G_GINT64_FORMAT ", 'canary')",
+		fx->space_saver);
+	lantern = file_of(fx, fx->movies, "Lantern Hill (2001)/Lantern Hill (2001).mkv");
+	glass = file_of(fx, fx->movies, "Glass Orchard (2003)/Glass Orchard (2003).mkv");
+	paper = file_of(fx, fx->movies, "Paper Tide (2004)/Paper Tide (2004).mkv");
+
+	/* Kept by hand, asked for with the choice: recorded, and the claim lets
+	 * it through. */
+	g_assert_true(axis_conversions_request_full(fx->conv, lantern, fx->space_saver, AXIS_CONVERSION_REPLACE, TRUE, TRUE,
+		"alice", &placed, &error));
+	g_assert_no_error(error);
+	g_assert_cmpstr(Q(fx, "SELECT convert_kept::text FROM conversion WHERE id = %" G_GINT64_FORMAT, placed), ==, "true");
+	why = claim_and_encode(fx, placed, 0.4);
+	if (why != NULL)
+		g_error("the claim refused a kept file asked for with the choice: %s", why);
+	/* Check 10 just before placement, then the placement. */
+	original = movie_path(fx, placed);
+	g_assert_cmpint(stat(original, &before), ==, 0);
+	passed_before(fx, placed);
+	finish(fx, placed);
+	g_assert_cmpstr(Q(fx, "SELECT state FROM conversion WHERE id = %" G_GINT64_FORMAT, placed), ==, "done");
+	g_assert_cmpstr(Q(fx, "SELECT detail FROM conversion_check WHERE conversion_id = %" G_GINT64_FORMAT
+		" AND number = 10", placed), ==, "Every gate of the request holds now.");
+	g_assert_cmpint(stat(original, &after), ==, 0);
+	g_assert_cmpint((gint64)after.st_ino, !=, (gint64)before.st_ino);
+	g_assert_cmpint((gint64)after.st_ino, ==, N(fx, "SELECT output_inode FROM conversion WHERE id = %" G_GINT64_FORMAT,
+		placed));
+	g_assert_cmpint((gint64)after.st_size, <, (gint64)before.st_size);
+	/* The same row of the library, and still kept, as it was, in the same
+	 * link. */
+	g_assert_cmpint(N(fx, "SELECT inode FROM library_file WHERE id = %" G_GINT64_FORMAT, lantern), ==,
+		(gint64)after.st_ino);
+	g_assert_cmpint(N(fx, "SELECT count(*) FROM movie_file mf JOIN movie m ON m.id = mf.movie_id JOIN meta_title t"
+		" ON t.id = m.title_id WHERE mf.file_id = %" G_GINT64_FORMAT " AND mf.kept AND t.provider_id = 'kept-%"
+		G_GINT64_FORMAT "'", lantern, lantern), ==, 1);
+	g_assert_cmpint(kept_marks(fx), ==, 4);
+	g_clear_pointer(&original, g_free);
+
+	/* Chosen, but not kept at the request (a form that says so, or a file
+	 * let go in between): nothing of the choice is recorded, so the mark set
+	 * afterwards refuses it when a worker takes it. */
+	g_assert_true(axis_conversions_request_full(fx->conv, glass, fx->space_saver, AXIS_CONVERSION_REPLACE, TRUE, TRUE,
+		"alice", &refused, &error));
+	g_assert_no_error(error);
+	g_assert_cmpstr(Q(fx, "SELECT convert_kept::text FROM conversion WHERE id = %" G_GINT64_FORMAT, refused), ==,
+		"false");
+	keep_file(fx, glass, FALSE);
+	why = claim_and_encode(fx, refused, 0.4);
+	g_assert_nonnull(why);
+	g_assert_nonnull(strstr(why, "Refused when a worker took it: The file is not kept by hand or brought over"));
+	g_assert_nonnull(strstr(why, kept_text));
+	g_assert_cmpstr(Q(fx, "SELECT state FROM conversion WHERE id = %" G_GINT64_FORMAT, refused), ==, "refused");
+	g_clear_pointer(&why, g_free);
+
+	/* Asked for without the choice, kept after the claim: check 10 rejects it
+	 * before placement; the output is removed, the original as it was. */
+	g_assert_true(axis_conversions_request(fx->conv, paper, fx->space_saver, AXIS_CONVERSION_REPLACE, TRUE, "alice",
+		&rejected, &error));
+	g_assert_no_error(error);
+	why = claim_and_encode(fx, rejected, 0.4);
+	g_assert_null(why);
+	keep_file(fx, paper, TRUE);
+	original = movie_path(fx, rejected);
+	output = output_path(fx, rejected);
+	g_assert_cmpint(stat(original, &before), ==, 0);
+	passed_before(fx, rejected);
+	finish(fx, rejected);
+	g_assert_cmpstr(Q(fx, "SELECT state || ' ' || failed_check FROM conversion WHERE id = %" G_GINT64_FORMAT, rejected),
+		==, "rejected 10");
+	g_assert_nonnull(strstr(Q(fx, "SELECT detail FROM conversion_check WHERE conversion_id = %" G_GINT64_FORMAT
+		" AND number = 10 AND result = 'failed'", rejected), kept_text));
+	g_assert_cmpint(stat(original, &after), ==, 0);
+	g_assert_cmpint((gint64)after.st_ino, ==, (gint64)before.st_ino);
+	g_assert_cmpint((gint64)after.st_size, ==, (gint64)before.st_size);
+	g_assert_false(g_file_test(output, G_FILE_TEST_EXISTS));
+	g_assert_cmpint(kept_marks(fx), ==, 6);
+}
+
+/*
+ * Spec (conversion-runs, Kept files are converted only by choice): a run's
+ * choice covers the files kept when its list was made.  A file of the list
+ * that was not kept then and is marked kept afterwards is refused, as
+ * without the choice, when its turn comes: skipped with the reason kept,
+ * and nothing is asked for it; the run goes on with the next file.
+ */
+static void
+test_kept_after_listing(Fixture *fx, gconstpointer data)
+{
+	gint64 run;
+	gint64 glass;
+	gint64 conversion;
+
+	kept_library(fx);
+	sql(fx, "INSERT INTO conversion_profile_proof (revision_id, method) VALUES (%" G_GINT64_FORMAT ", 'canary')",
+		fx->space_saver);
+	glass = file_of(fx, fx->movies, "Glass Orchard (2003)/Glass Orchard (2003).mkv");
+	run = make_run_kept(fx);
+	g_assert_cmpint(N(fx, "SELECT count(*) FROM conversion_run_entry WHERE run_id = %" G_GINT64_FORMAT " AND file_id = %"
+		G_GINT64_FORMAT " AND NOT convert_kept", run, glass), ==, 1);
+	/* Glass Orchard is kept by hand after the list was made. */
+	keep_file(fx, glass, FALSE);
+
+	start(fx, run, AXIS_CONVERSION_REPLACE);
+	g_assert_cmpuint(step(fx).asked, ==, 1);
+	conversion = asked_conversion(fx, run, "Copper Road (2002).mkv");
+	g_assert_cmpstr(Q(fx, "SELECT convert_kept::text FROM conversion WHERE id = %" G_GINT64_FORMAT, conversion), ==,
+		"true");
+	end_conversion(fx, conversion, "done", 0, 0.4);
+	/* Its turn: refused for the mark, and the run goes on with the next. */
+	g_assert_cmpuint(step(fx).asked, ==, 1);
+	g_assert_cmpstr(Q(fx, "SELECT state || ' ' || reason_code FROM conversion_run_entry WHERE run_id = %" G_GINT64_FORMAT
+		" AND file_id = %" G_GINT64_FORMAT, run, glass), ==, "skipped gate_kept");
+	g_assert_nonnull(strstr(Q(fx, "SELECT reason_text FROM conversion_run_entry WHERE run_id = %" G_GINT64_FORMAT
+		" AND file_id = %" G_GINT64_FORMAT, run, glass), "Kept: Axis does not replace this file."));
+	g_assert_cmpint(N(fx, "SELECT count(*) FROM conversion WHERE file_id = %" G_GINT64_FORMAT, glass), ==, 0);
+	g_assert_cmpstr(asked_names(fx, run), ==, "Lantern Hill (2001).mkv");
+	g_assert_cmpstr(Q(fx, "SELECT convert_kept::text FROM conversion WHERE id = %" G_GINT64_FORMAT,
+		asked_conversion(fx, run, "Lantern Hill (2001).mkv")), ==, "true");
+	g_assert_cmpint(kept_marks(fx), ==, 5);
+}
+
+/*
+ * Spec (conversion-runs, Kept files added to a run): adding the kept files to
+ * a run that replaces originals needs the confirmation that their originals
+ * are replaced; without it (a form forged without the tick) it is refused
+ * and nothing changes.  With it, each file added records who confirmed it
+ * and when, not the run's earlier confirmation; the run waits, paused, and
+ * does not start by itself; once resumed, each file added is asked for as a
+ * replacement with the choice, as the person who confirmed it.
+ */
+static void
+test_kept_added_to_replacing(Fixture *fx, gconstpointer data)
+{
+	g_autoptr(GError) error = NULL;
+	g_autoptr(AxisConversionRunInfo) info = NULL;
+	gint64 run;
+	gint64 job;
+	gint64 conversion;
+
+	kept_library(fx);
+	sql(fx, "INSERT INTO conversion_profile_proof (revision_id, method) VALUES (%" G_GINT64_FORMAT ", 'canary')",
+		fx->space_saver);
+	run = make_run(fx, AXIS_CONVERSION_RUN_MOVIES, NULL, 0, 0, fx->space_saver);
+	start(fx, run, AXIS_CONVERSION_REPLACE);
+	g_assert_cmpuint(step(fx).asked, ==, 1);
+	end_asked(fx, run, "done", 0);
+	step(fx);
+	assert_state(fx, run, "finished");
+	g_assert_cmpstr(Q(fx, "SELECT outcome || ' ' || confirmed_by FROM conversion_run WHERE id = %" G_GINT64_FORMAT, run),
+		==, "replace alice");
+	job = N(fx, "SELECT coalesce(list_job_id, 0) FROM conversion_run WHERE id = %" G_GINT64_FORMAT, run);
+
+	/* Without the tick: refused, and the run is as it was. */
+	g_assert_false(axis_conversion_runs_include_kept(fx->runs, run, FALSE, "dora", &error));
+	g_assert_error(error, AXIS_CONVERSION_ERROR, AXIS_CONVERSION_ERROR_REFUSED);
+	g_assert_nonnull(strstr(error->message, "This run replaces originals"));
+	g_assert_nonnull(strstr(error->message, "confirmation ticked"));
+	g_clear_error(&error);
+	g_assert_cmpstr(Q(fx, "SELECT state || ' ' || convert_kept::text || ' ' || coalesce(convert_kept_by, '-') || ' ' ||"
+		" coalesce(relist_state, '-') FROM conversion_run WHERE id = %" G_GINT64_FORMAT, run), ==, "finished false - -");
+	g_assert_cmpint(N(fx, "SELECT coalesce(list_job_id, 0) FROM conversion_run WHERE id = %" G_GINT64_FORMAT, run), ==,
+		job);
+	g_assert_cmpstr(reasons_of(fx, run), ==, "kept:4");
+
+	/* With it: the files added carry dora's confirmation; the run waits. */
+	add_kept_confirmed(fx, run, TRUE, "paused");
+	assert_state(fx, run, "paused/person");
+	g_assert_cmpstr(Q(fx, "SELECT pause_text || ' | ' || paused_by FROM conversion_run WHERE id = %" G_GINT64_FORMAT, run),
+		==, "dora added 2 files Axis keeps to the list of this run, which had finished, and confirmed that their "
+		"originals are replaced. Resume the run to convert them. | dora");
+	g_assert_cmpstr(Q(fx, "SELECT string_agg(regexp_replace(e.rel_path, '^.*/', '') || '=' || coalesce(e.confirmed_by,"
+		" '-') || CASE WHEN e.confirmed_at = r.convert_kept_at THEN ' then' ELSE '' END, ',' ORDER BY e.position)"
+		" FROM conversion_run_entry e JOIN conversion_run r ON r.id = e.run_id WHERE e.run_id = %" G_GINT64_FORMAT, run),
+		==, "Glass Orchard (2003).mkv=-,Copper Road (2002).mkv=dora then,Lantern Hill (2001).mkv=dora then");
+	/* It does not start by itself. */
+	g_assert_cmpuint(step(fx).asked, ==, 0);
+	assert_state(fx, run, "paused/person");
+	g_assert_true(axis_conversion_runs_get(fx->runs, run, &info, &error));
+	g_assert_no_error(error);
+	g_assert_cmpint(info->waiting_in, ==, 2);
+
+	/* Resumed by another administrator: each file added is replaced on its
+	 * own confirmation, as dora; the run's is alice's still. */
+	g_assert_true(axis_conversion_runs_resume(fx->runs, run, "erin", &error));
+	g_assert_no_error(error);
+	g_assert_cmpuint(step(fx).asked, ==, 1);
+	conversion = asked_conversion(fx, run, "Copper Road (2002).mkv");
+	g_assert_cmpstr(Q(fx, "SELECT outcome || ' ' || convert_kept::text || ' ' || requested_by FROM conversion WHERE id = %"
+		G_GINT64_FORMAT, conversion), ==, "replace true dora");
+	end_conversion(fx, conversion, "done", 0, 0.4);
+	g_assert_cmpuint(step(fx).asked, ==, 1);
+	g_assert_cmpstr(Q(fx, "SELECT outcome || ' ' || convert_kept::text || ' ' || requested_by FROM conversion WHERE id = %"
+		G_GINT64_FORMAT, asked_conversion(fx, run, "Lantern Hill (2001).mkv")), ==, "replace true dora");
+	g_assert_cmpstr(Q(fx, "SELECT confirmed_by FROM conversion_run WHERE id = %" G_GINT64_FORMAT, run), ==, "alice");
+	g_assert_cmpint(kept_marks(fx), ==, 4);
+}
+
+/*
+ * Spec (conversion-runs, Kept files added to a run): a finished run to which
+ * the kept files are added but that can convert none of them (they are
+ * beyond its cap) stays finished, and says why; it does not wait for a
+ * resume that would do nothing.
+ */
+static void
+test_kept_added_beyond_cap(Fixture *fx, gconstpointer data)
+{
+	g_autoptr(GError) error = NULL;
+	AxisConversionRunLimits limits;
+	gint64 run;
+
+	kept_library(fx);
+	run = make_run(fx, AXIS_CONVERSION_RUN_MOVIES, NULL, 0, 0, fx->space_saver);
+	memset(&limits, 0, sizeof(limits));
+	limits.at_once = 1;
+	limits.cap_files = 1;
+	limits.window_start = limits.window_end = -1;
+	g_assert_true(axis_conversion_runs_set_limits(fx->runs, run, &limits, "alice", &error));
+	g_assert_no_error(error);
+	start(fx, run, AXIS_CONVERSION_TRIAL);
+	g_assert_cmpuint(step(fx).asked, ==, 1);
+	end_asked(fx, run, "done", 0);
+	step(fx);
+	assert_state(fx, run, "finished");
+
+	add_kept(fx, run, "finished");
+	assert_state(fx, run, "finished");
+	g_assert_nonnull(strstr(Q(fx, "SELECT finish_text FROM conversion_run WHERE id = %" G_GINT64_FORMAT, run),
+		"dora added 2 files Axis keeps to the list after the run finished; it cannot convert any of them, as they are "
+		"beyond its caps. Make a new run with \"Also convert files Axis keeps\" to convert them."));
+	g_assert_cmpint(N(fx, "SELECT count(*) FROM conversion_run WHERE id = %" G_GINT64_FORMAT " AND finished_at IS NOT NULL"
+		" AND pause_code IS NULL", run), ==, 1);
+	g_assert_cmpint(N(fx, "SELECT count(*) FROM conversion_run_entry e JOIN conversion_run r ON r.id = e.run_id"
+		" WHERE e.run_id = %" G_GINT64_FORMAT " AND e.state = 'waiting' AND e.unit_position > r.cap_unit", run), ==, 2);
+}
+
+/*
+ * The relist branch of a list job that fails (convert-kept-files): adding
+ * the kept files to a finished run whose revision cannot decide files any
+ * more leaves the run as it was (finished, at the same time, with its list)
+ * with the choice off, and says that the files were not added.
+ */
+static void
+test_kept_add_fails(Fixture *fx, gconstpointer data)
+{
+	g_autoptr(GError) error = NULL;
+	g_autofree gchar *finished_at = NULL;
+	gint64 run;
+
+	kept_library(fx);
+	run = make_run(fx, AXIS_CONVERSION_RUN_MOVIES, NULL, 0, 0, fx->space_saver);
+	start(fx, run, AXIS_CONVERSION_TRIAL);
+	g_assert_cmpuint(step(fx).asked, ==, 1);
+	end_asked(fx, run, "done", 0);
+	step(fx);
+	assert_state(fx, run, "finished");
+	finished_at = QA(fx, "SELECT finished_at::text FROM conversion_run WHERE id = %" G_GINT64_FORMAT, run);
+
+	g_assert_true(axis_conversion_runs_include_kept(fx->runs, run, FALSE, "dora", &error));
+	g_assert_no_error(error);
+	/* A version of the profile whose stored text is not in canonical form
+	 * (unusable), given to the run. */
+	sql(fx, "INSERT INTO conversion_profile_revision (profile_id, number, name, definition, hash, origin)"
+		" SELECT r.profile_id, (SELECT max(x.number) + 1 FROM conversion_profile_revision x WHERE x.profile_id ="
+		" r.profile_id), r.name, r.definition || ' ', encode(sha256(convert_to(r.definition || ' ', 'UTF8')), 'hex'),"
+		" 'code' FROM conversion_profile_revision r WHERE r.id = %" G_GINT64_FORMAT, fx->space_saver);
+	sql(fx, "UPDATE conversion_run SET revision_id = (SELECT max(id) FROM conversion_profile_revision) WHERE id = %"
+		G_GINT64_FORMAT, run);
+	g_assert_true(axis_conversion_runs_build_list(fx->runs, run, NULL, &error));
+	g_assert_no_error(error);
+
+	g_assert_cmpstr(Q(fx, "SELECT state || ' ' || coalesce(relist_state, '-') || ' ' || convert_kept::text || ' ' ||"
+		" coalesce(convert_kept_by, '-') || ' ' || coalesce(convert_kept_at::text, '-') FROM conversion_run WHERE id = %"
+		G_GINT64_FORMAT, run), ==, "finished - false - -");
+	g_assert_cmpstr(Q(fx, "SELECT finished_at::text FROM conversion_run WHERE id = %" G_GINT64_FORMAT, run), ==,
+		finished_at);
+	g_assert_cmpstr(Q(fx, "SELECT list_text FROM conversion_run WHERE id = %" G_GINT64_FORMAT, run), ==,
+		"The files Axis keeps were not added, and the run is as it was. The run's profile revision cannot be used to "
+		"decide files (its definition is not usable).");
+	g_assert_cmpstr(reasons_of(fx, run), ==, "kept:4");
+	g_assert_cmpint(N(fx, "SELECT count(*) FROM conversion_run_entry WHERE run_id = %" G_GINT64_FORMAT, run), ==, 1);
+	g_assert_cmpint(kept_marks(fx), ==, 4);
+}
+
+/*
+ * Spec (conversion-runs, A kept file with another reason): with the choice, a
+ * kept file that is pinned (another hard link), remembered as not worth
+ * converting with the revision, or that has a conversion in flight is left
+ * out under that reason, as a file that is not kept would be.
+ */
+static void
+test_kept_other_reasons(Fixture *fx, gconstpointer data)
+{
+	g_autoptr(GError) error = NULL;
+	g_autofree gchar *order = NULL;
+	gint64 conversion = 0;
+	gint64 run;
+
+	movie(fx, "Glass Orchard (2003)", 18);
+	movie(fx, "Worn Map (2007)", 12);
+	movie(fx, "Second Look (2008)", 12);
+	movie(fx, "Busy Line (2009)", 12);
+	settle(fx);
+	{
+		g_autofree gchar *from = g_build_filename(fx->disk, "Movies", "Worn Map (2007)", "Worn Map (2007).mkv", NULL);
+		g_autofree gchar *to = g_build_filename(fx->disk, "Movies", "Worn Map (2007)", "Worn Map copy.mkv", NULL);
+
+		g_assert_cmpint(link(from, to), ==, 0);
+		axis_scan_result_free(axis_test_library_scan_expect(fx->t, fx->movies, AXIS_SCAN_COMPLETE,
+			AXIS_SCAN_REASON_NONE));
+	}
+	keep_file(fx, file_of(fx, fx->movies, "Worn Map (2007)/Worn Map (2007).mkv"), FALSE);
+	keep_file(fx, file_of(fx, fx->movies, "Second Look (2008)/Second Look (2008).mkv"), TRUE);
+	keep_file(fx, file_of(fx, fx->movies, "Busy Line (2009)/Busy Line (2009).mkv"), FALSE);
+	sql(fx, "INSERT INTO conversion_memory (file_id, revision_id, reason) VALUES (%" G_GINT64_FORMAT ", %" G_GINT64_FORMAT
+		", 'not_worth_it')", file_of(fx, fx->movies, "Second Look (2008)/Second Look (2008).mkv"), fx->space_saver);
+	g_assert_true(axis_conversions_request(fx->conv, file_of(fx, fx->movies, "Busy Line (2009)/Busy Line (2009).mkv"),
+		fx->space_saver, AXIS_CONVERSION_TRIAL, FALSE, "bob", &conversion, &error));
+	g_assert_no_error(error);
+
+	run = make_run_kept(fx);
+	order = entry_order(fx, run);
+	g_assert_cmpstr(order, ==, "Glass Orchard (2003).mkv");
+	g_assert_cmpstr(reasons_of(fx, run), ==, "in_flight:1,not_worth_it:1,pinned:2");
+	g_assert_cmpint(kept_marks(fx), ==, 3);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -2590,6 +3115,12 @@ main(int argc, char **argv)
 	AXIS_TEST_ADD_DB_CASE("/conversion-runs/kept/added-to-ready", Fixture, NULL, test_kept_added_to_ready);
 	AXIS_TEST_ADD_DB_CASE("/conversion-runs/kept/added-later", Fixture, NULL, test_kept_added_later);
 	AXIS_TEST_ADD_DB_CASE("/conversion-runs/kept/added-to-series", Fixture, NULL, test_kept_added_to_series);
+	AXIS_TEST_ADD_DB_CASE("/conversion-runs/kept/claim-check-place", Fixture, NULL, test_kept_claim_check_place);
+	AXIS_TEST_ADD_DB_CASE("/conversion-runs/kept/after-listing", Fixture, NULL, test_kept_after_listing);
+	AXIS_TEST_ADD_DB_CASE("/conversion-runs/kept/added-to-replacing", Fixture, NULL, test_kept_added_to_replacing);
+	AXIS_TEST_ADD_DB_CASE("/conversion-runs/kept/added-beyond-cap", Fixture, NULL, test_kept_added_beyond_cap);
+	AXIS_TEST_ADD_DB_CASE("/conversion-runs/kept/add-fails", Fixture, NULL, test_kept_add_fails);
+	AXIS_TEST_ADD_DB_CASE("/conversion-runs/kept/other-reasons", Fixture, NULL, test_kept_other_reasons);
 	AXIS_TEST_ADD_DB_CASE("/conversion-runs/list/ranked", Fixture, NULL, test_list_ranked);
 	AXIS_TEST_ADD_DB_CASE("/conversion-runs/list/series", Fixture, NULL, test_list_series);
 	AXIS_TEST_ADD_DB_CASE("/conversion-runs/list/scopes", Fixture, NULL, test_list_scopes);

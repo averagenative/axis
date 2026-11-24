@@ -154,10 +154,12 @@ flush(
 		json = json_generator_to_data(generator, NULL);
 		params[1] = json;
 		if (!axis_db_conn_exec(l->conn, "INSERT INTO conversion_run_entry (run_id, unit_key, unit_kind, unit_title_id,"
-		        " unit_path, file_id, volume_id, root_id, rel_path, season_number, episode_number, size, low, mid, high)"
-		        " SELECT $1::bigint, x.k, x.uk, x.t, x.up, x.f, x.v, x.r, x.p, x.s, x.e, x.z, x.l, x.m, x.h"
+		        " unit_path, file_id, volume_id, root_id, rel_path, season_number, episode_number, size, low, mid, high,"
+		        " convert_kept)"
+		        " SELECT $1::bigint, x.k, x.uk, x.t, x.up, x.f, x.v, x.r, x.p, x.s, x.e, x.z, x.l, x.m, x.h, x.kk"
 		        " FROM jsonb_to_recordset($2::jsonb) AS x(k text, uk text, t bigint, up text, f bigint, v bigint,"
-		        "  r bigint, p text, s integer, e integer, z bigint, l bigint, m bigint, h bigint)", 2, params, NULL, error))
+		        "  r bigint, p text, s integer, e integer, z bigint, l bigint, m bigint, h bigint, kk boolean)", 2, params,
+		        NULL, error))
 			return FALSE;
 	}
 	if (l->n_excluded > 0) {
@@ -226,6 +228,7 @@ decide(
 	const gchar *folder = axis_db_result_is_null(result, row, COL_FOLDER) ? NULL :
 		axis_db_result_get_text(result, row, COL_FOLDER);
 	g_autofree gchar *key = NULL;
+	gboolean kept = bool_at(result, row, COL_KEPT);
 	const gchar *kind;
 	const gchar *unit_path;
 	gint64 title = 0;
@@ -235,8 +238,11 @@ decide(
 	 * does not replace this one (gate "kept"), until the keep is lifted, or
 	 * unless an administrator chose, for this run, to convert kept files.
 	 * The choice passes over this reason only: the file is decided by
-	 * everything below exactly as a file that is not kept. */
-	if (bool_at(result, row, COL_KEPT) && !l->convert_kept) {
+	 * everything below exactly as a file that is not kept.  The entry says
+	 * that the choice covers it (it is kept now); a file that is not kept now
+	 * is not covered, and a mark set on it later refuses it when its turn
+	 * comes. */
+	if (kept && !l->convert_kept) {
 		exclude(l, file, "kept");
 		return;
 	}
@@ -301,6 +307,8 @@ decide(
 	json_builder_add_int_value(l->entries, estimate.mid);
 	json_builder_set_member_name(l->entries, "h");
 	json_builder_add_int_value(l->entries, estimate.high);
+	json_builder_set_member_name(l->entries, "kk");
+	json_builder_add_boolean_value(l->entries, kept && l->convert_kept);
 	json_builder_end_object(l->entries);
 	l->n_entries++;
 	l->listed++;
@@ -581,12 +589,15 @@ axis_conversion_runs_build_list(
 	g_autofree gchar *roots = NULL;
 	g_autofree gchar *relist = NULL;
 	g_autofree gchar *chosen_by = NULL;
+	g_autofree gchar *outcome = NULL;
 	AxisEstimateTarget built;
 	const gchar *params[4];
 	gint64 title_id = 0;
 	gint64 revision_id = 0;
 	gint64 cap_files = 0;
 	gint64 cap_bytes = 0;
+	gint64 cap_seconds = 0;
+	gint64 started_us = 0;
 	List l;
 	gboolean ok = FALSE;
 
@@ -596,7 +607,8 @@ axis_conversion_runs_build_list(
 	l.run_id = run_id;
 	params[0] = id;
 	if (!axis_db_pool_exec(self->conversions->pool, "SELECT state, scope, root_ids::text, coalesce(title_id, 0),"
-	        " revision_id, convert_kept, relist_state, coalesce(cap_files, 0), coalesce(cap_bytes, 0), convert_kept_by"
+	        " revision_id, convert_kept, relist_state, coalesce(cap_files, 0), coalesce(cap_bytes, 0), convert_kept_by,"
+	        " outcome, coalesce(cap_seconds, 0), coalesce((extract(epoch FROM started_at) * 1000000)::bigint, 0)"
 	        " FROM conversion_run WHERE id = $1::bigint", 1, params, &run, error))
 		return FALSE;
 	if (axis_db_result_get_n_rows(run) != 1 || g_strcmp0(axis_db_result_get_text(run, 0, 0), "listing") != 0)
@@ -613,6 +625,9 @@ axis_conversion_runs_build_list(
 	cap_files = int_at(run, 0, 7, 0);
 	cap_bytes = int_at(run, 0, 8, 0);
 	chosen_by = axis_db_result_is_null(run, 0, 9) ? NULL : g_strdup(axis_db_result_get_text(run, 0, 9));
+	outcome = axis_db_result_is_null(run, 0, 10) ? NULL : g_strdup(axis_db_result_get_text(run, 0, 10));
+	cap_seconds = int_at(run, 0, 11, 0);
+	started_us = int_at(run, 0, 12, 0);
 
 	/* The revision's target, configured as every estimate's is, and the
 	 * model with its calibration. */
@@ -645,35 +660,82 @@ axis_conversion_runs_build_list(
 	        error))
 		goto rollback;
 	if (l.adding) {
+		g_autoptr(AxisDbResult) before = NULL;
+		g_autoptr(AxisDbResult) added = NULL;
+		g_autofree gchar *last = NULL;
 		g_autofree gchar *cap = NULL;
 		g_autofree gchar *pause = NULL;
+		g_autofree gchar *finish = NULL;
+		const gchar *who = chosen_by != NULL ? chosen_by : "An administrator";
 		const gchar *target;
-		const gchar *more[4];
+		const gchar *more[5];
+		gboolean replacing = g_strcmp0(outcome, "replace") == 0;
+		gboolean budget_used = cap_seconds > 0 && started_us > 0 &&
+			axis_conversion_run_now(self) - started_us >= cap_seconds * G_USEC_PER_SEC;
 		gint cap_unit = -1;
+		gint64 within = 0;
+		gint64 beyond = 0;
+		gint64 taken_out = 0;
 
 		/* The list there is stays: only the files it left out as kept are
 		 * decided, listed after what is there, or left out for their other
-		 * reason; then no file is left out as kept. */
+		 * reason; then no file is left out as kept.  The entries added are
+		 * those after the last one there is. */
+		if (!axis_db_conn_exec(l.conn, "SELECT coalesce(max(id), 0) FROM conversion_run_entry WHERE run_id = $1::bigint",
+		        1, params, &before, error))
+			goto rollback;
+		last = int_text(int_at(before, 0, 0, 0));
 		if (!read_scope(&l, scope, roots, title_id, revision_id, error))
 			goto rollback;
 		if (context != NULL)
 			axis_job_context_set_progress(context, 0.9, "adding to the list");
+		/* Added to a run that replaces originals: each file's original is
+		 * replaced on the confirmation given for it (with the choice, in one
+		 * step, by the same person), not on the one the run had. */
+		if (replacing && !axis_db_conn_exec(l.conn, "UPDATE conversion_run_entry e SET confirmed_by = r.convert_kept_by,"
+		        " confirmed_at = r.convert_kept_at FROM conversion_run r WHERE e.run_id = $1::bigint AND e.position = 0"
+		        " AND r.id = e.run_id", 1, params, NULL, error))
+			goto rollback;
 		if (!axis_db_conn_exec(l.conn, "DELETE FROM conversion_run_excluded WHERE run_id = $1::bigint AND reason = 'kept'",
 		        1, params, NULL, error) ||
 		    !add_units(&l, error) || !recount_reasons(&l, error) ||
 		    !axis_conversion_run_cap_unit(l.conn, run_id, cap_files, cap_bytes, &cap_unit, error))
 			goto rollback;
-		/* A finished run with files to convert now waits for a person. */
-		target = g_strcmp0(relist, "finished") == 0 && l.listed > 0 ? "paused" : relist;
-		if (g_strcmp0(relist, "finished") == 0 && l.listed > 0)
-			pause = g_strdup_printf("%s added %" G_GINT64_FORMAT " file%s Axis keeps to the list of this run, which had "
-				"finished. Resume the run to convert them.", chosen_by != NULL ? chosen_by : "An administrator", l.listed,
-				l.listed == 1 ? "" : "s");
 		cap = cap_unit >= 0 ? int_text(cap_unit) : NULL;
+		/* What the run can convert of them: those that wait within its caps
+		 * (not those of a movie or series taken out, not those beyond). */
 		more[0] = id;
+		more[1] = last;
+		more[2] = cap;
+		if (!axis_db_conn_exec(l.conn, "SELECT count(*) FILTER (WHERE e.state = 'waiting' AND ($3::integer IS NULL"
+		        "  OR e.unit_position <= $3::integer)),"
+		        " count(*) FILTER (WHERE e.state = 'waiting' AND $3::integer IS NOT NULL AND e.unit_position > $3::integer),"
+		        " count(*) FILTER (WHERE e.state = 'removed')"
+		        " FROM conversion_run_entry e WHERE e.run_id = $1::bigint AND e.id > $2::bigint", 3, more, &added, error))
+			goto rollback;
+		within = int_at(added, 0, 0, 0);
+		beyond = int_at(added, 0, 1, 0);
+		taken_out = int_at(added, 0, 2, 0);
+		/* A finished run with files it can convert now waits for a person;
+		 * one that can convert none of them stays finished, and says why.  No
+		 * run starts by itself: a ready run waits to be started, a paused
+		 * one to be resumed. */
+		target = g_strcmp0(relist, "finished") == 0 && within > 0 && !budget_used ? "paused" : relist;
+		if (g_strcmp0(target, "paused") == 0 && g_strcmp0(relist, "finished") == 0)
+			pause = g_strdup_printf("%s added %" G_GINT64_FORMAT " file%s Axis keeps to the list of this run, which had "
+				"finished%s. Resume the run to convert %s%s.", who, within, within == 1 ? "" : "s", replacing ?
+				", and confirmed that their originals are replaced" : "", within == 1 ? "it" : "them",
+				replacing ? "" : " as trials");
+		else if (g_strcmp0(relist, "finished") == 0 && l.listed > 0)
+			finish = g_strdup_printf("%s added %" G_GINT64_FORMAT " file%s Axis keeps to the list after the run "
+				"finished; it cannot convert any of them, %s. Make a new run with \"Also convert files Axis keeps\" to "
+				"convert them.", who, l.listed, l.listed == 1 ? "" : "s", budget_used ? "as its time budget is used up" :
+				beyond > 0 && taken_out > 0 ? "as they are beyond its caps or in a movie or series taken out of its list" :
+				beyond > 0 ? "as they are beyond its caps" : "as they are in a movie or series taken out of its list");
 		more[1] = target;
 		more[2] = cap;
 		more[3] = pause;
+		more[4] = finish;
 		if (!axis_db_conn_exec(l.conn, "UPDATE conversion_run SET state = $2, relist_state = NULL, cap_unit = $3::integer,"
 		        " list_text = NULL, listed_at = now(),"
 		        " pause_code = CASE WHEN $4::text IS NOT NULL THEN 'person' ELSE pause_code END,"
@@ -681,10 +743,11 @@ axis_conversion_runs_build_list(
 		        " paused_at = CASE WHEN $4::text IS NOT NULL THEN now() ELSE paused_at END,"
 		        " paused_by = CASE WHEN $4::text IS NOT NULL THEN convert_kept_by ELSE paused_by END,"
 		        " finished_at = CASE WHEN $2 = 'finished' THEN finished_at END,"
-		        " finish_text = CASE WHEN $2 = 'finished' THEN finish_text END,"
+		        " finish_text = CASE WHEN $2 = 'finished' THEN CASE WHEN $5::text IS NULL THEN finish_text"
+		        "  ELSE left(coalesce(finish_text || ' ', '') || $5::text, 2000) END END,"
 		        " failed_in_row = CASE WHEN $4::text IS NOT NULL THEN 0 ELSE failed_in_row END,"
 		        " refused_in_row = CASE WHEN $4::text IS NOT NULL THEN 0 ELSE refused_in_row END,"
-		        " updated_at = now() WHERE id = $1::bigint AND state = 'listing' RETURNING id", 4, more, &updated, error))
+		        " updated_at = now() WHERE id = $1::bigint AND state = 'listing' RETURNING id", 5, more, &updated, error))
 			goto rollback;
 		if (axis_db_result_get_n_rows(updated) != 1)
 			goto rollback_quietly;

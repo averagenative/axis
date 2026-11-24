@@ -20,13 +20,31 @@
 --                    to when the job ends ('ready', 'paused' or 'finished');
 --                    NULL for a run whose first list is being made.
 --
---   conversion       convert_kept: the person (or the run) chose to convert
---                    the file although it is kept; the condition "kept" is
---                    read with it at the request, when a worker takes the
---                    work and just before the original is replaced.
+--   conversion_run_entry
+--                    convert_kept: the run's choice covers this file: it was
+--                    kept when the list was made, or when the kept files were
+--                    added to it, by a run with the choice.  A file that
+--                    becomes kept afterwards is not covered: the condition
+--                    "kept" refuses it when its turn comes, as without the
+--                    choice.
+--                    confirmed_by, confirmed_at: for a file added to a run
+--                    that replaces originals, the administrator who confirmed
+--                    that its original is replaced, and when (the run's own
+--                    confirmed_by is for the files it had then); NULL for
+--                    every other entry.
+--
+--   conversion       convert_kept: the choice covered the file when the
+--                    conversion was asked for: the person (or the run) chose
+--                    to convert kept files and the file was kept then.  The
+--                    condition "kept" is read with it when a worker takes the
+--                    work and just before the original is replaced, so a file
+--                    that becomes kept after the request is refused there as
+--                    without the choice.
 --
 -- Only adds columns with defaults: safe on a live database; every row there
--- was keeps the behaviour it had (the choice is off).
+-- was keeps the behaviour it had (the choice is off).  The entries' check is
+-- added NOT VALID: every row there has the two new columns NULL, so nothing
+-- needs reading, and the check holds for every row written from now on.
 
 ALTER TABLE conversion_run
 	ADD COLUMN convert_kept    boolean     NOT NULL DEFAULT false,
@@ -39,6 +57,14 @@ ALTER TABLE conversion_run
 		AND (convert_kept_by IS NULL OR char_length(convert_kept_by) BETWEEN 1 AND 200)),
 	ADD CONSTRAINT conversion_run_relist CHECK (
 		relist_state IS NULL OR (relist_state IN ('ready', 'paused', 'finished') AND state = 'listing' AND convert_kept));
+
+ALTER TABLE conversion_run_entry
+	ADD COLUMN convert_kept boolean     NOT NULL DEFAULT false,
+	ADD COLUMN confirmed_by text,
+	ADD COLUMN confirmed_at timestamptz,
+	ADD CONSTRAINT conversion_run_entry_confirmed CHECK (
+		(confirmed_by IS NULL) = (confirmed_at IS NULL)
+		AND (confirmed_by IS NULL OR char_length(confirmed_by) BETWEEN 1 AND 200)) NOT VALID;
 
 ALTER TABLE conversion
 	ADD COLUMN convert_kept boolean NOT NULL DEFAULT false;

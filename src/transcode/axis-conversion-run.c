@@ -102,8 +102,8 @@ axis_conversion_run_reason_help(const gchar *reason)
 	if (g_strcmp0(reason, "in_flight") == 0)
 		return "Someone asked for a conversion of it that has not ended yet; plan a new run when it has.";
 	if (g_strcmp0(reason, "kept") == 0)
-		return "Axis does not replace these files with another release. To convert them in place, add them to this "
-			"run: they stay kept. Or let Axis upgrade a file again on its links page.";
+		return "Axis does not replace these files with another release. A run with \"Also convert files Axis keeps\" "
+			"converts them in place, and they stay kept. Or let Axis upgrade a file again on its links page.";
 	if (axis_estimate_reason_from_string(reason, &estimated))
 		return axis_estimate_reason_help(estimated);
 	return "";
@@ -1076,6 +1076,7 @@ gboolean
 axis_conversion_runs_include_kept(
 	AxisConversionRuns  *self,
 	gint64               run_id,
+	gboolean             confirmed,
 	const gchar         *user,
 	GError             **error
 ){
@@ -1139,6 +1140,15 @@ axis_conversion_runs_include_kept(
 			"No file of the run is left out because Axis keeps it.");
 		goto rollback;
 	}
+	/* A run that replaces originals replaces these too: that is confirmed
+	 * for them, as for the run's own files when it was switched to
+	 * replacing, and the confirmation is theirs (who, when), not the run's.
+	 * Without it nothing changes. */
+	if (g_strcmp0(row.outcome, "replace") == 0 && !confirmed) {
+		refuse(error, "This run replaces originals: adding the files Axis keeps replaces their originals too, once "
+			"every check passes. It needs the confirmation ticked.");
+		goto rollback;
+	}
 	key = g_strdup_printf(AXIS_CONVERSION_RUN_LIST_KIND ":%" G_GINT64_FORMAT ":kept", run_id);
 	json_object_set_int_member(payload, "run", run_id);
 	memset(&spec, 0, sizeof(spec));
@@ -1163,7 +1173,8 @@ axis_conversion_runs_include_kept(
 	if (!axis_db_conn_commit(conn, error))
 		goto rollback;
 	g_message("audit: %s chose to convert the files Axis keeps in conversion run %" G_GINT64_FORMAT " (%" G_GINT64_FORMAT
-		" left out as kept; the run was %s)", user, run_id, kept, row.state);
+		" left out as kept; the run was %s%s)", user, run_id, kept, row.state, g_strcmp0(row.outcome, "replace") == 0 ?
+		", replacing originals; they confirmed that the originals of the files added are replaced" : "");
 	ok = TRUE;
 	goto out;
 

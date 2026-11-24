@@ -779,9 +779,12 @@ source_hdr_class(const AxisEstimateFile *file)
  * The one request: a person's from the confirmation page, or a run's for
  * the person who started it (@run_id, @entry_id; 0 for none), with exactly
  * the same gates.  *@refused_gate (when given) is the id of the gate that
- * refused, when one did.  @convert_kept is the person's tick, or the run's
- * choice: it is recorded with the conversion, so that the claim and check
- * 10 read the gate "kept" as the request did.
+ * refused, when one did.  @convert_kept_by is the person who chose to
+ * convert kept files (the person's tick, or the run's choice), NULL for no
+ * choice.  What is recorded with the conversion is whether the choice
+ * covered the file: chosen, and the file kept now.  The claim and check 10
+ * read the gate "kept" with that, so a file that becomes kept after the
+ * request is refused there as without the choice.
  */
 static gboolean
 request(
@@ -790,7 +793,7 @@ request(
 	gint64                  revision_id,
 	AxisConversionOutcome   outcome,
 	gboolean                confirmed,
-	gboolean                convert_kept,
+	const gchar            *convert_kept_by,
 	const gchar            *user,
 	gint64                  run_id,
 	gint64                  entry_id,
@@ -808,6 +811,8 @@ request(
 	const AxisEstimateFile *file;
 	struct stat now;
 	AxisDbConn *conn;
+	gboolean convert_kept = convert_kept_by != NULL && convert_kept_by[0] != '\0';
+	gboolean covered = FALSE;
 	gboolean ok = FALSE;
 
 	*conversion_id = 0;
@@ -886,6 +891,10 @@ request(
 	}
 
 	file = facts.file;
+	/* The choice is recorded for a file it covers: one that is kept now.  A
+	 * file that is not kept is asked for as without it, so that the mark set
+	 * on it later is read at the claim and at check 10 as it would be. */
+	covered = convert_kept && facts.kept;
 	if (!axis_db_conn_begin(conn, error))
 		goto out;
 	{
@@ -927,7 +936,7 @@ request(
 		params[19] = source_hdr_class(file);
 		params[20] = run;
 		params[21] = entry;
-		params[22] = convert_kept ? "true" : "false";
+		params[22] = covered ? "true" : "false";
 		if (!axis_db_conn_exec(conn, "INSERT INTO conversion (file_id, volume_id, root_id, root_path, rel_path,"
 		        " new_rel_path, container, revision_id, outcome, requested_by, verdict, src_size, src_mtime_sec,"
 		        " src_mtime_nsec, src_ctime_sec, src_ctime_nsec, src_inode, src_nlink, source_quality, source_hdr,"
@@ -991,15 +1000,19 @@ request(
 	ok = axis_db_conn_commit(conn, error);
 	if (!ok)
 		goto rollback;
-	if (run_id > 0)
+	if (run_id > 0 && covered)
 		g_message("audit: %s requested conversion %" G_GINT64_FORMAT " (%s) of file %" G_GINT64_FORMAT " with revision %"
-			G_GINT64_FORMAT " through conversion run %" G_GINT64_FORMAT "%s", user, *conversion_id,
-			axis_conversion_outcome_to_string(outcome), file_id, revision_id, run_id,
-			convert_kept && facts.kept ? "; the file is kept, and the run converts kept files" : "");
+			G_GINT64_FORMAT " through conversion run %" G_GINT64_FORMAT "; the file is kept, and %s chose to convert "
+			"the files Axis keeps in this run", user, *conversion_id, axis_conversion_outcome_to_string(outcome), file_id,
+			revision_id, run_id, convert_kept_by);
+	else if (run_id > 0)
+		g_message("audit: %s requested conversion %" G_GINT64_FORMAT " (%s) of file %" G_GINT64_FORMAT " with revision %"
+			G_GINT64_FORMAT " through conversion run %" G_GINT64_FORMAT, user, *conversion_id,
+			axis_conversion_outcome_to_string(outcome), file_id, revision_id, run_id);
 	else
 		g_message("audit: %s requested conversion %" G_GINT64_FORMAT " (%s) of file %" G_GINT64_FORMAT " with revision %"
 			G_GINT64_FORMAT "%s", user, *conversion_id, axis_conversion_outcome_to_string(outcome), file_id, revision_id,
-			convert_kept && facts.kept ? "; the file is kept, and they chose to convert it" : "");
+			covered ? "; the file is kept, and they chose to convert it" : "");
 	goto out;
 
 rollback:
@@ -1031,7 +1044,7 @@ axis_conversions_request(
 	gint64                 *conversion_id,
 	GError                **error
 ){
-	return request(self, file_id, revision_id, outcome, confirmed, FALSE, user, 0, 0, conversion_id, NULL, error);
+	return request(self, file_id, revision_id, outcome, confirmed, NULL, user, 0, 0, conversion_id, NULL, error);
 }
 
 gboolean
@@ -1046,8 +1059,8 @@ axis_conversions_request_full(
 	gint64                 *conversion_id,
 	GError                **error
 ){
-	return request(self, file_id, revision_id, outcome, confirmed, convert_kept, user, 0, 0, conversion_id, NULL,
-		error);
+	return request(self, file_id, revision_id, outcome, confirmed, convert_kept ? user : NULL, user, 0, 0,
+		conversion_id, NULL, error);
 }
 
 gboolean
@@ -1057,7 +1070,7 @@ axis_conversions_request_for_run(
 	gint64                  revision_id,
 	AxisConversionOutcome   outcome,
 	gboolean                confirmed,
-	gboolean                convert_kept,
+	const gchar            *convert_kept_by,
 	const gchar            *user,
 	gint64                  run_id,
 	gint64                  entry_id,
@@ -1067,7 +1080,7 @@ axis_conversions_request_for_run(
 ){
 	g_return_val_if_fail(run_id > 0 && entry_id > 0, FALSE);
 
-	return request(self, file_id, revision_id, outcome, confirmed, convert_kept, user, run_id, entry_id,
+	return request(self, file_id, revision_id, outcome, confirmed, convert_kept_by, user, run_id, entry_id,
 		conversion_id, refused_gate, error);
 }
 

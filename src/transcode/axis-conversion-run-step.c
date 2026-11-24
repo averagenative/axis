@@ -453,7 +453,6 @@ typedef struct
 	gchar  *confirmed_by;
 	gint64  in_flight;
 	gint64  in_flight_trials;
-	gboolean convert_kept;	/* the run's stored choice (convert-kept-files) */
 } Running;
 
 static void
@@ -481,7 +480,7 @@ load_running(
 	        " coalesce((extract(epoch FROM r.started_at) * 1000000)::bigint, 0), r.started_by, r.confirmed_by,"
 	        " (SELECT count(*) FROM conversion_run_entry e WHERE e.run_id = r.id AND e.state = 'asked'),"
 	        " (SELECT count(*) FROM conversion_run_entry e WHERE e.run_id = r.id AND e.state = 'asked'"
-	        "  AND e.outcome = 'trial'), coalesce(r.current_unit, 0), r.convert_kept"
+	        "  AND e.outcome = 'trial'), coalesce(r.current_unit, 0)"
 	        " FROM conversion_run r WHERE r.state = 'running' ORDER BY r.id LIMIT 1", 0, NULL, &result, error))
 		return FALSE;
 	if (axis_db_result_get_n_rows(result) != 1)
@@ -501,7 +500,6 @@ load_running(
 	r->in_flight = int_at(result, 0, 11);
 	r->in_flight_trials = int_at(result, 0, 12);
 	r->current_unit = (gint)int_at(result, 0, 13);
-	axis_db_result_get_boolean(result, 0, 14, &r->convert_kept);
 	return TRUE;
 }
 
@@ -802,6 +800,8 @@ ask_one(
 	g_autofree gchar *id = int_text(entry_id);
 	g_autofree gchar *run_text = int_text(run->id);
 	g_autofree gchar *name = file_text(rel_path);
+	g_autofree gchar *kept_by = NULL;
+	g_autofree gchar *entry_confirmed_by = NULL;
 	gboolean replace = g_strcmp0(run->outcome, "replace") == 0;
 	const gchar *user = replace ? run->confirmed_by : run->started_by;
 	const gchar *params[3];
@@ -820,15 +820,27 @@ ask_one(
 	params[0] = id;
 	params[1] = run_text;
 	params[2] = replace ? "replace" : "trial";
-	if (!exec(self, "UPDATE conversion_run_entry SET state = 'asked', outcome = $3, asked_at = now() WHERE id = $1::bigint"
-	        " AND run_id = $2::bigint AND state = 'waiting'"
-	        " AND EXISTS (SELECT 1 FROM conversion_run r WHERE r.id = $2::bigint AND r.state = 'running') RETURNING id", 3,
+	/* Marked asked, and read with it as the run is now (not as the step
+	 * found it when it began): who chose to convert kept files when the
+	 * choice covers this file (it was kept when it was listed, or added),
+	 * and who confirmed that its original is replaced when it was added to
+	 * a run that replaces originals. */
+	if (!exec(self, "UPDATE conversion_run_entry e SET state = 'asked', outcome = $3, asked_at = now()"
+	        " FROM conversion_run r WHERE e.id = $1::bigint AND e.run_id = $2::bigint AND e.state = 'waiting'"
+	        " AND r.id = e.run_id AND r.state = 'running'"
+	        " RETURNING e.id, CASE WHEN r.convert_kept AND e.convert_kept THEN r.convert_kept_by END, e.confirmed_by", 3,
 	        params, &marked, error))
 		return ASK_STOP;
 	if (axis_db_result_get_n_rows(marked) != 1)
 		return ASK_STOP;
+	kept_by = g_strdup(text_at(marked, 0, 1));
+	entry_confirmed_by = g_strdup(text_at(marked, 0, 2));
+	/* A file added to a replacing run is replaced on the confirmation given
+	 * for it, by the person who gave it. */
+	if (replace && entry_confirmed_by != NULL)
+		user = entry_confirmed_by;
 	if (axis_conversions_request_for_run(self->conversions, file_id, run->revision_id, replace ?
-	        AXIS_CONVERSION_REPLACE : AXIS_CONVERSION_TRIAL, replace && run->confirmed_by != NULL, run->convert_kept,
+	        AXIS_CONVERSION_REPLACE : AXIS_CONVERSION_TRIAL, replace && user != NULL, kept_by,
 	        user != NULL ? user : "?", run->id, entry_id, &conversion, &gate, &local)) {
 		g_autoptr(AxisDbResult) state = NULL;
 		g_autofree gchar *conv = int_text(conversion);

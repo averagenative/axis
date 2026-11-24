@@ -1271,6 +1271,12 @@ test_kept(Fixture *fx, gconstpointer data)
 	assert_contains(reply.body, "Add these 2 files to the run");
 	assert_contains(reply.body, "/include-kept\"");
 	assert_contains(reply.body, "1 movies and series, 1 files of the 3 looked at");
+	/* A run not started: nothing is converted until it is, and how is
+	 * chosen then; no box to tick here. */
+	assert_contains(reply.body, "They join the list. Nothing is converted until you start the run: with trials, or "
+		"replacing originals once you confirm that for every file of the list.");
+	assert_lacks(reply.body, "This run replaces originals");
+	assert_lacks(reply.body, "name=\"confirm\"");
 	axis_test_reply_clear(&reply);
 	reply = post_as(fx, fx->viewer, action, "");
 	g_assert_cmpuint(reply.status, ==, 403);
@@ -1796,6 +1802,124 @@ test_progress(Fixture *fx, gconstpointer data)
 	axis_test_reply_clear(&reply);
 }
 
+/*
+ * Spec (conversion-runs, Kept files added to a run): on a run that replaces
+ * originals, "Add these N files to the run" says that their N originals are
+ * replaced by their converted files once every check passes, with the
+ * sentence and the box of the switch to replacing; a form without the tick
+ * is refused and nothing changes; with it the files are added, each with
+ * who confirmed it, and the run waits, paused, its Resume saying how many
+ * originals it will replace.  On a run of trials the row says that they are
+ * added as trials, with no box.
+ */
+static void
+test_kept_replacing(Fixture *fx, gconstpointer data)
+{
+	g_autoptr(GError) error = NULL;
+	g_autofree gchar *form = NULL;
+	g_autofree gchar *path = NULL;
+	g_autofree gchar *action = NULL;
+	g_autofree gchar *done = NULL;
+	g_autofree gchar *trials_path = NULL;
+	AxisTestReply reply;
+	gint64 run;
+	gint64 trials;
+
+	movie(fx, "Lantern Hill (2001)", 12);
+	movie(fx, "Copper Road (2002)", 24);
+	movie(fx, "Glass Orchard (2003)", 18);
+	keep_movie(fx, "Lantern Hill (2001)");
+	keep_movie(fx, "Glass Orchard (2003)");
+	sql(fx, "INSERT INTO conversion_profile_proof (revision_id, method) VALUES (%" G_GINT64_FORMAT ", 'canary')",
+		fx->space_saver);
+	form = g_strdup_printf("scope=movies&revision=%" G_GINT64_FORMAT, fx->space_saver);
+
+	/* A run that replaces originals, paused after its one file. */
+	run = plan(fx, form);
+	list(fx, run);
+	g_assert_true(axis_conversion_runs_start(fx->runs, run, AXIS_CONVERSION_REPLACE, TRUE, "root", &error));
+	g_assert_no_error(error);
+	step(fx);
+	g_assert_true(axis_conversion_runs_pause(fx->runs, run, "root", &error));
+	g_assert_no_error(error);
+	sql(fx, "INSERT INTO conversion_check (conversion_id, number, result, detail) SELECT c.id, n, 'passed', 'as planned'"
+		" FROM conversion c, generate_series(1, 10) n WHERE c.run_id = %" G_GINT64_FORMAT, run);
+	sql(fx, "UPDATE conversion SET state = 'done', finished_at = now(), output_size = src_size / 2,"
+		" output_reported = src_size / 2 WHERE run_id = %" G_GINT64_FORMAT, run);
+	step(fx);
+	g_assert_cmpstr(Q(fx, "SELECT state || ' ' || outcome FROM conversion_run WHERE id = %" G_GINT64_FORMAT, run), ==,
+		"paused replace");
+
+	path = g_strdup_printf("/conversions/runs/%" G_GINT64_FORMAT, run);
+	action = g_strdup_printf("%s/include-kept", path);
+	reply = page(fx, path, "run-kept-replacing");
+	assert_contains(reply.body, "This run replaces originals. If you add these 2 files, their 2 originals are replaced "
+		"by their converted files once every check passes. They stay kept, so Axis still does not replace them with "
+		"another release. The run waits, paused, until you resume it.");
+	assert_contains(reply.body, "For each file: The original will be deleted after the new file has passed every check");
+	assert_contains(reply.body, "I understand: the originals will be deleted");
+	assert_contains(reply.body, "name=\"confirm\"");
+	assert_contains(reply.body, "Add these 2 files to the run");
+	assert_contains(reply.body, "Resume the run, replacing up to 0 originals");
+	assert_lacks(reply.body, "They are added as trials");
+	axis_test_reply_clear(&reply);
+
+	/* Without the tick (a form forged without it, or anything but the
+	 * tick): refused, and nothing changes. */
+	reply = post_as(fx, fx->admin, action, "");
+	g_assert_cmpuint(reply.status, ==, 409);
+	assert_contains(reply.body, "This run replaces originals");
+	axis_test_reply_clear(&reply);
+	reply = post_as(fx, fx->admin, action, "confirm=on");
+	g_assert_cmpuint(reply.status, ==, 409);
+	axis_test_reply_clear(&reply);
+	g_assert_cmpstr(Q(fx, "SELECT state || ' ' || convert_kept::text || ' ' || coalesce(relist_state, '-')"
+		" FROM conversion_run WHERE id = %" G_GINT64_FORMAT, run), ==, "paused false -");
+	g_assert_cmpint(N(fx, "SELECT count(*) FROM conversion_run_entry WHERE run_id = %" G_GINT64_FORMAT, run), ==, 1);
+
+	/* With it: added, each with who confirmed it; the run waits. */
+	reply = post_as(fx, fx->admin, action, "confirm=yes");
+	done = g_strdup_printf("%s?done=kept&at=run-left-out#run-left-out", path);
+	expect_redirect(&reply, done);
+	g_assert_cmpstr(Q(fx, "SELECT state || ' ' || relist_state || ' ' || convert_kept_by FROM conversion_run WHERE id = %"
+		G_GINT64_FORMAT, run), ==, "listing paused root");
+	list(fx, run);
+	g_assert_cmpint(N(fx, "SELECT count(*) FROM conversion_run_entry WHERE run_id = %" G_GINT64_FORMAT
+		" AND confirmed_by = 'root' AND confirmed_at IS NOT NULL AND state = 'waiting'", run), ==, 2);
+	reply = page(fx, path, "run-kept-replacing-added");
+	assert_contains(reply.body, "Resume the run, replacing up to 2 originals");
+	assert_contains(reply.body, "The run replaces originals: resuming it replaces up to 2 originals, the files of the "
+		"list that wait within its caps, each once every check passes.");
+	assert_contains(reply.body, "Paused by root.");
+	assert_lacks(reply.body, "Add these");
+	axis_test_reply_clear(&reply);
+	step(fx);
+	g_assert_cmpint(N(fx, "SELECT count(*) FROM conversion WHERE run_id = %" G_GINT64_FORMAT, run), ==, 1);
+
+	/* A run of trials, paused with nothing in flight (its version is proven
+	 * already, so it pauses itself for the switch to replacing): added as
+	 * trials. */
+	sql(fx, "DELETE FROM conversion_memory");
+	trials = plan(fx, form);
+	g_assert_cmpint(trials, !=, run);
+	list(fx, trials);
+	g_assert_true(axis_conversion_runs_start(fx->runs, trials, AXIS_CONVERSION_TRIAL, FALSE, "root", &error));
+	g_assert_no_error(error);
+	step(fx);
+	g_assert_cmpstr(Q(fx, "SELECT state || ' ' || outcome FROM conversion_run WHERE id = %" G_GINT64_FORMAT, trials), ==,
+		"paused trial");
+	g_assert_cmpint(N(fx, "SELECT count(*) FROM conversion_run_entry WHERE run_id = %" G_GINT64_FORMAT
+		" AND state = 'asked'", trials), ==, 0);
+	trials_path = g_strdup_printf("/conversions/runs/%" G_GINT64_FORMAT, trials);
+	reply = page(fx, trials_path, "run-kept-trials");
+	assert_contains(reply.body, "They are added as trials: each is converted and checked, and the converted file is kept "
+		"aside to be played. The library is not touched. The run waits, paused, until you resume it.");
+	assert_contains(reply.body, "Add these 2 files to the run");
+	assert_lacks(reply.body, "This run replaces originals");
+	assert_lacks(reply.body, "replacing up to");
+	axis_test_reply_clear(&reply);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -1803,6 +1927,7 @@ main(int argc, char **argv)
 
 	AXIS_TEST_ADD_DB_CASE("/web/conversion-runs/kept", Fixture, NULL, test_kept);
 	AXIS_TEST_ADD_DB_CASE("/web/conversion-runs/kept-single", Fixture, NULL, test_kept_single);
+	AXIS_TEST_ADD_DB_CASE("/web/conversion-runs/kept-replacing", Fixture, NULL, test_kept_replacing);
 	AXIS_TEST_ADD_DB_CASE("/web/conversion-runs/progress", Fixture, NULL, test_progress);
 	AXIS_TEST_ADD_DB_CASE("/web/conversion-runs/pages", Fixture, NULL, test_pages);
 	AXIS_TEST_ADD_DB_CASE("/web/conversion-runs/actions", Fixture, NULL, test_actions);

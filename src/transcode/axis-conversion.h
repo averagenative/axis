@@ -572,10 +572,14 @@ axis_conversions_request(
  * @convert_kept: the administrator ticked "Also convert files Axis keeps"
  *   on the confirmation
  *
- * axis_conversions_request(), with the choice recorded with the conversion:
- * the condition "kept" holds for it at the request, when a worker takes the
- * work and just before the original is replaced.  Every other condition and
- * every check is as without it, and the converted file stays kept.
+ * axis_conversions_request(), with the choice.  It covers the file when the
+ * file is kept at the request, and is then recorded with the conversion: the
+ * condition "kept" holds for it at the request, when a worker takes the work
+ * and just before the original is replaced.  For a file that is not kept at
+ * the request nothing of the choice is recorded, so a mark set on it later
+ * refuses it at the claim or at check 10 as without the choice.  Every other
+ * condition and every check is as without it, and the converted file stays
+ * kept.
  */
 gboolean
 axis_conversions_request_full(
@@ -594,7 +598,10 @@ axis_conversions_request_full(
  * axis_conversions_request_for_run:
  * @confirmed: the person who started the run ticked, on the run's page,
  *   that originals will be deleted (needed for a replacement)
- * @convert_kept: the run converts kept files (its stored choice)
+ * @convert_kept_by: (nullable): who chose that the run converts kept files,
+ *   when its choice covers this file of its list (it was kept when listed);
+ *   %NULL otherwise.  Recorded as for axis_conversions_request_full(), and
+ *   named in the audit line.
  * @user: that person
  * @run_id, @entry_id: the conversion run and its entry that ask
  * @refused_gate: (out) (optional) (transfer full): the id of the gate that
@@ -612,7 +619,7 @@ axis_conversions_request_for_run(
 	gint64                  revision_id,
 	AxisConversionOutcome   outcome,
 	gboolean                confirmed,
-	gboolean                convert_kept,
+	const gchar            *convert_kept_by,
 	const gchar            *user,
 	gint64                  run_id,
 	gint64                  entry_id,

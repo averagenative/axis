@@ -330,15 +330,18 @@ axis_conversion_runs_get(
 	revision = int_text(info->revision_id);
 
 	/* Its files by state, what the done ones came to, its units done (every
-	 * file of the unit settled and one done at least). */
+	 * file of the unit settled and one done at least), the files that wait
+	 * within its caps. */
+	params[1] = cap;
 	if (!exec(self, "SELECT " ENTRY_COUNTS ","
 	        " coalesce(sum(e.size) FILTER (WHERE e.state = 'done'), 0), coalesce(sum(e.mid) FILTER (WHERE e.state = 'done'), 0),"
 	        " coalesce(sum(e.result_size) FILTER (WHERE e.state = 'done'), 0),"
 	        " count(*) FILTER (WHERE e.state = 'done' AND e.outcome = 'trial'),"
 	        " (SELECT count(*) FROM (SELECT 1 FROM conversion_run_entry x WHERE x.run_id = $1::bigint GROUP BY x.unit_position"
 	        "   HAVING count(*) FILTER (WHERE x.state IN ('waiting', 'asked')) = 0"
-	        "   AND count(*) FILTER (WHERE x.state = 'done') > 0) d)"
-	        " FROM conversion_run_entry e WHERE e.run_id = $1::bigint", 1, params, &entries, error))
+	        "   AND count(*) FILTER (WHERE x.state = 'done') > 0) d),"
+	        " count(*) FILTER (WHERE e.state = 'waiting' AND ($2::integer < 0 OR e.unit_position <= $2::integer))"
+	        " FROM conversion_run_entry e WHERE e.run_id = $1::bigint", 2, params, &entries, error))
 		return FALSE;
 	counts_from(info, entries, 0, 0);
 	info->done_before = int_at(entries, 0, 6);
@@ -346,8 +349,8 @@ axis_conversion_runs_get(
 	info->done_after = int_at(entries, 0, 8);
 	info->done_trials = int_at(entries, 0, 9);
 	info->units_done = int_at(entries, 0, 10);
+	info->waiting_in = int_at(entries, 0, 11);
 
-	params[1] = cap;
 	if (!exec(self, "SELECT count(*), coalesce(sum(u.files), 0), coalesce(sum(u.bytes), 0), coalesce(sum(u.mid), 0),"
 	        " count(*) FILTER (WHERE $2::integer < 0 OR u.position <= $2::integer),"
 	        " coalesce(sum(u.files) FILTER (WHERE $2::integer < 0 OR u.position <= $2::integer), 0),"

@@ -345,7 +345,8 @@ done_text(const gchar *key)
 		return "Taken out of the list.";
 	if (g_strcmp0(key, "kept") == 0)
 		return "The files Axis keeps are being added to the list (this page follows it): each is listed, or left out "
-			"for another reason of its own. They stay kept. Nothing is converted until the run is started or resumed.";
+			"for another reason of its own. A file that is no longer in the library is not added, so fewer can be "
+			"added than the row said. They stay kept. Nothing is converted until the run is started or resumed.";
 	return NULL;
 }
 
@@ -1263,10 +1264,23 @@ controls_card(
 		g_autofree gchar *pause = g_strdup_printf("%s/pause", base);
 		g_autofree gchar *resume = g_strdup_printf("%s/resume", base);
 
-		if (running)
+		if (running) {
 			ADD(card, small_post(request, pause, "Pause the run", NULL));
-		else
+		} else if (g_strcmp0(info->outcome, "replace") == 0) {
+			/* What resuming does to the library, in numbers: the files that
+			 * wait within its caps, each replaced once every check passes. */
+			g_autofree gchar *label = g_strdup_printf("Resume the run, replacing up to %" G_GINT64_FORMAT " original%s",
+				info->waiting_in, info->waiting_in == 1 ? "" : "s");
+			g_autofree gchar *text = g_strdup_printf("The run replaces originals: resuming it replaces up to %"
+				G_GINT64_FORMAT " original%s, %s of the list that wait%s within its caps, each once every check passes.",
+				info->waiting_in, info->waiting_in == 1 ? "" : "s", info->waiting_in == 1 ? "the file" : "the files",
+				info->waiting_in == 1 ? "s" : "");
+
+			ADD(card, axis_web_storage_text("help", text));
+			ADD(card, small_post(request, resume, label, "button-danger"));
+		} else {
 			ADD(card, small_post(request, resume, "Resume the run", "button-primary"));
+		}
 	}
 	if ((ready || running || paused) && g_strcmp0(info->outcome, "trial") == 0 && may_replace && !ready) {
 		g_autofree gchar *action = g_strdup_printf("%s/replace", base);
@@ -1402,8 +1416,57 @@ may_include_kept(const AxisConversionRunInfo *info)
 		g_strcmp0(info->state, "paused") == 0 || g_strcmp0(info->state, "finished") == 0);
 }
 
+/*
+ * "Add these N files to the run", with what it means for this run.  A run
+ * that replaces originals replaces these too: the form says so, with the
+ * sentence and the box of the switch to replacing, and the server refuses it
+ * without the tick.  A run of trials adds them as trials; a run that has not
+ * started asks how when it is started.  No run starts by itself after it.
+ */
+static HtmxNode *
+include_kept_form(
+	AxisWebRuns                 *self,
+	HtmxRequest                 *request,
+	const AxisConversionRunInfo *info,
+	gint64                       files
+){
+	g_autofree gchar *action = g_strdup_printf("/conversions/runs/%" G_GINT64_FORMAT "/include-kept", info->id);
+	g_autofree gchar *label = g_strdup_printf("Add these %" G_GINT64_FORMAT " file%s to the run", files,
+		files == 1 ? "" : "s");
+	HtmxNode *form = axis_web_auth_post_form(request, action);
+	HtmxDiv *box = htmx_div_new();
+
+	if (g_strcmp0(info->outcome, "replace") == 0) {
+		g_autofree gchar *text = NULL;
+
+		if (files == 1)
+			text = g_strdup("This run replaces originals. If you add this file, its original is replaced by its "
+				"converted file once every check passes. It stays kept, so Axis still does not replace it with another "
+				"release. The run waits, paused, until you resume it.");
+		else
+			text = g_strdup_printf("This run replaces originals. If you add these %" G_GINT64_FORMAT " files, their %"
+				G_GINT64_FORMAT " originals are replaced by their converted files once every check passes. They stay "
+				"kept, so Axis still does not replace them with another release. The run waits, paused, until you "
+				"resume it.", files, files);
+
+		ADD(form, axis_web_storage_text("notice notice-warning", text));
+		replace_confirmation(form, axis_conversion_runs_get_conversions(self->runs));
+		ADD(form, axis_web_auth_button(label, "button-small button-danger"));
+	} else {
+		ADD(form, axis_web_storage_text("help", g_strcmp0(info->state, "ready") == 0 ?
+			"They join the list. Nothing is converted until you start the run: with trials, or replacing originals "
+			"once you confirm that for every file of the list. They stay kept." :
+			"They are added as trials: each is converted and checked, and the converted file is kept aside to be "
+			"played. The library is not touched. The run waits, paused, until you resume it."));
+		ADD(form, axis_web_auth_button(label, "button-small"));
+	}
+	ADD(box, form);
+	return HTMX_NODE(box);
+}
+
 static HtmxNode *
 reasons_card(
+	AxisWebRuns                 *self,
 	HtmxRequest                 *request,
 	const AxisConversionRunInfo *info,
 	GPtrArray                   *reasons,
@@ -1445,15 +1508,7 @@ reasons_card(
 		ADD(row, cell_size(r->bytes));
 		ADD(row, cell_text(axis_conversion_run_reason_help(r->reason)));
 		if (g_strcmp0(r->reason, "kept") == 0 && r->files > 0 && may_include_kept(info)) {
-			g_autofree gchar *action = g_strdup_printf("/conversions/runs/%" G_GINT64_FORMAT "/include-kept", info->id);
-			g_autofree gchar *label = g_strdup_printf("Add these %" G_GINT64_FORMAT " file%s to the run", r->files,
-				r->files == 1 ? "" : "s");
-			HtmxNode *form = small_post(request, action, label, NULL);
-			HtmxDiv *cell = htmx_div_new();
-
-			ADD(cell, form);
-			ADD(cell, htmx_small_new_with_text(AXIS_WEB_CONVERT_KEPT_HELP));
-			ADD(row, cell_node(HTMX_NODE(cell)));
+			ADD(row, cell_node(include_kept_form(self, request, info, r->files)));
 		} else if (g_strcmp0(r->reason, "kept") == 0 && !info->convert_kept && info->asked > 0) {
 			ADD(row, cell_text("You can add these files once nothing of the run is in flight."));
 		} else if (g_strcmp0(r->reason, "kept") == 0 && !info->convert_kept &&
@@ -1612,7 +1667,7 @@ run_done(
 	    g_strcmp0(info->state, "failed") != 0)
 		ADD(content, controls_card(self, request, info, &placed));
 	ADD(content, units_card(request, info, work->units, work->more, work->after, &placed));
-	ADD(content, reasons_card(request, info, work->reasons, &placed));
+	ADD(content, reasons_card(self, request, info, work->reasons, &placed));
 	if (work->recent != NULL && work->recent->len > 0) {
 		HtmxNode *card = axis_web_storage_card("Files finished last");
 
@@ -2036,7 +2091,7 @@ act_run(
 		axis_conversion_runs_remove_unit(self->runs, work->id, (gint)work->target, work->user, &work->error);
 		break;
 	case ACT_INCLUDE_KEPT:
-		axis_conversion_runs_include_kept(self->runs, work->id, work->user, &work->error);
+		axis_conversion_runs_include_kept(self->runs, work->id, work->confirmed, work->user, &work->error);
 		break;
 	default:
 		axis_conversion_runs_remove_entry(self->runs, work->id, work->target, work->user, &work->error);

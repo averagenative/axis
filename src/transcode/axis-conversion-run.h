@@ -16,9 +16,11 @@
  *    be deleted, with a revision that is proven.
  *  - One gate can be lifted, by an administrator's choice stored with the
  *    run (convert-kept-files): "kept".  A run with the choice lists the
- *    files Axis keeps and passes the choice to every request, where it
- *    lifts that gate and no other; the kept mark itself is read, and never
- *    written, by anything here.  Without the choice a run is as before.
+ *    files Axis keeps and passes the choice to the request of each file it
+ *    covers (one kept when it was listed), where it lifts that gate and no
+ *    other; a file that becomes kept later is refused as without the
+ *    choice.  The kept mark itself is read, and never written, by anything
+ *    here.  Without the choice a run is as before.
  *  - The list is built by the estimator's own loader and decision
  *    (axis_estimator_load_files()'s columns, axis_estimate_eligibility()):
  *    there is no second estimator.  A file not in the list has exactly one
@@ -323,6 +325,8 @@ axis_conversion_runs_replace(
 
 /**
  * axis_conversion_runs_include_kept:
+ * @confirmed: the administrator ticked that the originals of the files added
+ *   are replaced (needed for a run that replaces originals)
  * @user: the administrator who chooses it
  *
  * "Add these N files to the run": turns the choice to convert kept files on
@@ -330,22 +334,31 @@ axis_conversion_runs_replace(
  * out as kept to its list.  Allowed for a run that is ready to start, paused
  * or finished, with no file in flight; refused
  * (%AXIS_CONVERSION_ERROR_STATE) for any other state, for a run with a file
- * in flight, and for a run that has the choice already.
+ * in flight, and for a run that has the choice already.  A run that
+ * replaces originals replaces the files added too: without @confirmed it is
+ * refused (%AXIS_CONVERSION_ERROR_REFUSED) and nothing changes; with it,
+ * each file added records @user's confirmation (who, when), and its
+ * replacement is asked for as @user.  A run of trials adds them as trials.
  *
  * The list is added to, not made again: nothing of the entries there are
  * (done, skipped, failed, taken out, their conversions) is touched.  Each
  * file left out as kept is decided as the first list decided it, with the
  * kept mark passed over: listed (at the end of its series' unit, or as new
  * units after those there are, the largest estimated saving first), or left
- * out for its other reason.  The run shows "Making the list" meanwhile and
- * then goes back to ready or paused; a finished run becomes paused, for a
- * person to resume.  When the job fails, the run is as it was, the choice
- * off.
+ * out for its other reason.  The choice covers the files kept when they are
+ * added; one that becomes kept afterwards is refused when its turn comes.
+ * The run shows "Making the list" meanwhile and then goes back to ready or
+ * paused: it never starts by itself.  A finished run with files it can
+ * convert becomes paused, for a person to resume; one that can convert none
+ * of them (beyond its caps, taken out, its time budget used up) stays
+ * finished and says why.  When the job fails, the run is as it was, the
+ * choice off.
  */
 gboolean
 axis_conversion_runs_include_kept(
 	AxisConversionRuns  *self,
 	gint64               run_id,
+	gboolean             confirmed,
 	const gchar         *user,
 	GError             **error
 );
@@ -499,8 +512,11 @@ typedef struct
 	gint64     cap_files_in;
 	gint64     cap_bytes_in;
 	gint64     cap_mid_in;
-	/* Its files by what became of them. */
+	/* Its files by what became of them; and of those that wait, the ones
+	 * within its caps (what resuming it would ask for: axis_conversion_runs_get()
+	 * only). */
 	gint64     waiting;
+	gint64     waiting_in;
 	gint64     asked;
 	gint64     done;
 	gint64     skipped;
