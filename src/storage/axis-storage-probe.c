@@ -73,17 +73,23 @@ axis_storage_probe_unref(AxisStorageProbe *self)
 	g_free(self);
 }
 
+static void
+call_free(AxisStorageProbeCall *call)
+{
+	if (call->free_data != NULL)
+		call->free_data(call->data);
+	g_free(call->key);
+	axis_storage_probe_unref(call->probe);
+	g_free(call);
+}
+
 void
 axis_storage_probe_call_unref(AxisStorageProbeCall *call)
 {
 	if (call == NULL || !g_atomic_int_dec_and_test(&call->ref_count))
 		return;
 
-	if (call->free_data != NULL)
-		call->free_data(call->data);
-	g_free(call->key);
-	axis_storage_probe_unref(call->probe);
-	g_free(call);
+	call_free(call);
 }
 
 gpointer
@@ -98,7 +104,8 @@ static gpointer
 call_thread(gpointer user_data)
 {
 	AxisStorageProbeCall *call = user_data;
-	AxisStorageProbe *probe = call->probe;
+	AxisStorageProbe *probe = probe_ref(call->probe);
+	gboolean last;
 
 	call->func(call->data);
 
@@ -114,10 +121,21 @@ call_thread(gpointer user_data)
 		else
 			g_hash_table_insert(probe->abandoned_keys, g_strdup(call->key), GUINT_TO_POINTER(n - 1));
 	}
+	/* This thread's reference goes before the waiter is told, so that a
+	 * caller who waited for the call drops the last one itself: what the
+	 * call holds (a descriptor on the volume's directory, say) is then
+	 * released by the time the caller's unref returns, and not a moment
+	 * later on this thread while the caller already unmounts.  The call is
+	 * not touched after the unlock unless it was abandoned, when nobody
+	 * else holds it. */
+	last = g_atomic_int_dec_and_test(&call->ref_count);
 	g_cond_broadcast(&probe->finished);
 	g_mutex_unlock(&probe->lock);
 
-	axis_storage_probe_call_unref(call);
+	if (last)
+		call_free(call);
+	/* Its own reference: the lock above outlives the call's. */
+	axis_storage_probe_unref(probe);
 	return NULL;
 }
 
