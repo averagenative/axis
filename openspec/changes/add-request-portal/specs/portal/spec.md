@@ -54,7 +54,7 @@ A portal SHALL authenticate with a token that an administrator creates on the pa
 
 #### Scenario: Wrong tokens are throttled
 - **WHEN** wrong tokens are presented repeatedly from one address
-- **THEN** further requests from that address are answered 429 for a time, without their token being looked at
+- **THEN** further requests from that address without a valid portal token are answered 429 for a time, and a request from it with a valid portal token is answered as before: the address's count holds only requests that are not the portal's
 
 ### Requirement: The scope is a closed list of operations
 The portal API SHALL consist of exactly these operations, each a POST of one JSON object: `hello`, `login`, `logout`, `whoami`, `search`, `browse`, `title`, `art`, `request`, `requests` and `withdraw`. A portal token SHALL open nothing else in the daemon. The daemon SHALL refuse, on the portal API, any method but POST (405), any body that is not `application/json` (415) or is larger than 16 KiB (413), any request that carries what a browser sends (`Origin`, `Sec-Fetch-Site`, `Sec-Fetch-Mode` or `Cookie`: 403), any path that is not one of the operations (404), and any body with a member that the operation does not define, or a member of the wrong type or over its length (422). Every refusal SHALL be JSON, and none SHALL redirect or set a cookie.
@@ -138,7 +138,7 @@ Every operation except `hello` and `login` SHALL require, beside the portal toke
 - **THEN** it holds no value that can be used as a proof
 
 ### Requirement: Answers carry a fixed set of fields
-Each operation SHALL answer with the members listed here and no others. A title SHALL be `id`, `kind`, `name`, `year`, `overview` (at most 600 characters), `has_poster`, `state` (one of `available`, `partly_available`, `downloading`, `approved`, `requested`, `declined`, `closed`, `open`), `asked_by` (a name, present only while `requests.show_who_asked` is on) and, from `title` for a series, `seasons` (each `number`, `episodes`, `aired` and `state`). A request SHALL be `id`, the title's `id`, `kind`, `name` and `year`, `seasons`, `state` (one of `waiting`, `approved`, `downloading`, `partly_available`, `available`, `declined`, `withdrawn`, `failed`), `have` and `of` (episode counts, for a series), `cause` (one of the fixed causes, when failed), `reason` (when declined), `mine` (made or followed), `asked_at` and `changed_at`. `whoami` SHALL be the person's name and, for each kind, the limit, what is left and when the window ends. No answer SHALL carry a file name, a path, a release name, an indexer, a download client, a quality profile, a library folder, a disk, a size on disk, a job, a setting, the daemon's version, an account's role or an account other than as `asked_by`.
+Each operation SHALL answer with the members listed here and no others. A title SHALL be `id`, `kind`, `name`, `year`, `overview` (at most 600 characters), `has_poster`, `state` (one of `available`, `partly_available`, `downloading`, `approved`, `requested`, `declined`, `closed`, `open`), `asked_by` (a name, present only while `requests.show_who_asked` is on, and only when the account that asked is a requester) and, from `title` for a series, `seasons` (each `number`, `episodes`, `aired` and `state`). A request SHALL be `id`, the title's `id`, `kind`, `name` and `year`, `seasons`, `state` (one of `waiting`, `approved`, `downloading`, `partly_available`, `available`, `declined`, `withdrawn`, `failed`), `have` and `of` (episode counts, for a series), `cause` (one of the fixed causes, when failed), `reason` (when declined), `mine` (made or followed), `asked_at` and `changed_at`. `whoami` SHALL be the person's name and, for each kind, the limit, what is left and when the window ends. No answer SHALL carry a file name, a path, a release name, an indexer, a download client, a quality profile, a library folder, a disk, a size on disk, a job, a setting, the daemon's version, an account's role or an account other than as `asked_by`.
 
 #### Scenario: A search result's members
 - **WHEN** `search` answers
@@ -151,6 +151,10 @@ Each operation SHALL answer with the members listed here and no others. A title 
 #### Scenario: Who asked follows the setting
 - **WHEN** `requests.show_who_asked` is off
 - **THEN** no answer of any operation carries `asked_by`, and none carries a name other than the caller's own
+
+#### Scenario: Only a requester's name
+- **WHEN** `requests.show_who_asked` is on and the request for a title was made by an ordinary user or an administrator
+- **THEN** the title's state says that it is requested, and the answer carries no `asked_by` and no name of that account
 
 #### Scenario: Only the caller's requests
 - **WHEN** `requests` is called with `robin`'s proof
@@ -172,7 +176,7 @@ The `art` operation SHALL take a title's `id` and SHALL answer with that title's
 - **THEN** the answer is 404, no outbound request is made for it, and the portal shows the title without a picture
 
 ### Requirement: Searching for a title to request is bounded
-The `search` operation SHALL pass the query, of at most 100 characters, to the configured details provider as a search text and to nothing else, SHALL apply the same adult filter as the engine's own search, and SHALL answer from the daemon's stored results, marked `stale`, when the provider cannot be reached. The `title` operation SHALL refuse a title that the adult filter excludes. `browse` SHALL answer from the stored Discover lists, without the titles marked "Not interested", and SHALL never ask the provider. The same query for the same kind within 10 minutes SHALL be answered without asking the provider again.
+The `search` operation SHALL pass the query, of at most 100 characters, to the configured details provider as a search text and to nothing else, SHALL apply the same adult filter as the engine's own search, and SHALL answer from the daemon's stored results, marked `stale`, when the provider cannot be reached. The `title`, `art` and `request` operations SHALL answer a title that the adult filter excludes, a title whose adult mark is not known yet, and a title of a kind that cannot be requested now as a number never given. `browse` SHALL answer from the stored Discover lists, without the titles marked "Not interested", and SHALL never ask the provider. The same query for the same kind within 10 minutes SHALL be answered without asking the provider again.
 
 #### Scenario: A search
 - **WHEN** `search` is called with "lantern orchard"
@@ -194,8 +198,12 @@ The `search` operation SHALL pass the query, of at most 100 characters, to the c
 - **WHEN** `browse` is called
 - **THEN** no request goes to the provider
 
+#### Scenario: A title whose mark is not known
+- **WHEN** a title was stored before its provider's adult mark was kept, and no answer of the provider about it has been stored since
+- **THEN** `title`, `art` and `request`, of either kind, answer it as a number never given, and `search` leaves it out, until an answer of the provider says it is not adult
+
 ### Requirement: The daemon's limits are the authority
-The daemon SHALL enforce, on the portal API and whatever the portal does itself: the login throttle for each username, with the delays of the engine's own login; a ceiling of 30 failed logins an hour through all portal tokens together, after which a login is admitted once a minute until the hour has passed; a search budget of 30 searches a minute through all portal tokens together and 10 a minute for each person; each person's request quota; and a ceiling of `requests.portal_per_day` (30 by default) on what all requests made through the portal API count in one day. A refusal by a limit SHALL be 429 with the time to wait and SHALL do nothing. The client address that `login` reports SHALL be recorded as reported by the portal, and SHALL only ever add a refusal: no limit SHALL be loosened or cleared by what the portal reports.
+The daemon SHALL enforce, on the portal API and whatever the portal does itself: the login throttle for each username, with the delays of the engine's own login; a ceiling of 30 failed logins an hour through all portal tokens together, after which a login is admitted once a minute until the hour has passed; a budget of 600 operations of any kind a minute for each portal token and 120 a minute for each person; a search budget of 30 searches a minute through all portal tokens together and 10 a minute for each person; each person's request quota; a ceiling of `requests.portal_per_day` (30 by default) on what all requests made through the portal API count in one day; and, of that ceiling, at most a third (at least one) for what one person's requests count, withdrawn ones included. The portal API's operations SHALL run on threads of their own, so that they cannot hold the threads the engine's own pages use. A refusal by a limit SHALL be 429 with the time to wait and SHALL do nothing. The client address that `login` reports SHALL be recorded as reported by the portal, and SHALL only ever add a refusal: no limit SHALL be loosened or cleared by what the portal reports.
 
 #### Scenario: Guessing one password
 - **WHEN** `login` fails many times for `robin`
@@ -220,6 +228,14 @@ The daemon SHALL enforce, on the portal API and whatever the portal does itself:
 #### Scenario: Quota does not depend on the client
 - **WHEN** a person is at their limit and `request` is called for them again and again
 - **THEN** each call is refused and no request exists
+
+#### Scenario: One person's share of the day
+- **WHEN** `robin` asks for a movie and withdraws it ten times in one day, with `requests.portal_per_day` at 30
+- **THEN** `robin`'s next request is refused with 429 and a refusal of its own, and another person can still ask
+
+#### Scenario: Every operation's budget
+- **WHEN** one person's proof is presented 121 times within a minute, or one token 601 times
+- **THEN** the call beyond the budget is refused with 429 and the time to wait, and another person or another token is answered as before
 
 ### Requirement: The portal is a separate program that holds nothing but its token
 The project SHALL provide a program, `axis-portal`, that serves the request pages and talks to the daemon only through the portal API. It SHALL NOT be linked with the database client library, SHALL have no setting for a database, a media path, an indexer, a download client or a details provider, and SHALL refuse a configuration key it does not know. It SHALL take its token from a file or the environment, never from the command line. It SHALL verify the daemon's certificate by default and SHALL refuse to send its token over unencrypted HTTP to an address that is not loopback unless explicitly configured to. It SHALL write no file: it SHALL run with a read-only root filesystem, no volume and no writable directory.

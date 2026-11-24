@@ -233,6 +233,13 @@ change of role ends every session of that account at once, in Axis and in
 the portal. If you change your own role, you are logged out. Axis refuses to
 make the only enabled administrator a requester.
 
+To give a requester another role, type a new password in the field beside
+**Change role to user** or **Change role to administrator**. The person typed
+the old password into the portal, so it must not open Axis's own pages: Axis
+refuses the change without a new password, or with the one the account has
+now. The new password follows the rule of the new role (at least 10
+characters). An account that you make a requester keeps its password.
+
 When a requester is logged in through a portal, the account's row shows
 **End 1 portal session** (or the number of sessions). Select it to log that
 person out of the portal at once. Disabling the account or setting a new
@@ -252,7 +259,10 @@ Open **System**, then **Request portal**. The page shows two things.
   in the environment, to a port that Axis does not use, and restart Axis.
   That port answers the portal's interface and nothing else: no page, no
   login form and no other part of Axis. Axis's main port never answers the
-  portal's interface.
+  portal's interface. The port listens on the same address as the main port
+  unless you set `portal_listen_host` (or `AXIS_PORTAL_LISTEN_HOST`) to an
+  address of its own. Use the address that Axis has on the network it shares
+  with the portal alone, so that nothing else on your network reaches it.
 - **Tokens** lists the tokens that a portal identifies itself with. A token
   opens the portal's interface and nothing else, and by itself it acts as no
   one: every action also needs the session of a requester who logged in.
@@ -269,7 +279,21 @@ The setting **Requests through the request portal in one day** (30 by
 default, under **System**, then **Settings**, in the **Requests** card)
 limits what all requests made through a portal count in one calendar day: a
 movie counts one and each season counts one. It bounds what a portal in the
-wrong hands can ask for.
+wrong hands can ask for. One person's requests can count at most a third of
+it, withdrawn ones included, so that one person cannot use up the day for
+everyone.
+
+Axis also limits how often a portal can call it: 600 calls a minute for a
+token and 120 for each person. Axis tells a portal that calls more often to
+wait.
+
+Axis hides some titles from requesters: a title that Axis stored before this
+version, and a title that came from an import or from a list that you
+brought over. Axis cannot tell whether the provider marks such a title as
+adult. The title stays hidden until Axis gets the title's record from its
+provider again, from a search that finds the title or from the refresh of
+the titles that Axis keeps up to date. Until then, an ordinary user cannot
+ask for the title either.
 
 ## What can go wrong
 

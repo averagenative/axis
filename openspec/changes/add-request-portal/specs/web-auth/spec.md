@@ -24,7 +24,7 @@ The daemon SHALL create a session for a correct username and password of an enab
 ## ADDED Requirements
 
 ### Requirement: The requester role
-There SHALL be a third role, requester, below the ordinary user. A requester SHALL have no access to the engine's interface at all: no session of the engine's interface SHALL exist for a requester, and every route of the main listener that is not public SHALL refuse one, whatever the route's own class. An administrator SHALL create a requester on the Users page and SHALL be able to change an account's role among the three. A change of an account's role SHALL end every session and every portal session proof of that account at once. The rule that an enabled administrator always exists SHALL be unchanged.
+There SHALL be a third role, requester, below the ordinary user. A requester SHALL have no access to the engine's interface at all: no session of the engine's interface SHALL exist for a requester, and every route of the main listener that is not public SHALL refuse one, whatever the route's own class. An administrator SHALL create a requester on the Users page and SHALL be able to change an account's role among the three. A change of an account's role SHALL end every session and every portal session proof of that account at once. A requester's password is typed into the portal, so a change of a requester to another role SHALL set a new password in the same step, held to the rule of the new role and not the password the account has; without one the change SHALL be refused. The rule that an enabled administrator always exists SHALL be unchanged.
 
 #### Scenario: Created by an administrator
 - **WHEN** an administrator creates the account `robin` with the role requester
@@ -37,6 +37,10 @@ There SHALL be a third role, requester, below the ordinary user. A requester SHA
 #### Scenario: A role change ends sessions
 - **WHEN** an administrator makes a logged-in ordinary user a requester
 - **THEN** that user's next request to the engine's interface is sent to the login page, and logging in there is refused
+
+#### Scenario: A requester given another role
+- **WHEN** an administrator makes the requester `vic` an ordinary user
+- **THEN** the change is refused without a new password or with the one `vic` has, and once it is made with a new one, the password `vic` typed into the portal fails at the engine's login
 
 #### Scenario: The last administrator
 - **WHEN** an attempt is made to make the only enabled administrator a requester

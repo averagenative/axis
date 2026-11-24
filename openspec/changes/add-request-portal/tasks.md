@@ -124,7 +124,7 @@ Build:
 - [x] 2.9 A fuzz target for the reader of operation bodies, `tests/fuzz/fuzz-portal-body.c` (also the writer of answers). Compiled; `make fuzz` was not run by the author.
 - [x] 2.10 The known limits of this slice in `openspec/project.md` ("The portal API").
 
-The test paths below are the plan's. `tests/test-portal-api.c` has 17 cases, and one case covers several scenarios; where a scenario's test has another path, the task names it.
+The test paths below are the plan's. `tests/test-portal-api.c` has 22 cases (17 before the review), and one case covers several scenarios; where a scenario's test has another path, the task names it.
 
 Tests, `portal` specification:
 
@@ -193,9 +193,20 @@ Tests, `web-auth` specification:
 - [ ] 2.80 `/portal/api/hashing/admin-during-flood`: An administrator logs in during a flood. In part, in `/portal/api/hashing/queue-bounded`: the login succeeds while portal logins are queued; that it did not wait behind them follows from the one hashing place the portal has, and is not measured.
 - [x] 2.81 `/portal/api/hashing/queue-bounded`: The portal's queue is bounded.
 
+After the first review (`design.md`, "As built in P2", "After the review"):
+
+- [x] 2.82 S1, M9: a requester takes another role only with a new password, held to the new role's rule and not the one it has. `/portal/api/proof/account-changes`: refused without one, with an empty one, a short one and the old one; then the old password fails at the engine's login and the new one opens it.
+- [x] 2.83 S2, M5: the adult mark has three values (migration 0084 edited in place: NULL is "not known"); every provider answer read sets it (TheTVDB's false); for anyone who is not an administrator NULL is treated as marked. `/portal/api/fields/mark-not-known` (title, art, request of both kinds, a search from memory; visible once a search's answer marks it false), `/requests/model/adult-mark-not-known` (the ask path, a closed title, no following, an administrator asks; askable after a lookup), `/db/migrate/requests-on-accounts` (stored titles are NULL after 0084).
+- [x] 2.84 S3: a budget for every operation, 600 a minute for a token and 120 for a person, in bounded memory, and a thread pool of the API's own (four threads). `/portal/api/limits/operation-budgets`, with the clock stopped: exact counts for both, another person and another token not held to them, a refusal logged once a minute; `/portal/api/login/engine-queue-full` shows an operation answered while the engine's own workers are all busy. The pool's bound of four is not measured.
+- [x] 2.85 S4: one person's share of the portal's day, a third of `requests.portal_per_day`, withdrawn requests included. `/portal/api/limits/one-persons-share` (ask and withdraw ten times, the eleventh refused, the others still ask) and `/requests/quota/portal-ceiling` (rewritten for the share: four people, the share's refusal and then the day's).
+- [x] 2.86 M1, M8: the token is looked up before the address throttle, and a valid one is exempt (`/portal/api/token/wrong-throttled`); a token's use is written once a minute whatever the address (`/portal/api/token/gate`).
+- [x] 2.87 M2, M3, M6, M7: the wrong kind and a closed title for a marked one, `asked_by` of an ordinary user's and an administrator's request, a search's third page (`/portal/api/fields/answers`); `title` and `art` while the TV module is off (`/portal/api/fields/kind-off`).
+- [x] 2.88 M10: `server.portal_listen_host` (`AXIS_PORTAL_LISTEN_HOST`), in the example configuration and the guide. `/config/server/portal-listener`. The daemon's own start on that address is not run by a test.
+- [x] 2.89 M4 and M11, and what could not be judged: M4 is a known limit; the comments of the tests M11 names say what they assert; a deferred login answered before its handler returns is answered at once (`/portal/api/login/engine-queue-full`); an older `axisd` refuses a newer database, and `meta_search` rows are pruned after 30 days (both recorded in `design.md`).
+
 Gate:
 
-- [ ] 2.90 Independent review of P2: the gate's order, the role's three barriers, the proof, the object-level checks, the answers' members. Record it in `design.md`; fix each finding with a test. Not arranged by the author. The four gates (`make check`, `make fuzz`, `make check-container`, `make check-examples`) were not run by the author either; only the test programs the slice touches were, under both sanitizers.
+- [ ] 2.90 Independent review of P2: the gate's order, the role's three barriers, the proof, the object-level checks, the answers' members. Record it in `design.md`; fix each finding with a test. A first review was made and its findings were fixed or recorded as known limits (2.82 to 2.89); the fixes wait for review. The four gates (`make check`, `make fuzz`, `make check-container`, `make check-examples`) were not run by the author either; only the test programs the slice touches were, under both sanitizers.
 
 ## 3. P3: the axis-portal program
 
