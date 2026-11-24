@@ -19,7 +19,7 @@
 
 ## 3. Proof
 
-- [ ] 3.1 Scenario "A push to main": two runs in a row with all four jobs green on the runner, and each job's time noted.
+- [x] 3.1 Scenario "A push to main": three runs in a row with all four jobs green on the runner (on the branch, through a trigger that was removed before the merge), and each job's time noted in the workflow.
 - [x] 3.2 Scenario "One gate fails": seen while the workflow was written, when one job failed and the others ran to their end with the failed job's log kept.
 - [x] 3.3 Scenario "A part of the examples cannot run": the step that fails on a skipped part, read against the script's own wording of a skip.
 - [ ] 3.4 Scenario "Two pushes in a row": not tried; it follows from the workflow having no `concurrency` group.

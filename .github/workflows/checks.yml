@@ -85,8 +85,6 @@ on:
   push:
     branches:
       - main
-      # TEMPORARY, while this workflow is being written: removed before merge.
-      - checks-workflow
   workflow_dispatch:
 
 # Nothing by default; each job asks for what it needs.
