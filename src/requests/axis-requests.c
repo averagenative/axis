@@ -549,13 +549,14 @@ axis_requests_portal_limit_reached(
 	AxisRequestsPortalLimit  which,
 	gint64                   not_again_since_us
 ){
-	gint64 now = axis_requests_now(self);
+	gint64 now;
 	gint64 *at;
 	guint n;
 
 	g_return_if_fail(self != NULL);
 	g_return_if_fail((guint)which < AXIS_REQUESTS_PORTAL_LIMITS);
 
+	now = axis_requests_now(self);
 	g_mutex_lock(&self->portal_limit_lock);
 	at = self->portal_limit_at[which];
 	n = self->portal_limit_n[which];
@@ -583,12 +584,14 @@ axis_requests_portal_limit_count(
 	AxisRequestsPortalLimit  which,
 	gint64                  *last_us
 ){
-	gint64 since = axis_requests_now(self) - G_GINT64_CONSTANT(24) * 3600 * G_USEC_PER_SEC;
+	gint64 since;
 	guint count = 0;
 	guint i;
 
 	g_return_val_if_fail(self != NULL, 0);
 	g_return_val_if_fail((guint)which < AXIS_REQUESTS_PORTAL_LIMITS, 0);
+
+	since = axis_requests_now(self) - G_GINT64_CONSTANT(24) * 3600 * G_USEC_PER_SEC;
 
 	if (last_us != NULL)
 		*last_us = 0;
