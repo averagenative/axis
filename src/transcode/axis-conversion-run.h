@@ -166,7 +166,13 @@ axis_conversion_runs_create(
  * revision that has not started yet (being listed, or ready) is that run:
  * *@run_id is it, nothing is stored and *@created is %FALSE (a second
  * click makes no second run).  Without @created, as
- * axis_conversion_runs_create(). */
+ * axis_conversion_runs_create().
+ *
+ * @convert_kept (convert-kept-files): the run also lists, and converts, the
+ * files Axis keeps (kept by hand, or brought over from Radarr or Sonarr);
+ * stored with the run with @user as who chose it.  It lifts the reason
+ * "kept" only; the kept mark of a file is never changed by a conversion.
+ * A run of the same selection with the other choice is another run. */
 gboolean
 axis_conversion_runs_create_full(
 	AxisConversionRuns     *self,
@@ -175,6 +181,7 @@ axis_conversion_runs_create_full(
 	guint                   n_roots,
 	gint64                  title_id,
 	gint64                  revision_id,
+	gboolean                convert_kept,
 	const gchar            *user,
 	gint64                 *run_id,
 	gboolean               *created,
@@ -305,6 +312,35 @@ axis_conversion_runs_replace(
 	AxisConversionRuns  *self,
 	gint64               run_id,
 	gboolean             confirmed,
+	const gchar         *user,
+	GError             **error
+);
+
+/**
+ * axis_conversion_runs_include_kept:
+ * @user: the administrator who chooses it
+ *
+ * "Add these N files to the run": turns the choice to convert kept files on
+ * for a run made without it, and queues the job that adds the files left
+ * out as kept to its list.  Allowed for a run that is ready to start, paused
+ * or finished, with no file in flight; refused
+ * (%AXIS_CONVERSION_ERROR_STATE) for any other state, for a run with a file
+ * in flight, and for a run that has the choice already.
+ *
+ * The list is added to, not made again: nothing of the entries there are
+ * (done, skipped, failed, taken out, their conversions) is touched.  Each
+ * file left out as kept is decided as the first list decided it, with the
+ * kept mark passed over: listed (at the end of its series' unit, or as new
+ * units after those there are, the largest estimated saving first), or left
+ * out for its other reason.  The run shows "Making the list" meanwhile and
+ * then goes back to ready or paused; a finished run becomes paused, for a
+ * person to resume.  When the job fails, the run is as it was, the choice
+ * off.
+ */
+gboolean
+axis_conversion_runs_include_kept(
+	AxisConversionRuns  *self,
+	gint64               run_id,
 	const gchar         *user,
 	GError             **error
 );
@@ -442,6 +478,13 @@ typedef struct
 	gint64     wait_us;
 	gint       failed_in_row;
 	gint       refused_in_row;
+	/* The choice to convert kept files: on or off, who chose it and when,
+	 * and whether kept files are being added to a list there was (the state
+	 * the run goes back to, else NULL). */
+	gboolean   convert_kept;
+	gchar     *convert_kept_by;
+	gint64     convert_kept_us;
+	gchar     *relist_state;
 	/* The list: every unit and file not removed, and those within the caps. */
 	gint64     units;
 	gint64     files;
@@ -615,6 +658,15 @@ typedef struct
 	gchar  *reason_code;
 	gchar  *reason_text;
 	gint64  settled_us;
+	/* Its conversion's jobs, for the progress of a file in flight (as
+	 * AxisConversionRecord's fields of the same names). */
+	gchar  *job_state;
+	gdouble job_fraction;
+	gint64  job_running_s;
+	gchar  *verify_state;
+	gdouble verify_fraction;
+	gint64  verify_running_s;
+	gint64  duration_ms;
 } AxisConversionRunEntry;
 
 void

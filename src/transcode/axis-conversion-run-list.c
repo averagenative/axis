@@ -65,6 +65,11 @@ typedef struct
 	guint                     n_excluded;
 	gint64                    scope_files;
 	gint64                    listed;
+	/* convert-kept-files: the run's choice (the reason "kept" is lifted,
+	 * and no other), and whether this job adds the files left out as kept
+	 * to a list there is already instead of making the list. */
+	gboolean                  convert_kept;
+	gboolean                  adding;
 } List;
 
 static gchar *
@@ -227,8 +232,11 @@ decide(
 
 	l->scope_files++;
 	/* A file a person keeps, or one brought over: a run replaces files, and
-	 * does not replace this one (gate "kept"), until the keep is lifted. */
-	if (bool_at(result, row, COL_KEPT)) {
+	 * does not replace this one (gate "kept"), until the keep is lifted, or
+	 * unless an administrator chose, for this run, to convert kept files.
+	 * The choice passes over this reason only: the file is decided by
+	 * everything below exactly as a file that is not kept. */
+	if (bool_at(result, row, COL_KEPT) && !l->convert_kept) {
 		exclude(l, file, "kept");
 		return;
 	}
@@ -338,6 +346,13 @@ read_scope(
 	g_autofree gchar *sql = NULL;
 
 	where = scope_sql(scope, root_ids, title_id);
+	/* Adding to a list there is: only the files it left out as kept. */
+	if (l->adding) {
+		g_autofree gchar *scope_only = g_steal_pointer(&where);
+
+		where = g_strdup_printf("%s AND f.id IN (SELECT x.file_id FROM conversion_run_excluded x WHERE x.run_id = %"
+			G_GINT64_FORMAT " AND x.reason = 'kept')", scope_only, l->run_id);
+	}
 	sql = g_strdup_printf("DECLARE axis_run_files NO SCROLL CURSOR FOR"
 		" SELECT " AXIS_ESTIMATE_SQL_COLUMNS_BASE ", 0,"
 		" mem.reason,"
@@ -462,7 +477,71 @@ write_reasons(
 		params, NULL, error);
 }
 
-/* The run is not listed: it says why. */
+/*
+ * Adding to a list there is (convert-kept-files): the new entries are those
+ * with position 0.  Those of a unit the list has join it, after its files;
+ * the others make new units after the ones there are, ranked among
+ * themselves by their estimated saving.  Nothing of an entry or a unit that
+ * was there is changed but a unit's totals.  A unit a person took out of
+ * the list stays out: its new files are taken out with it.
+ */
+static gboolean
+add_units(
+	List    *l,
+	GError **error
+){
+	g_autofree gchar *run = int_text(l->run_id);
+	const gchar *params[1];
+
+	params[0] = run;
+	if (!axis_db_conn_exec(l->conn, "UPDATE conversion_run_unit u SET files = u.files + n.files,"
+	        " bytes = u.bytes + n.bytes, mid = u.mid + n.mid"
+	        " FROM (SELECT e.unit_key, count(*) AS files, sum(e.size) AS bytes, sum(e.mid) AS mid"
+	        "  FROM conversion_run_entry e WHERE e.run_id = $1::bigint AND e.position = 0 GROUP BY e.unit_key) n"
+	        " WHERE u.run_id = $1::bigint AND u.unit_key = n.unit_key", 1, params, NULL, error))
+		return FALSE;
+	if (!axis_db_conn_exec(l->conn, "INSERT INTO conversion_run_unit (run_id, position, unit_key, kind, title_id,"
+	        " root_id, rel_path, files, bytes, mid)"
+	        " SELECT $1::bigint, (SELECT coalesce(max(u.position), 0) FROM conversion_run_unit u WHERE u.run_id = $1::bigint)"
+	        "  + row_number() OVER (ORDER BY sum(e.size - e.mid) DESC, e.unit_key), e.unit_key,"
+	        "  min(e.unit_kind), min(e.unit_title_id), min(e.root_id), min(e.unit_path), count(*), sum(e.size), sum(e.mid)"
+	        " FROM conversion_run_entry e WHERE e.run_id = $1::bigint AND e.position = 0"
+	        "  AND NOT EXISTS (SELECT 1 FROM conversion_run_unit u WHERE u.run_id = $1::bigint AND u.unit_key = e.unit_key)"
+	        " GROUP BY e.unit_key", 1, params, NULL, error))
+		return FALSE;
+	return axis_db_conn_exec(l->conn, "UPDATE conversion_run_entry e SET unit_position = o.unit, position = o.n,"
+		" state = CASE WHEN o.removed THEN 'removed' ELSE e.state END,"
+		" reason_code = CASE WHEN o.removed THEN 'removed' ELSE e.reason_code END,"
+		" reason_text = CASE WHEN o.removed THEN 'Its movie or series was taken out of the list.' ELSE e.reason_text END,"
+		" settled_at = CASE WHEN o.removed THEN now() ELSE e.settled_at END"
+		" FROM (SELECT e2.id, u.position AS unit, u.removed,"
+		"  (SELECT coalesce(max(x.position), 0) FROM conversion_run_entry x WHERE x.run_id = $1::bigint)"
+		"  + row_number() OVER (ORDER BY u.position, e2.season_number NULLS LAST, e2.episode_number NULLS LAST,"
+		"   e2.rel_path, e2.id) AS n"
+		"  FROM conversion_run_entry e2 JOIN conversion_run_unit u ON u.run_id = e2.run_id AND u.unit_key = e2.unit_key"
+		"  WHERE e2.run_id = $1::bigint AND e2.position = 0) o WHERE e.id = o.id", 1, params, NULL, error);
+}
+
+/* The reasons' counts, from the files left out as they are now. */
+static gboolean
+recount_reasons(
+	List    *l,
+	GError **error
+){
+	g_autofree gchar *run = int_text(l->run_id);
+	const gchar *params[1];
+
+	params[0] = run;
+	return axis_db_conn_exec(l->conn, "DELETE FROM conversion_run_reason WHERE run_id = $1::bigint", 1, params, NULL,
+	        error) &&
+		axis_db_conn_exec(l->conn, "INSERT INTO conversion_run_reason (run_id, reason, files, bytes)"
+		" SELECT x.run_id, x.reason, count(*), coalesce(sum(x.size), 0) FROM conversion_run_excluded x"
+		" WHERE x.run_id = $1::bigint GROUP BY x.run_id, x.reason", 1, params, NULL, error);
+}
+
+/* The run is not listed: it says why.  A run that had a list, to which the
+ * kept files were being added, is as it was before: its state, its list, and
+ * the choice off (nothing of the adding was committed). */
 static void
 list_failed(
 	AxisConversionRuns *self,
@@ -475,8 +554,15 @@ list_failed(
 
 	params[0] = id;
 	params[1] = text;
-	if (!axis_db_pool_exec(self->conversions->pool, "UPDATE conversion_run SET state = 'failed', list_text = left($2, 2000),"
-	        " finished_at = now(), updated_at = now() WHERE id = $1::bigint AND state = 'listing'", 2, params, NULL, &local))
+	if (!axis_db_pool_exec(self->conversions->pool, "UPDATE conversion_run SET"
+	        " state = CASE WHEN relist_state IS NULL THEN 'failed' ELSE relist_state END,"
+	        " list_text = left(CASE WHEN relist_state IS NULL THEN $2 ELSE"
+	        "  'The files Axis keeps were not added, and the run is as it was. ' || $2 END, 2000),"
+	        " finished_at = CASE WHEN relist_state IS NULL THEN now() ELSE finished_at END,"
+	        " convert_kept = CASE WHEN relist_state IS NULL THEN convert_kept ELSE false END,"
+	        " convert_kept_by = CASE WHEN relist_state IS NULL THEN convert_kept_by END,"
+	        " convert_kept_at = CASE WHEN relist_state IS NULL THEN convert_kept_at END,"
+	        " relist_state = NULL, updated_at = now() WHERE id = $1::bigint AND state = 'listing'", 2, params, NULL, &local))
 		g_message("conversion runs: run %" G_GINT64_FORMAT " could not be marked: %s", run_id, local->message);
 }
 
@@ -493,10 +579,14 @@ axis_conversion_runs_build_list(
 	g_autofree gchar *id = int_text(run_id);
 	g_autofree gchar *scope = NULL;
 	g_autofree gchar *roots = NULL;
+	g_autofree gchar *relist = NULL;
+	g_autofree gchar *chosen_by = NULL;
 	AxisEstimateTarget built;
 	const gchar *params[4];
 	gint64 title_id = 0;
 	gint64 revision_id = 0;
+	gint64 cap_files = 0;
+	gint64 cap_bytes = 0;
 	List l;
 	gboolean ok = FALSE;
 
@@ -506,7 +596,8 @@ axis_conversion_runs_build_list(
 	l.run_id = run_id;
 	params[0] = id;
 	if (!axis_db_pool_exec(self->conversions->pool, "SELECT state, scope, root_ids::text, coalesce(title_id, 0),"
-	        " revision_id FROM conversion_run WHERE id = $1::bigint", 1, params, &run, error))
+	        " revision_id, convert_kept, relist_state, coalesce(cap_files, 0), coalesce(cap_bytes, 0), convert_kept_by"
+	        " FROM conversion_run WHERE id = $1::bigint", 1, params, &run, error))
 		return FALSE;
 	if (axis_db_result_get_n_rows(run) != 1 || g_strcmp0(axis_db_result_get_text(run, 0, 0), "listing") != 0)
 		return TRUE;
@@ -514,6 +605,14 @@ axis_conversion_runs_build_list(
 	roots = axis_db_result_is_null(run, 0, 2) ? NULL : g_strdup(axis_db_result_get_text(run, 0, 2));
 	title_id = int_at(run, 0, 3, 0);
 	revision_id = int_at(run, 0, 4, 0);
+	l.convert_kept = bool_at(run, 0, 5);
+	relist = axis_db_result_is_null(run, 0, 6) ? NULL : g_strdup(axis_db_result_get_text(run, 0, 6));
+	/* Kept files are added only to a run that has the choice (the row's
+	 * constraint says so too). */
+	l.adding = relist != NULL && l.convert_kept;
+	cap_files = int_at(run, 0, 7, 0);
+	cap_bytes = int_at(run, 0, 8, 0);
+	chosen_by = axis_db_result_is_null(run, 0, 9) ? NULL : g_strdup(axis_db_result_get_text(run, 0, 9));
 
 	/* The revision's target, configured as every estimate's is, and the
 	 * model with its calibration. */
@@ -545,6 +644,58 @@ axis_conversion_runs_build_list(
 	if (!axis_db_conn_exec(l.conn, "SET LOCAL statement_timeout = '" AXIS_ESTIMATE_STATEMENT_TIMEOUT "'", 0, NULL, NULL,
 	        error))
 		goto rollback;
+	if (l.adding) {
+		g_autofree gchar *cap = NULL;
+		g_autofree gchar *pause = NULL;
+		const gchar *target;
+		const gchar *more[4];
+		gint cap_unit = -1;
+
+		/* The list there is stays: only the files it left out as kept are
+		 * decided, listed after what is there, or left out for their other
+		 * reason; then no file is left out as kept. */
+		if (!read_scope(&l, scope, roots, title_id, revision_id, error))
+			goto rollback;
+		if (context != NULL)
+			axis_job_context_set_progress(context, 0.9, "adding to the list");
+		if (!axis_db_conn_exec(l.conn, "DELETE FROM conversion_run_excluded WHERE run_id = $1::bigint AND reason = 'kept'",
+		        1, params, NULL, error) ||
+		    !add_units(&l, error) || !recount_reasons(&l, error) ||
+		    !axis_conversion_run_cap_unit(l.conn, run_id, cap_files, cap_bytes, &cap_unit, error))
+			goto rollback;
+		/* A finished run with files to convert now waits for a person. */
+		target = g_strcmp0(relist, "finished") == 0 && l.listed > 0 ? "paused" : relist;
+		if (g_strcmp0(relist, "finished") == 0 && l.listed > 0)
+			pause = g_strdup_printf("%s added %" G_GINT64_FORMAT " file%s Axis keeps to the list of this run, which had "
+				"finished. Resume the run to convert them.", chosen_by != NULL ? chosen_by : "An administrator", l.listed,
+				l.listed == 1 ? "" : "s");
+		cap = cap_unit >= 0 ? int_text(cap_unit) : NULL;
+		more[0] = id;
+		more[1] = target;
+		more[2] = cap;
+		more[3] = pause;
+		if (!axis_db_conn_exec(l.conn, "UPDATE conversion_run SET state = $2, relist_state = NULL, cap_unit = $3::integer,"
+		        " list_text = NULL, listed_at = now(),"
+		        " pause_code = CASE WHEN $4::text IS NOT NULL THEN 'person' ELSE pause_code END,"
+		        " pause_text = coalesce($4::text, pause_text),"
+		        " paused_at = CASE WHEN $4::text IS NOT NULL THEN now() ELSE paused_at END,"
+		        " paused_by = CASE WHEN $4::text IS NOT NULL THEN convert_kept_by ELSE paused_by END,"
+		        " finished_at = CASE WHEN $2 = 'finished' THEN finished_at END,"
+		        " finish_text = CASE WHEN $2 = 'finished' THEN finish_text END,"
+		        " failed_in_row = CASE WHEN $4::text IS NOT NULL THEN 0 ELSE failed_in_row END,"
+		        " refused_in_row = CASE WHEN $4::text IS NOT NULL THEN 0 ELSE refused_in_row END,"
+		        " updated_at = now() WHERE id = $1::bigint AND state = 'listing' RETURNING id", 4, more, &updated, error))
+			goto rollback;
+		if (axis_db_result_get_n_rows(updated) != 1)
+			goto rollback_quietly;
+		if (!axis_db_conn_commit(l.conn, error))
+			goto rollback;
+		g_message("conversion runs: run %" G_GINT64_FORMAT ": %" G_GINT64_FORMAT " of the %" G_GINT64_FORMAT " files "
+			"left out as kept were added to its list (chosen by %s); the run is %s", run_id, l.listed, l.scope_files,
+			chosen_by != NULL ? chosen_by : "?", target);
+		ok = TRUE;
+		goto out;
+	}
 	/* Built once: a list job run again after an interruption starts over. */
 	if (!axis_db_conn_exec(l.conn, "DELETE FROM conversion_run_entry WHERE run_id = $1::bigint", 1, params, NULL,
 	        error) ||

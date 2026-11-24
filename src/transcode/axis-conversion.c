@@ -705,7 +705,7 @@ axis_conversion_split(
 	" coalesce(c.passed_inode, 0), coalesce(c.passed_size, 0), coalesce(c.passed_mtime_sec, 0)," \
 	" coalesce(c.passed_mtime_nsec, 0), coalesce(c.passed_ctime_sec, 0), coalesce(c.passed_ctime_nsec, 0)," \
 	" c.passed_sample, c.passed_digest, c.claims, c.plan_caps, c.plan_preset, coalesce(c.plan_threads, 0)," \
-	" coalesce(c.checks_version, 0)"
+	" coalesce(c.checks_version, 0), c.convert_kept"
 
 void
 axis_conversion_row_free(AxisConversionRow *row)
@@ -843,6 +843,7 @@ row_from(AxisDbResult *result)
 	row->plan_preset = text_at(result, 69);
 	row->plan_threads = (gint)int_at(result, 70);
 	row->checks_version = (gint)int_at(result, 71);
+	axis_db_result_get_boolean(result, 0, 72, &row->convert_kept);
 	return row;
 }
 
@@ -1045,11 +1046,17 @@ axis_conversions_request_tidy(
 	" c.recycle_state, coalesce((extract(epoch FROM c.recycle_remove_after) * 1000000)::bigint, 0), c.trial_name," \
 	" c.trial_state, coalesce((extract(epoch FROM c.trial_remove_after) * 1000000)::bigint, 0)," \
 	" coalesce(c.failed_check, 0), c.result_text, coalesce((extract(epoch FROM c.finished_at) * 1000000)::bigint, 0)," \
-	" j.state::text, coalesce(j.progress, 0), j.progress_message, c.checked_where, c.verifier, c.checks_waiting," \
-	" vj.state::text, coalesce(vj.progress, 0), vj.progress_message, CASE WHEN vj.state = 'running' THEN vj.worker_id END," \
+	" j.state::text, coalesce(j.progress, -1), j.progress_message, c.checked_where, c.verifier, c.checks_waiting," \
+	" vj.state::text, coalesce(vj.progress, -1), vj.progress_message, CASE WHEN vj.state = 'running' THEN vj.worker_id END," \
 	" coalesce(c.run_id, 0), coalesce((extract(epoch FROM c.set_aside_at) * 1000000)::bigint, 0), c.set_aside_by," \
 	" c.set_aside_reason, (SELECT count(*) FROM conversion_check k WHERE k.conversion_id = c.id" \
-	" AND k.result = 'passed') = " G_STRINGIFY(AXIS_CONVERSION_N_CHECKS) ", coalesce(c.checks_version, 0)"
+	" AND k.result = 'passed') = " G_STRINGIFY(AXIS_CONVERSION_N_CHECKS) ", coalesce(c.checks_version, 0)," \
+	" c.convert_kept," \
+	" CASE WHEN j.state = 'running' AND j.started_at IS NOT NULL" \
+	"  THEN greatest(extract(epoch FROM now() - j.started_at), 0)::bigint ELSE -1 END," \
+	" CASE WHEN vj.state = 'running' AND vj.started_at IS NOT NULL" \
+	"  THEN greatest(extract(epoch FROM now() - vj.started_at), 0)::bigint ELSE -1 END," \
+	" coalesce((SELECT mi.duration_ms FROM media_info mi WHERE mi.file_id = c.file_id), 0)"
 
 #define RECORD_FROM \
 	" FROM conversion c JOIN conversion_profile_revision pr ON pr.id = c.revision_id" \
@@ -1159,7 +1166,9 @@ record_from(
 	r->result_text = cell_text(result, i, 34);
 	r->finished_us = cell_int(result, i, 35);
 	r->job_state = cell_text(result, i, 36);
-	r->job_progress = progress != NULL ? g_ascii_strtod(progress, NULL) : 0.0;
+	/* -1 in the row: the job has reported nothing (or there is none). */
+	r->job_fraction = progress != NULL ? g_ascii_strtod(progress, NULL) : -1.0;
+	r->job_progress = MAX(r->job_fraction, 0.0);
 	r->job_message = cell_text(result, i, 38);
 	r->checked_where = cell_text(result, i, 39);
 	r->verifier = cell_text(result, i, 40);
@@ -1168,7 +1177,8 @@ record_from(
 	{
 		const gchar *verify_progress = axis_db_result_get_text(result, i, 43);
 
-		r->verify_progress = verify_progress != NULL ? g_ascii_strtod(verify_progress, NULL) : 0.0;
+		r->verify_fraction = verify_progress != NULL ? g_ascii_strtod(verify_progress, NULL) : -1.0;
+		r->verify_progress = MAX(r->verify_fraction, 0.0);
 	}
 	r->verify_message = cell_text(result, i, 44);
 	r->verify_holder = cell_text(result, i, 45);
@@ -1178,6 +1188,10 @@ record_from(
 	r->set_aside_reason = cell_text(result, i, 49);
 	axis_db_result_get_boolean(result, i, 50, &r->all_passed);
 	r->checks_version = (gint)cell_int(result, i, 51);
+	axis_db_result_get_boolean(result, i, 52, &r->convert_kept);
+	r->job_running_s = cell_int(result, i, 53);
+	r->verify_running_s = cell_int(result, i, 54);
+	r->duration_ms = cell_int(result, i, 55);
 	/* What it counts for in proving its revision, by the marks. */
 	if (g_strcmp0(r->outcome, "trial") == 0) {
 		if (g_strcmp0(r->state, "rejected") == 0 && r->failed_check >= 3 && r->failed_check <= 8) {
@@ -1188,6 +1202,88 @@ record_from(
 		}
 	}
 	return r;
+}
+
+/* ── Where a conversion in flight is ────────────────────────────── */
+
+const gchar *
+axis_conversion_progress_stage_label(const gchar *stage)
+{
+	if (g_strcmp0(stage, "waiting") == 0)
+		return "Waiting for a worker";
+	if (g_strcmp0(stage, "encoding") == 0)
+		return "Encoding";
+	if (g_strcmp0(stage, "checking") == 0)
+		return "Checking";
+	if (g_strcmp0(stage, "replacing") == 0)
+		return "Replacing";
+	if (g_strcmp0(stage, "keeping") == 0)
+		return "Keeping the trial aside";
+	return "Not in flight";
+}
+
+void
+axis_conversion_progress(
+	const gchar            *state,
+	const gchar            *outcome,
+	const gchar            *job_state,
+	gdouble                 job_fraction,
+	gint64                  job_running_s,
+	const gchar            *verify_state,
+	gdouble                 verify_fraction,
+	gint64                  verify_running_s,
+	gint64                  duration_ms,
+	AxisConversionProgress *progress
+){
+	gdouble fraction = -1.0;
+	gint64 running = -1;
+	gboolean encoding = FALSE;
+
+	g_return_if_fail(progress != NULL);
+
+	progress->stage = NULL;
+	progress->fraction = -1.0;
+	progress->speed = -1.0;
+	progress->left_s = -1;
+	if (g_strcmp0(state, "queued") == 0) {
+		progress->stage = "waiting";
+		return;
+	}
+	if (g_strcmp0(state, "encoding") == 0) {
+		progress->stage = "encoding";
+		encoding = TRUE;
+		/* A fraction is the running job's only: one that waits to be taken
+		 * again has the figure of an attempt that is over. */
+		if (g_strcmp0(job_state, "running") == 0) {
+			fraction = job_fraction;
+			running = job_running_s;
+		}
+	} else if (g_strcmp0(state, "verifying") == 0) {
+		progress->stage = "checking";
+		if (g_strcmp0(verify_state, "running") == 0) {
+			fraction = verify_fraction;
+			running = verify_running_s;
+		}
+	} else if (g_strcmp0(state, "placing") == 0) {
+		progress->stage = g_strcmp0(outcome, "replace") == 0 ? "replacing" : "keeping";
+		return;
+	} else {
+		return;
+	}
+	/* Not a number, or nothing reported yet (below 0): nothing is known. */
+	if (!(fraction >= 0.0) || fraction > 1.0)
+		return;
+	progress->fraction = fraction;
+	if (running < 10 || fraction < 0.01)
+		return;
+	if (fraction < 1.0)
+		progress->left_s = (gint64)((gdouble)running * (1.0 - fraction) / fraction + 0.5);
+	else
+		progress->left_s = 0;
+	/* The fraction of an encode is of the source read: with its duration,
+	 * how many times real time that is. */
+	if (encoding && duration_ms > 0)
+		progress->speed = fraction * ((gdouble)duration_ms / 1000.0) / (gdouble)running;
 }
 
 static gboolean

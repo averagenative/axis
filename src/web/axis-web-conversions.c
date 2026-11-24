@@ -32,6 +32,9 @@
 #define ADD axis_web_storage_add
 #define MAX_PENDING 32
 #define LIST_LIMIT 200
+/* How often a block that follows a conversion in flight asks again. */
+#define PROGRESS_POLL "every 5s"
+#define LATEST_POLL "every 15s"
 
 struct _AxisWebConversions
 {
@@ -239,12 +242,169 @@ small_post(
 	return form;
 }
 
+/* ── Progress ───────────────────────────────────────────────────── */
+
+/* "about 40 seconds", "about 12 minutes", "about 3 hours 20 minutes" */
+static gchar *
+left_text(gint64 seconds)
+{
+	gint64 minutes;
+
+	if (seconds < 60)
+		return g_strdup("less than a minute");
+	minutes = (seconds + 30) / 60;
+	if (minutes < 60)
+		return g_strdup_printf("about %" G_GINT64_FORMAT " minute%s", minutes, minutes == 1 ? "" : "s");
+	if (minutes % 60 == 0)
+		return g_strdup_printf("about %" G_GINT64_FORMAT " hour%s", minutes / 60, minutes / 60 == 1 ? "" : "s");
+	return g_strdup_printf("about %" G_GINT64_FORMAT " hour%s %" G_GINT64_FORMAT " minute%s", minutes / 60,
+		minutes / 60 == 1 ? "" : "s", minutes % 60, minutes % 60 == 1 ? "" : "s");
+}
+
+gchar *
+axis_web_conversions_progress_text(const AxisConversionProgress *progress)
+{
+	GString *text;
+
+	g_return_val_if_fail(progress != NULL, NULL);
+
+	if (progress->stage == NULL)
+		return g_strdup("Not in flight");
+	text = g_string_new(axis_conversion_progress_stage_label(progress->stage));
+	if (progress->fraction < 0.0) {
+		if (g_strcmp0(progress->stage, "encoding") == 0 || g_strcmp0(progress->stage, "checking") == 0)
+			g_string_append(text, ": no progress reported yet");
+		return g_string_free(text, FALSE);
+	}
+	g_string_append_printf(text, ": %d%%", (gint)(progress->fraction * 100.0 + 0.5));
+	if (progress->speed > 0.0)
+		g_string_append_printf(text, ", %.1f times real time", progress->speed);
+	if (progress->left_s >= 0 && progress->fraction < 1.0) {
+		g_autofree gchar *left = left_text(progress->left_s);
+
+		g_string_append_printf(text, ", %s left", left);
+	}
+	return g_string_free(text, FALSE);
+}
+
+HtmxNode *
+axis_web_conversions_progress_node(const AxisConversionProgress *progress)
+{
+	g_autofree gchar *text = axis_web_conversions_progress_text(progress);
+	HtmxDiv *box = htmx_div_new();
+	HtmxSpan *words = htmx_span_new();
+	HtmxProgress *bar;
+
+	htmx_element_add_class(HTMX_ELEMENT(box), "conversion-progress");
+	/* No value: the bar is indeterminate (the element's own way of saying
+	 * that work goes on and how far is not known). */
+	if (progress->fraction < 0.0)
+		bar = htmx_progress_new();
+	else
+		bar = htmx_progress_new_with_value((gdouble)(gint)(progress->fraction * 100.0 + 0.5), 100.0);
+	/* The same words beside the bar and as its name, for a reader that
+	 * does not show it. */
+	htmx_element_set_attribute(HTMX_ELEMENT(bar), "aria-label", text);
+	htmx_element_add_class(HTMX_ELEMENT(words), "conversion-progress-text");
+	htmx_node_set_text_content(HTMX_NODE(words), text);
+	ADD(box, bar);
+	ADD(box, words);
+	return HTMX_NODE(box);
+}
+
+HtmxNode *
+axis_web_conversions_bar(
+	gdouble      value,
+	gdouble      max,
+	const gchar *text
+){
+	HtmxDiv *box = htmx_div_new();
+	HtmxSpan *words = htmx_span_new();
+	HtmxProgress *bar = htmx_progress_new_with_value(CLAMP(value, 0.0, MAX(max, 0.0)), MAX(max, 0.0));
+
+	htmx_element_add_class(HTMX_ELEMENT(box), "conversion-progress");
+	htmx_element_set_attribute(HTMX_ELEMENT(bar), "aria-label", text);
+	htmx_element_add_class(HTMX_ELEMENT(words), "conversion-progress-text");
+	htmx_node_set_text_content(HTMX_NODE(words), text);
+	ADD(box, bar);
+	ADD(box, words);
+	return HTMX_NODE(box);
+}
+
+static void
+record_progress(
+	const AxisConversionRecord *r,
+	AxisConversionProgress     *progress
+){
+	axis_conversion_progress(r->state, r->outcome, r->job_state, r->job_fraction, r->job_running_s, r->verify_state,
+		r->verify_fraction, r->verify_running_s, r->duration_ms, progress);
+}
+
+static gboolean
+in_flight(const gchar *state)
+{
+	return g_strcmp0(state, "queued") == 0 || g_strcmp0(state, "encoding") == 0 ||
+		g_strcmp0(state, "verifying") == 0 || g_strcmp0(state, "placing") == 0;
+}
+
+/*
+ * The block of a conversion's page that follows it while it is in flight:
+ * the stage in words, the bar, and what the worker says.  It asks for itself
+ * again (htmx, every PROGRESS_POLL) for as long as the conversion is in
+ * flight; the block of one that ended asks for nothing and points at the
+ * page, whose checks and result are read when it is loaded.
+ */
+static HtmxNode *
+progress_block(
+	const AxisConversionRecord *r,
+	gboolean                    polled
+){
+	HtmxDiv *block = htmx_div_new();
+	AxisConversionProgress progress;
+
+	htmx_element_set_id(HTMX_ELEMENT(block), "conversion-progress");
+	record_progress(r, &progress);
+	if (progress.stage == NULL) {
+		/* Only a block that was following a conversion says that it ended. */
+		if (polled) {
+			g_autofree gchar *href = g_strdup_printf("/conversions/%" G_GINT64_FORMAT, r->id);
+			g_autofree gchar *text = g_strdup_printf("The conversion is no longer in flight (%s). ",
+				axis_conversion_state_label(r->state));
+			HtmxP *line = htmx_p_new();
+			HtmxSpan *words = htmx_span_new();
+
+			htmx_element_add_class(HTMX_ELEMENT(line), "notice");
+			htmx_node_set_text_content(HTMX_NODE(words), text);
+			ADD(line, words);
+			ADD(line, axis_web_browser_link(href, "Load the page again to see its checks and result"));
+			ADD(block, line);
+		}
+		return HTMX_NODE(block);
+	}
+	{
+		g_autofree gchar *href = g_strdup_printf("/conversions/%" G_GINT64_FORMAT "/progress", r->id);
+
+		htmx_element_set_attribute(HTMX_ELEMENT(block), "hx-get", href);
+		htmx_element_set_attribute(HTMX_ELEMENT(block), "hx-trigger", PROGRESS_POLL);
+		htmx_element_set_attribute(HTMX_ELEMENT(block), "hx-swap", "outerHTML");
+	}
+	ADD(block, axis_web_conversions_progress_node(&progress));
+	/* What the worker says of it, as it says it. */
+	if (g_strcmp0(progress.stage, "encoding") == 0 && g_strcmp0(r->job_state, "running") == 0 &&
+	    r->job_message != NULL && r->job_message[0] != '\0')
+		ADD(block, axis_web_storage_text("help", r->job_message));
+	else if (g_strcmp0(progress.stage, "checking") == 0 && g_strcmp0(r->verify_state, "running") == 0 &&
+	    r->verify_message != NULL && r->verify_message[0] != '\0')
+		ADD(block, axis_web_storage_text("help", r->verify_message));
+	return HTMX_NODE(block);
+}
+
 static const gchar *
 done_text(const gchar *key)
 {
 	if (g_strcmp0(key, "requested") == 0)
 		return "The conversion is queued: a worker that can reach the file's disk takes it, then this server "
-			"checks the result. Reload this page to see each check as it is made.";
+			"checks the result. This page follows its progress; load it again to see each check as it is made.";
 	if (g_strcmp0(key, "cancelled") == 0)
 		return "The conversion was cancelled; whatever a worker made is removed.";
 	if (g_strcmp0(key, "trial-removed") == 0)
@@ -367,8 +527,11 @@ conversions_table(GPtrArray *records)
 	};
 	HtmxNode *table = axis_web_table_new("conversions", columns);
 	HtmxTbody *body = htmx_tbody_new();
+	HtmxDiv *holder = htmx_div_new();
+	gboolean any_in_flight = FALSE;
 	guint i;
 
+	htmx_element_set_id(HTMX_ELEMENT(holder), "conversions-latest");
 	for (i = 0; i < records->len; i++) {
 		const AxisConversionRecord *r = g_ptr_array_index(records, i);
 		g_autofree gchar *href = g_strdup_printf("/conversions/%" G_GINT64_FORMAT, r->id);
@@ -380,7 +543,19 @@ conversions_table(GPtrArray *records)
 
 		ADD(bdi, axis_web_breakable(shown));
 		ADD(row, cell_node(link_node(href, bdi)));
-		ADD(row, cell_node(state_badge(r->state)));
+		if (in_flight(r->state)) {
+			/* In flight: its state, and how far it is. */
+			HtmxDiv *cell = htmx_div_new();
+			AxisConversionProgress progress;
+
+			any_in_flight = TRUE;
+			record_progress(r, &progress);
+			ADD(cell, state_badge(r->state));
+			ADD(cell, axis_web_conversions_progress_node(&progress));
+			ADD(row, cell_node(HTMX_NODE(cell)));
+		} else {
+			ADD(row, cell_node(state_badge(r->state)));
+		}
 		ADD(row, cell_text(profile));
 		ADD(row, cell_text(g_strcmp0(r->outcome, "replace") == 0 ? "Replacement" : "Trial"));
 		ADD(row, cell_size(r->src_size));
@@ -389,7 +564,53 @@ conversions_table(GPtrArray *records)
 		ADD(body, row);
 	}
 	ADD(table, body);
-	return table;
+	/* While a conversion is in flight the table asks for itself again; once
+	 * none is, what comes back asks for nothing. */
+	if (any_in_flight) {
+		htmx_element_set_attribute(HTMX_ELEMENT(holder), "hx-get", "/conversions/latest");
+		htmx_element_set_attribute(HTMX_ELEMENT(holder), "hx-trigger", LATEST_POLL);
+		htmx_element_set_attribute(HTMX_ELEMENT(holder), "hx-swap", "outerHTML");
+	}
+	ADD(holder, table);
+	return HTMX_NODE(holder);
+}
+
+static HtmxResponse *
+fragment_response(HtmxNode *node)
+{
+	HtmxResponse *response = htmx_response_new();
+	g_autofree gchar *markup = NULL;
+
+	axis_web_table_apply_roles(node);
+	markup = htmx_element_render(HTMX_ELEMENT(node));
+	htmx_response_set_content(response, markup);
+	htmx_response_set_content_type(response, "text/html; charset=utf-8");
+	htmx_response_add_header(response, "Vary", "HX-Request, HX-History-Restore-Request");
+	g_object_unref(node);
+	return response;
+}
+
+static void
+latest_run(
+	AxisWebConversions *self,
+	gpointer            data
+){
+	ListWork *work = data;
+
+	axis_conversions_list(self->conversions, LIST_LIMIT, &work->records, &work->error);
+}
+
+static HtmxResponse *
+latest_done(
+	AxisWebConversions *self,
+	HtmxRequest        *request,
+	gpointer            data
+){
+	ListWork *work = data;
+
+	if (work->error != NULL)
+		return axis_web_internal_error(request, work->error);
+	return fragment_response(conversions_table(work->records));
 }
 
 static HtmxNode *
@@ -595,11 +816,21 @@ handle_list(
 	return dispatch(user_data, request, list_run, list_done, g_new0(ListWork, 1), list_work_free);
 }
 
+static HtmxResponse *
+handle_latest(
+	HtmxRequest *request,
+	GHashTable  *params,
+	gpointer     user_data
+){
+	return dispatch(user_data, request, latest_run, latest_done, g_new0(ListWork, 1), list_work_free);
+}
+
 /* ── One conversion ─────────────────────────────────────────────── */
 
 typedef struct
 {
 	gint64                 id;
+	gboolean               progress_only;
 	AxisConversionRecord  *record;
 	GPtrArray             *checks;
 	GError                *error;
@@ -623,7 +854,8 @@ one_run(
 ){
 	OneWork *work = data;
 
-	axis_conversions_get(self->conversions, work->id, &work->record, &work->checks, &work->error);
+	axis_conversions_get(self->conversions, work->id, &work->record, work->progress_only ? NULL : &work->checks,
+		&work->error);
 }
 
 static HtmxNode *
@@ -704,6 +936,8 @@ one_done(
 		return axis_web_error_respond(request, 404, "Not found", "There is no such conversion.");
 	if (work->error != NULL)
 		return axis_web_internal_error(request, work->error);
+	if (work->progress_only)
+		return fragment_response(progress_block(r, TRUE));
 	replace = g_strcmp0(r->outcome, "replace") == 0;
 	title = g_strdup_printf("Conversion %" G_GINT64_FORMAT, r->id);
 	profile = profile_label(r->profile_name, r->revision_number);
@@ -736,6 +970,9 @@ one_done(
 		axis_web_browser_fact(facts, "Library folder", r->root_name);
 	axis_web_browser_fact(facts, "Conversion profile", profile);
 	axis_web_browser_fact(facts, "Trial or replacement", replace ? "Replace the original" : "Trial");
+	if (r->convert_kept)
+		axis_web_browser_fact(facts, "Files Axis keeps", "Asked for with the choice to convert kept files: if the "
+			"file is kept, it is converted in place and stays kept.");
 	axis_web_browser_fact_node(facts, "State", state_badge(r->state));
 	if (r->result_text != NULL)
 		axis_web_browser_fact(facts, "Result", r->result_text);
@@ -812,6 +1049,8 @@ one_done(
 		axis_web_browser_fact(facts, "Checks in progress", text);
 	}
 	ADD(card, facts);
+	/* How far it is, followed while it is in flight. */
+	ADD(card, progress_block(r, FALSE));
 	if (g_strcmp0(r->state, "queued") == 0 || g_strcmp0(r->state, "encoding") == 0) {
 		g_autofree gchar *href = g_strdup_printf("/conversions/%" G_GINT64_FORMAT "/cancel", r->id);
 
@@ -944,6 +1183,23 @@ handle_one(
 		return axis_web_error_respond(request, 404, "Not found", "There is no such conversion.");
 	work = g_new0(OneWork, 1);
 	work->id = id;
+	return dispatch(user_data, request, one_run, one_done, work, one_work_free);
+}
+
+static HtmxResponse *
+handle_progress(
+	HtmxRequest *request,
+	GHashTable  *params,
+	gpointer     user_data
+){
+	OneWork *work;
+	gint64 id = axis_web_storage_param_id(params);
+
+	if (id <= 0)
+		return axis_web_error_respond(request, 404, "Not found", "There is no such conversion.");
+	work = g_new0(OneWork, 1);
+	work->id = id;
+	work->progress_only = TRUE;
 	return dispatch(user_data, request, one_run, one_done, work, one_work_free);
 }
 
@@ -1197,6 +1453,7 @@ typedef struct
 	gint64                 revision_id;
 	AxisConversionOutcome  outcome;
 	gboolean               confirmed;
+	gboolean               convert_kept;	/* the tick "Also convert files Axis keeps" */
 	gchar                 *user;
 	AxisConversionPreview *preview;
 	gint64                 conversion_id;
@@ -1278,6 +1535,7 @@ preview_done(
 	g_autoptr(HtmxDiv) content = htmx_div_new();
 	const AxisConversionGate *refusal;
 	gboolean replace = work->outcome == AXIS_CONVERSION_REPLACE;
+	gboolean kept_choice = FALSE;
 	HtmxNode *card;
 	HtmxNode *facts;
 
@@ -1341,8 +1599,24 @@ preview_done(
 	ADD(content, card);
 
 	refusal = axis_conversion_preview_refusal(p);
+	/* A kept file that nothing else holds back: the administrator may choose
+	 * to convert it, with a tick of its own (convert-kept-files).  The
+	 * request works every condition out again with the choice; without the
+	 * tick it is refused as before. */
+	if (refusal != NULL && replace && p->kept) {
+		gboolean other = FALSE;
+		guint i;
+
+		for (i = 0; i < p->gates->len; i++) {
+			const AxisConversionGate *gate = g_ptr_array_index(p->gates, i);
+
+			if (gate->applies && !gate->passed && g_strcmp0(gate->id, "kept") != 0)
+				other = TRUE;
+		}
+		kept_choice = !other;
+	}
 	card = axis_web_storage_card(replace ? "Confirm the replacement" : "Start the trial");
-	if (refusal != NULL) {
+	if (refusal != NULL && !kept_choice) {
 		g_autofree gchar *text = g_strdup_printf("This conversion cannot start now: %s. %s", refusal->label,
 			refusal->detail != NULL ? refusal->detail : "");
 
@@ -1358,6 +1632,13 @@ preview_done(
 		if (replace) {
 			g_autofree gchar *sentence = axis_web_conversions_keep_sentence(p->keep_seconds);
 
+			if (kept_choice) {
+				ADD(form, axis_web_storage_text("notice notice-warning", "Axis keeps this file: it does not replace it "
+					"with another release, and a conversion leaves it alone unless you choose otherwise here."));
+				ADD(form, axis_web_storage_checkbox("conversion-convert-kept", AXIS_WEB_CONVERT_KEPT_LABEL, "convert_kept",
+					FALSE));
+				ADD(form, axis_web_storage_text("help", AXIS_WEB_CONVERT_KEPT_HELP));
+			}
 			ADD(form, axis_web_storage_text("notice notice-warning", sentence));
 			ADD(form, axis_web_storage_checkbox("conversion-confirm", "I understand: the original will be deleted",
 				"confirm", TRUE));
@@ -1396,8 +1677,8 @@ request_run(
 ){
 	AskWork *work = data;
 
-	axis_conversions_request(self->conversions, work->file_id, work->revision_id, work->outcome, work->confirmed,
-		work->user, &work->conversion_id, &work->error);
+	axis_conversions_request_full(self->conversions, work->file_id, work->revision_id, work->outcome, work->confirmed,
+		work->convert_kept, work->user, &work->conversion_id, &work->error);
 }
 
 static HtmxResponse *
@@ -1411,8 +1692,8 @@ request_done(
 
 	if (work->error != NULL)
 		return error_page(request, work->error);
-	axis_web_storage_audit(request, "conversion %" G_GINT64_FORMAT " requested (%s)", work->conversion_id,
-		axis_conversion_outcome_to_string(work->outcome));
+	axis_web_storage_audit(request, "conversion %" G_GINT64_FORMAT " requested (%s%s)", work->conversion_id,
+		axis_conversion_outcome_to_string(work->outcome), work->convert_kept ? ", also converting a file Axis keeps" : "");
 	location = g_strdup_printf("/conversions/%" G_GINT64_FORMAT "?done=requested", work->conversion_id);
 	return axis_web_auth_redirect(request, location);
 }
@@ -1436,6 +1717,8 @@ handle_request(
 		return axis_web_error_respond(request, 400, "Not done", "A replacement deletes the original: tick the box to "
 			"confirm.");
 	}
+	/* Only an explicit tick: anything else is no choice. */
+	work->convert_kept = axis_web_storage_form_yes(request, "convert_kept");
 	work->user = g_strdup(axis_web_request_get_username(request));
 	return dispatch(user_data, request, request_run, request_done, work, ask_work_free);
 }
@@ -1956,7 +2239,10 @@ register_routes(
 	axis_web_route_full(web, HTMX_METHOD_POST, "/conversions/resume", AXIS_WEB_ROUTE_ADMIN, handle_resume, self);
 	axis_web_route_full(web, HTMX_METHOD_GET, "/conversions/prove/:id", AXIS_WEB_ROUTE_ADMIN, handle_proving, self);
 	axis_web_route_full(web, HTMX_METHOD_POST, "/conversions/prove/:id", AXIS_WEB_ROUTE_ADMIN, handle_prove, self);
+	axis_web_route_full(web, HTMX_METHOD_GET, "/conversions/latest", AXIS_WEB_ROUTE_ADMIN, handle_latest, self);
 	axis_web_route_full(web, HTMX_METHOD_GET, "/conversions/:id", AXIS_WEB_ROUTE_ADMIN, handle_one, self);
+	axis_web_route_full(web, HTMX_METHOD_GET, "/conversions/:id/progress", AXIS_WEB_ROUTE_ADMIN, handle_progress,
+		self);
 	axis_web_route_full(web, HTMX_METHOD_POST, "/conversions/:id/cancel", AXIS_WEB_ROUTE_ADMIN, handle_cancel, self);
 	axis_web_route_full(web, HTMX_METHOD_POST, "/conversions/:id/remove-trial", AXIS_WEB_ROUTE_ADMIN,
 		handle_remove_trial, self);

@@ -343,6 +343,9 @@ done_text(const gchar *key)
 		return "The limits are saved.";
 	if (g_strcmp0(key, "removed") == 0)
 		return "Taken out of the list.";
+	if (g_strcmp0(key, "kept") == 0)
+		return "The files Axis keeps are being added to the list (this page follows it): each is listed, or left out "
+			"for another reason of its own. They stay kept. Nothing is converted until the run is started or resumed.";
 	return NULL;
 }
 
@@ -693,6 +696,14 @@ plan_done(
 			"built-in one under Conversion profiles."));
 	}
 	ADD(form, set);
+
+	/* Off unless ticked: the run then lists the files Axis keeps as well. */
+	set = fieldset("Files Axis keeps");
+	ADD(set, axis_web_storage_checkbox("run-convert-kept", AXIS_WEB_CONVERT_KEPT_LABEL, "convert_kept", FALSE));
+	ADD(set, axis_web_storage_text("help", AXIS_WEB_CONVERT_KEPT_HELP " Files are kept when you keep them by hand, "
+		"and nearly every file is after a migration from Radarr or Sonarr. Without this, a run leaves kept files out; "
+		"you can still add them from the run's page."));
+	ADD(form, set);
 	ADD(form, axis_web_auth_button("Make the list", "button-primary"));
 	ADD(card, form);
 	ADD(content, card);
@@ -714,6 +725,7 @@ typedef struct
 	GArray                 *roots;
 	gint64                  title_id;
 	gint64                  revision_id;
+	gboolean                convert_kept;	/* the tick "Also convert files Axis keeps" */
 	gchar                  *user;
 	gint64                  run_id;
 	gboolean                created;
@@ -740,7 +752,7 @@ create_run(
 	CreateWork *work = data;
 
 	axis_conversion_runs_create_full(self->runs, work->scope, (const gint64 *)work->roots->data, work->roots->len,
-		work->title_id, work->revision_id, work->user, &work->run_id, &work->created, &work->error);
+		work->title_id, work->revision_id, work->convert_kept, work->user, &work->run_id, &work->created, &work->error);
 }
 
 static HtmxResponse *
@@ -759,7 +771,8 @@ create_done(
 		location = g_strdup_printf("/conversions/runs/%" G_GINT64_FORMAT, work->run_id);
 		return axis_web_place_redirect(request, location, "exists", "run-controls");
 	}
-	axis_web_storage_audit(request, "conversion run %" G_GINT64_FORMAT " made", work->run_id);
+	axis_web_storage_audit(request, "conversion run %" G_GINT64_FORMAT " made%s", work->run_id,
+		work->convert_kept ? ", also converting the files Axis keeps" : "");
 	location = g_strdup_printf("/conversions/runs/%" G_GINT64_FORMAT "?done=created", work->run_id);
 	return axis_web_auth_redirect(request, location);
 }
@@ -819,6 +832,8 @@ handle_create(
 		create_work_free(work);
 		return axis_web_error_respond(request, 400, "Not done", "Choose a series.");
 	}
+	/* Only an explicit tick: anything else is no choice. */
+	work->convert_kept = axis_web_storage_form_yes(request, "convert_kept");
 	work->user = g_strdup(axis_web_request_get_username(request));
 	return dispatch(user_data, request, create_run, create_done, work, create_work_free);
 }
@@ -897,6 +912,44 @@ duration_text(gint64 seconds)
 	return g_strdup_printf("%" G_GINT64_FORMAT " minutes", MAX(seconds / 60, 1));
 }
 
+/* The files settled (done, skipped or failed) of the files within the run's
+ * caps (of the whole list when it has none), as a bar with its words. */
+static HtmxNode *
+files_bar(const AxisConversionRunInfo *info)
+{
+	gint64 listed = info->waiting + info->asked + info->done + info->skipped + info->failed;
+	gboolean capped = (info->cap_files > 0 || info->cap_bytes > 0) && info->cap_files_in > 0;
+	gint64 of = capped ? MIN(info->cap_files_in, listed) : listed;
+	gint64 settled = MIN(info->done + info->skipped + info->failed, of);
+	g_autofree gchar *text = g_strdup_printf("%" G_GINT64_FORMAT " of %" G_GINT64_FORMAT " files %s (%d%%)", settled, of,
+		capped ? "within its caps settled" : "settled", of > 0 ? (gint)(settled * 100 / of) : 0);
+
+	return axis_web_conversions_bar((gdouble)settled, (gdouble)of, text);
+}
+
+/* The bytes saved so far against the saving estimated for the files within
+ * the caps; NULL while nothing is done or nothing is estimated. */
+static HtmxNode *
+saved_bar(const AxisConversionRunInfo *info)
+{
+	gboolean capped = info->cap_files > 0 || info->cap_bytes > 0;
+	gint64 estimate = capped ? info->cap_bytes_in - info->cap_mid_in : info->bytes - info->mid;
+	gint64 saved = MAX(info->done_before - info->done_after, 0);
+	g_autofree gchar *saved_text = NULL;
+	g_autofree gchar *estimate_text = NULL;
+	g_autofree gchar *text = NULL;
+
+	if (info->done <= 0 || estimate <= 0)
+		return NULL;
+	saved_text = size_text(saved);
+	estimate_text = size_text(estimate);
+	text = g_strdup_printf("%s saved of about %s estimated%s%s", saved_text, estimate_text,
+		capped ? " within its caps" : "", g_strcmp0(info->outcome, "replace") == 0 || info->done_trials == 0 ?
+		"" : " (as trials, nothing replaced)");
+	/* As a percent: the sizes are too long for a bar's value to carry. */
+	return axis_web_conversions_bar((gdouble)(gint)(MIN(saved, estimate) * 100 / estimate), 100.0, text);
+}
+
 /* Where the run is and why: the block the page polls. */
 static HtmxNode *
 status_block(
@@ -925,9 +978,12 @@ status_block(
 			g_strcmp0(info->list_job_state, "running") == 0 ? "Being made" : "Waiting for its turn",
 			info->list_message != NULL ? ": " : "", info->list_message != NULL ? info->list_message : "");
 
-		axis_web_browser_fact(facts, "List of files", text);
+		axis_web_browser_fact(facts, info->relist_state != NULL ? "Adding the files Axis keeps" : "List of files", text);
 	}
 	if (g_strcmp0(info->state, "failed") == 0 && info->list_text != NULL)
+		ADD(card, axis_web_storage_text("notice notice-error", info->list_text));
+	/* Kept files that could not be added: the run is as it was, and says so. */
+	if (g_strcmp0(info->state, "failed") != 0 && g_strcmp0(info->state, "listing") != 0 && info->list_text != NULL)
 		ADD(card, axis_web_storage_text("notice notice-error", info->list_text));
 	if (g_strcmp0(info->state, "paused") == 0 && info->pause_text != NULL) {
 		g_autofree gchar *text = g_strcmp0(info->pause_code, "person") == 0 ? g_strdup(info->pause_text) :
@@ -953,7 +1009,7 @@ status_block(
 		axis_web_browser_fact(facts, "Files", text);
 		axis_web_browser_fact(facts, "Movies and series finished", units);
 		if (listed > 0)
-			ADD(card, htmx_progress_new_with_value((gdouble)(info->done + info->skipped + info->failed), (gdouble)listed));
+			ADD(card, files_bar(info));
 	}
 	if (info->done > 0) {
 		g_autofree gchar *real = saving_sentence(info->done_before, info->done_after);
@@ -962,6 +1018,12 @@ status_block(
 			info->done_trials == 0 ? "" : "(as trials, nothing replaced) ", real, estimated);
 
 		axis_web_browser_fact(facts, "Saved so far", text);
+	}
+	{
+		HtmxNode *saved = saved_bar(info);
+
+		if (saved != NULL)
+			ADD(card, saved);
 	}
 	ADD(card, facts);
 	if (in_flight != NULL && in_flight->len > 0) {
@@ -979,6 +1041,15 @@ status_block(
 					e->conversion_id, axis_conversion_state_label(e->conversion_state));
 
 				ADD(item, link_text(href, text));
+			}
+			/* How far the file in flight is. */
+			{
+				AxisConversionProgress progress;
+
+				axis_conversion_progress(e->conversion_state, e->outcome, e->job_state, e->job_fraction, e->job_running_s,
+					e->verify_state, e->verify_fraction, e->verify_running_s, e->duration_ms, &progress);
+				if (progress.stage != NULL)
+					ADD(item, axis_web_conversions_progress_node(&progress));
 			}
 			ADD(list, item);
 		}
@@ -1026,6 +1097,16 @@ what_card(
 		g_autofree gchar *text = g_strdup_printf("%s, %s", info->confirmed_by, when);
 
 		axis_web_browser_fact(facts, "Replacing confirmed by", text);
+	}
+	if (info->convert_kept) {
+		g_autofree gchar *when = axis_web_format_time(info->convert_kept_us, "");
+		g_autofree gchar *text = g_strdup_printf("Included: a kept file is converted in place after every check passes, "
+			"and stays kept. Chosen by %s, %s.", info->convert_kept_by != NULL ? info->convert_kept_by : "?", when);
+
+		axis_web_browser_fact(facts, "Files Axis keeps", text);
+	} else {
+		axis_web_browser_fact(facts, "Files Axis keeps", "Left out: the run converts no file that Axis keeps (kept by "
+			"hand, or brought over from Radarr or Sonarr).");
 	}
 	axis_web_browser_fact(facts, "Made by", who);
 	if (info->started_by != NULL) {
@@ -1307,16 +1388,29 @@ units_card(
 	return card;
 }
 
+/* Whether the files left out as kept can be added to the run now: it does
+ * not convert kept files yet, asks for nothing (ready, paused, finished), and
+ * has no file in flight.  The server decides it again at the POST. */
+static gboolean
+may_include_kept(const AxisConversionRunInfo *info)
+{
+	return !info->convert_kept && info->asked == 0 && (g_strcmp0(info->state, "ready") == 0 ||
+		g_strcmp0(info->state, "paused") == 0 || g_strcmp0(info->state, "finished") == 0);
+}
+
 static HtmxNode *
 reasons_card(
+	HtmxRequest                 *request,
 	const AxisConversionRunInfo *info,
-	GPtrArray                   *reasons
+	GPtrArray                   *reasons,
+	AxisWebNotice               *placed
 ){
 	static const AxisWebColumn columns[] = {
 		{ "Why it is not in the list", AXIS_WEB_COL_NAME },
 		{ "Files", AXIS_WEB_COL_COUNT },
 		{ "Size", AXIS_WEB_COL_SIZE },
 		{ "What it means", AXIS_WEB_COL_WIDE },
+		{ "Action", AXIS_WEB_COL_ACTIONS },
 		{ NULL, 0 }
 	};
 	HtmxNode *card = axis_web_storage_card("Files left out, and why");
@@ -1324,6 +1418,8 @@ reasons_card(
 	HtmxTbody *body;
 	guint i;
 
+	htmx_element_set_id(HTMX_ELEMENT(card), "run-left-out");
+	axis_web_notice_put(placed, card, "run-left-out");
 	if (reasons == NULL || reasons->len == 0) {
 		ADD(card, axis_web_storage_text("help", g_strcmp0(info->state, "listing") == 0 ? "The list is being made." :
 			"Every file looked at is in the list."));
@@ -1344,6 +1440,24 @@ reasons_card(
 		ADD(row, cell_count(r->files));
 		ADD(row, cell_size(r->bytes));
 		ADD(row, cell_text(axis_conversion_run_reason_help(r->reason)));
+		if (g_strcmp0(r->reason, "kept") == 0 && r->files > 0 && may_include_kept(info)) {
+			g_autofree gchar *action = g_strdup_printf("/conversions/runs/%" G_GINT64_FORMAT "/include-kept", info->id);
+			g_autofree gchar *label = g_strdup_printf("Add these %" G_GINT64_FORMAT " file%s to the run", r->files,
+				r->files == 1 ? "" : "s");
+			HtmxNode *form = small_post(request, action, label, NULL);
+			HtmxDiv *cell = htmx_div_new();
+
+			ADD(cell, form);
+			ADD(cell, htmx_small_new_with_text(AXIS_WEB_CONVERT_KEPT_HELP));
+			ADD(row, cell_node(HTMX_NODE(cell)));
+		} else if (g_strcmp0(r->reason, "kept") == 0 && !info->convert_kept && info->asked > 0) {
+			ADD(row, cell_text("You can add these files once nothing of the run is in flight."));
+		} else if (g_strcmp0(r->reason, "kept") == 0 && !info->convert_kept &&
+		    g_strcmp0(info->state, "running") == 0) {
+			ADD(row, cell_text("Pause the run to add these files."));
+		} else {
+			ADD(row, cell_text(""));
+		}
 		ADD(body, row);
 	}
 	ADD(table, body);
@@ -1494,7 +1608,7 @@ run_done(
 	    g_strcmp0(info->state, "failed") != 0)
 		ADD(content, controls_card(self, request, info, &placed));
 	ADD(content, units_card(request, info, work->units, work->more, work->after, &placed));
-	ADD(content, reasons_card(info, work->reasons));
+	ADD(content, reasons_card(request, info, work->reasons, &placed));
 	if (work->recent != NULL && work->recent->len > 0) {
 		HtmxNode *card = axis_web_storage_card("Files finished last");
 
@@ -1860,7 +1974,8 @@ typedef enum
 	ACT_REPLACE,
 	ACT_LIMITS,
 	ACT_REMOVE_UNIT,
-	ACT_REMOVE_ENTRY
+	ACT_REMOVE_ENTRY,
+	ACT_INCLUDE_KEPT
 } Act;
 
 typedef struct
@@ -1916,6 +2031,9 @@ act_run(
 	case ACT_REMOVE_UNIT:
 		axis_conversion_runs_remove_unit(self->runs, work->id, (gint)work->target, work->user, &work->error);
 		break;
+	case ACT_INCLUDE_KEPT:
+		axis_conversion_runs_include_kept(self->runs, work->id, work->user, &work->error);
+		break;
 	default:
 		axis_conversion_runs_remove_entry(self->runs, work->id, work->target, work->user, &work->error);
 		break;
@@ -1929,7 +2047,7 @@ act_done(
 	gpointer     data
 ){
 	static const gchar *const keys[] = {
-		"started", "paused", "resumed", "cancelled", "replacing", "limits", "removed", "removed"
+		"started", "paused", "resumed", "cancelled", "replacing", "limits", "removed", "removed", "kept"
 	};
 	ActWork *work = data;
 	g_autofree gchar *location = NULL;
@@ -1947,6 +2065,9 @@ act_done(
 		location = work->after > 0 ? g_strdup_printf("/conversions/runs/%" G_GINT64_FORMAT "?after=%d", work->id,
 			work->after) : g_strdup_printf("/conversions/runs/%" G_GINT64_FORMAT, work->id);
 		place = g_strdup_printf("run-unit-%d", (gint)work->target);
+	} else if (work->act == ACT_INCLUDE_KEPT) {
+		location = g_strdup_printf("/conversions/runs/%" G_GINT64_FORMAT, work->id);
+		place = g_strdup("run-left-out");
 	} else {
 		location = g_strdup_printf("/conversions/runs/%" G_GINT64_FORMAT, work->id);
 		place = g_strdup("run-controls");
@@ -2129,6 +2250,12 @@ handle_remove_entry(HtmxRequest *request, GHashTable *params, gpointer user_data
 	return act(request, params, user_data, ACT_REMOVE_ENTRY);
 }
 
+static HtmxResponse *
+handle_include_kept(HtmxRequest *request, GHashTable *params, gpointer user_data)
+{
+	return act(request, params, user_data, ACT_INCLUDE_KEPT);
+}
+
 /* ── The dashboard ──────────────────────────────────────────────── */
 
 static gpointer
@@ -2182,7 +2309,7 @@ dashboard_render(
 	ADD(piece, line);
 	ADD(piece, axis_web_storage_text(NULL, text));
 	if (listed > 0)
-		ADD(piece, htmx_progress_new_with_value((gdouble)(info->done + info->skipped + info->failed), (gdouble)listed));
+		ADD(piece, files_bar(info));
 	axis_web_dashboard_add(board, AXIS_WEB_DASHBOARD_NOW, 30, href, HTMX_NODE(piece));
 	/* A paused run is the attention source's to say, below. */
 	(void)user_data;
@@ -2328,6 +2455,8 @@ axis_web_runs_register(
 		handle_remove_unit, self);
 	axis_web_route_full(web, HTMX_METHOD_POST, "/conversions/runs/:id/entries/:entry/remove", AXIS_WEB_ROUTE_ADMIN,
 		handle_remove_entry, self);
+	axis_web_route_full(web, HTMX_METHOD_POST, "/conversions/runs/:id/include-kept", AXIS_WEB_ROUTE_ADMIN,
+		handle_include_kept, self);
 }
 
 AxisWebRuns *

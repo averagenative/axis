@@ -102,7 +102,8 @@ axis_conversion_run_reason_help(const gchar *reason)
 	if (g_strcmp0(reason, "in_flight") == 0)
 		return "Someone asked for a conversion of it that has not ended yet; plan a new run when it has.";
 	if (g_strcmp0(reason, "kept") == 0)
-		return "Let Axis upgrade it again on its links page to allow a conversion.";
+		return "Axis does not replace these files with another release. To convert them in place, add them to this "
+			"run: they stay kept. Or let Axis upgrade a file again on its links page.";
 	if (axis_estimate_reason_from_string(reason, &estimated))
 		return axis_estimate_reason_help(estimated);
 	return "";
@@ -386,8 +387,8 @@ axis_conversion_runs_create(
 	gint64                 *run_id,
 	GError                **error
 ){
-	return axis_conversion_runs_create_full(self, scope, root_ids, n_roots, title_id, revision_id, user, run_id, NULL,
-		error);
+	return axis_conversion_runs_create_full(self, scope, root_ids, n_roots, title_id, revision_id, FALSE, user, run_id,
+		NULL, error);
 }
 
 gboolean
@@ -398,6 +399,7 @@ axis_conversion_runs_create_full(
 	guint                   n_roots,
 	gint64                  title_id,
 	gint64                  revision_id,
+	gboolean                convert_kept,
 	const gchar            *user,
 	gint64                 *run_id,
 	gboolean               *created,
@@ -413,7 +415,7 @@ axis_conversion_runs_create_full(
 	g_autofree gchar *key = NULL;
 	g_autofree gchar *id_text = NULL;
 	g_autofree gchar *job_text = NULL;
-	const gchar *params[6];
+	const gchar *params[7];
 	AxisJobSpec spec;
 	AxisDbConn *conn;
 	gint64 job = 0;
@@ -459,20 +461,29 @@ axis_conversion_runs_create_full(
 	params[3] = title;
 	params[4] = text;
 	params[5] = user;
+	params[6] = convert_kept ? "true" : "false";
 	/* A person's (created asked for): the same selection with the same
-	 * revision, not started yet, is that run, not another (a second click
-	 * of Make the run).  A later run beside a started one stays possible:
-	 * it skips what the started one holds. */
+	 * revision and the same choice about kept files, not started yet, is
+	 * that run, not another (a second click of Make the run).  A later run
+	 * beside a started one stays possible: it skips what the started one
+	 * holds. */
 	if (created != NULL) {
 		g_autoptr(AxisDbResult) same = NULL;
+		const gchar *same_params[5];
 
+		same_params[0] = params[0];
+		same_params[1] = params[1];
+		same_params[2] = params[2];
+		same_params[3] = params[3];
+		same_params[4] = params[6];
 		if (!axis_db_conn_exec(conn, "SELECT pg_advisory_xact_lock(hashtext('conversion_run:' || $1))", 1, params,
 		        NULL, error) ||
 		    !axis_db_conn_exec(conn, "SELECT id FROM conversion_run WHERE revision_id = $1::bigint AND scope = $2"
 		        " AND (SELECT array_agg(DISTINCT r ORDER BY r) FROM unnest(root_ids) r)"
 		        "   IS NOT DISTINCT FROM (SELECT array_agg(DISTINCT r ORDER BY r) FROM unnest($3::bigint[]) r)"
-		        " AND title_id IS NOT DISTINCT FROM $4::bigint"
-		        " AND state IN ('listing', 'ready') ORDER BY id DESC LIMIT 1", 4, params, &same, error))
+		        " AND title_id IS NOT DISTINCT FROM $4::bigint AND convert_kept = $5::boolean"
+		        " AND state IN ('listing', 'ready') AND relist_state IS NULL ORDER BY id DESC LIMIT 1", 5, same_params,
+		        &same, error))
 			goto rollback;
 		if (axis_db_result_get_n_rows(same) > 0) {
 			axis_db_result_get_int64(same, 0, 0, run_id);
@@ -484,8 +495,9 @@ axis_conversion_runs_create_full(
 		}
 	}
 	if (!axis_db_conn_exec(conn, "INSERT INTO conversion_run (revision_id, scope, root_ids, title_id, scope_text,"
-	        " created_by) VALUES ($1::bigint, $2, $3::bigint[], $4::bigint, left($5, 500), $6) RETURNING id", 6, params,
-	        &inserted, error))
+	        " created_by, convert_kept, convert_kept_by, convert_kept_at) VALUES ($1::bigint, $2, $3::bigint[], $4::bigint,"
+	        " left($5, 500), $6, $7::boolean, CASE WHEN $7::boolean THEN $6 END, CASE WHEN $7::boolean THEN now() END)"
+	        " RETURNING id", 7, params, &inserted, error))
 		goto rollback;
 	axis_db_result_get_int64(inserted, 0, 0, run_id);
 	id_text = int_text(*run_id);
@@ -505,8 +517,8 @@ axis_conversion_runs_create_full(
 	if (!axis_db_conn_exec(conn, "UPDATE conversion_run SET list_job_id = $2::bigint WHERE id = $1::bigint", 2, params,
 	        NULL, error) || !axis_db_conn_commit(conn, error))
 		goto rollback;
-	g_message("audit: %s made conversion run %" G_GINT64_FORMAT " (%s, %s, revision %d)", user, *run_id, text,
-		revision->name, revision->number);
+	g_message("audit: %s made conversion run %" G_GINT64_FORMAT " (%s, %s, revision %d)%s", user, *run_id, text,
+		revision->name, revision->number, convert_kept ? ", choosing to convert the files Axis keeps as well" : "");
 	if (created != NULL)
 		*created = TRUE;
 	ok = TRUE;
@@ -919,8 +931,8 @@ axis_conversion_runs_cancel(
 		params[0] = id;
 		params[1] = text;
 		if (!axis_db_conn_exec(conn, "UPDATE conversion_run SET state = 'cancelled', finished_at = now(),"
-		        " finish_text = $2, wait_code = NULL, wait_text = NULL, updated_at = now() WHERE id = $1::bigint", 2, params,
-		        NULL, error))
+		        " finish_text = $2, wait_code = NULL, wait_text = NULL, relist_state = NULL, updated_at = now()"
+		        " WHERE id = $1::bigint", 2, params, NULL, error))
 			goto rollback;
 		if (!axis_db_conn_exec(conn, "SELECT c.id FROM conversion_run_entry e JOIN conversion c ON c.id = e.conversion_id"
 		        " WHERE e.run_id = $1::bigint AND e.state = 'asked' AND c.state IN ('queued', 'encoding')", 1, params, &asked,
@@ -1057,6 +1069,109 @@ out:
 		if (!axis_conversion_runs_request_step(self, &local))
 			g_message("conversion runs: the step could not be queued: %s", local->message);
 	}
+	return ok;
+}
+
+gboolean
+axis_conversion_runs_include_kept(
+	AxisConversionRuns  *self,
+	gint64               run_id,
+	const gchar         *user,
+	GError             **error
+){
+	g_autoptr(AxisDbResult) facts = NULL;
+	g_autoptr(JsonObject) payload = json_object_new();
+	g_autofree gchar *id = int_text(run_id);
+	g_autofree gchar *key = NULL;
+	g_autofree gchar *job_text = NULL;
+	const gchar *params[4];
+	AxisJobSpec spec;
+	RunRow row;
+	AxisDbConn *conn;
+	gboolean chosen = FALSE;
+	gint64 in_flight;
+	gint64 kept;
+	gint64 job = 0;
+	gboolean ok = FALSE;
+
+	if (user == NULL || user[0] == '\0') {
+		refuse(error, "A conversion run needs a person.");
+		return FALSE;
+	}
+	conn = axis_db_pool_acquire(self->conversions->pool, error);
+	if (conn == NULL)
+		return FALSE;
+	memset(&row, 0, sizeof(row));
+	if (!axis_db_conn_begin(conn, error))
+		goto out;
+	if (!lock_run(conn, run_id, &row, error))
+		goto rollback;
+	/* Only a run that asks for nothing now: ready to start, paused or
+	 * finished.  A running run's list is not changed under its step. */
+	if (!state_is(&row, "ready", "paused", "finished")) {
+		wrong_state(error, &row, "given the files Axis keeps");
+		goto rollback;
+	}
+	params[0] = id;
+	if (!axis_db_conn_exec(conn, "SELECT r.convert_kept,"
+	        " (SELECT count(*) FROM conversion_run_entry e WHERE e.run_id = r.id AND e.state = 'asked'),"
+	        " (SELECT count(*) FROM conversion_run_excluded x WHERE x.run_id = r.id AND x.reason = 'kept')"
+	        " FROM conversion_run r WHERE r.id = $1::bigint", 1, params, &facts, error))
+		goto rollback;
+	axis_db_result_get_boolean(facts, 0, 0, &chosen);
+	in_flight = int_at(facts, 0, 1);
+	kept = int_at(facts, 0, 2);
+	if (chosen) {
+		g_set_error_literal(error, AXIS_CONVERSION_ERROR, AXIS_CONVERSION_ERROR_STATE,
+			"The run converts the files Axis keeps already.");
+		goto rollback;
+	}
+	/* A paused run lets what is in flight finish: its list is added to
+	 * once nothing of it is being converted, checked or put in place. */
+	if (in_flight > 0) {
+		g_set_error(error, AXIS_CONVERSION_ERROR, AXIS_CONVERSION_ERROR_STATE, "%" G_GINT64_FORMAT " file%s of the run "
+			"%s in flight: add the kept files once %s ended.", in_flight, in_flight == 1 ? "" : "s",
+			in_flight == 1 ? "is" : "are", in_flight == 1 ? "it has" : "they have");
+		goto rollback;
+	}
+	if (kept == 0) {
+		g_set_error_literal(error, AXIS_CONVERSION_ERROR, AXIS_CONVERSION_ERROR_STATE,
+			"No file of the run is left out because Axis keeps it.");
+		goto rollback;
+	}
+	key = g_strdup_printf(AXIS_CONVERSION_RUN_LIST_KIND ":%" G_GINT64_FORMAT ":kept", run_id);
+	json_object_set_int_member(payload, "run", run_id);
+	memset(&spec, 0, sizeof(spec));
+	spec.kind = AXIS_CONVERSION_RUN_LIST_KIND;
+	spec.queue = AXIS_JOB_MAINTENANCE_QUEUE;
+	spec.payload = payload;
+	spec.dedupe_key = key;
+	spec.max_attempts = 1;
+	if (!axis_job_enqueue(conn, &spec, &job, NULL, error))
+		goto rollback;
+	job_text = int_text(job);
+	params[1] = user;
+	params[2] = row.state;
+	params[3] = job_text;
+	/* created_at is what a lost list job is counted from: it is not the
+	 * run's making any more, so the job's own time is asked instead
+	 * (fail_lost_lists reads updated_at for a run being added to). */
+	if (!axis_db_conn_exec(conn, "UPDATE conversion_run SET convert_kept = true, convert_kept_by = $2,"
+	        " convert_kept_at = now(), relist_state = $3, state = 'listing', list_job_id = $4::bigint, list_text = NULL,"
+	        " updated_at = now() WHERE id = $1::bigint", 4, params, NULL, error))
+		goto rollback;
+	if (!axis_db_conn_commit(conn, error))
+		goto rollback;
+	g_message("audit: %s chose to convert the files Axis keeps in conversion run %" G_GINT64_FORMAT " (%" G_GINT64_FORMAT
+		" left out as kept; the run was %s)", user, run_id, kept, row.state);
+	ok = TRUE;
+	goto out;
+
+rollback:
+	axis_db_conn_rollback(conn, NULL);
+out:
+	run_row_clear(&row);
+	axis_db_pool_release(self->conversions->pool, conn);
 	return ok;
 }
 

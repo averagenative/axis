@@ -2352,7 +2352,44 @@ test_gate_kept(Fixture *fx, gconstpointer data)
 	/* A trial replaces nothing: the gate does not apply. */
 	g_assert_true(axis_conversions_preview(fx->conv, film, space_saver, AXIS_CONVERSION_TRIAL, &preview, &error));
 	g_assert_true(preview->ok);
+	g_assert_true(preview->kept);
 	g_clear_pointer(&preview, axis_conversion_preview_free);
+
+	/* (convert-kept-files.)  With the choice to convert kept files the gate
+	 * holds, and says that the file stays kept; it lifts that gate only: a
+	 * version that is not proven refuses the kept file as it refuses any. */
+	for (i = 0; i < 2; i++) {
+		const AxisConversionGate *gate = NULL;
+		guint k;
+
+		g_assert_true(axis_conversions_preview_full(fx->conv, i == 0 ? film : episode, space_saver,
+			AXIS_CONVERSION_REPLACE, TRUE, &preview, &error));
+		g_assert_no_error(error);
+		g_assert_true(preview->ok);
+		g_assert_true(preview->kept);
+		g_assert_true(preview->convert_kept);
+		for (k = 0; k < preview->gates->len; k++) {
+			if (strcmp(((const AxisConversionGate *)g_ptr_array_index(preview->gates, k))->id, "kept") == 0)
+				gate = g_ptr_array_index(preview->gates, k);
+		}
+		g_assert_nonnull(gate);
+		g_assert_true(gate->applies && gate->passed);
+		g_assert_nonnull(strstr(gate->detail, "stays kept"));
+		g_clear_pointer(&preview, axis_conversion_preview_free);
+	}
+	{
+		gint64 nothing = 0;
+
+		g_assert_false(axis_conversions_request_full(fx->conv, film, revision_of(fx, "max_compat"),
+			AXIS_CONVERSION_REPLACE, TRUE, TRUE, "root", &nothing, &error));
+		g_assert_error(error, AXIS_CONVERSION_ERROR, AXIS_CONVERSION_ERROR_REFUSED);
+		g_assert_nonnull(strstr(error->message, "The profile version is proven"));
+		g_clear_error(&error);
+		g_assert_cmpint(n(fx, "SELECT count(*) FROM conversion"), ==, 0);
+	}
+	/* Nothing above changed a mark. */
+	g_assert_cmpint(n(fx, "SELECT (SELECT count(*) FROM movie_file WHERE kept) + (SELECT count(*) FROM series_file"
+		" WHERE kept)"), ==, 2);
 
 	/* A person lets the file go: eligible again. */
 	{
@@ -2365,6 +2402,109 @@ test_gate_kept(Fixture *fx, gconstpointer data)
 	g_assert_true(preview->ok);
 	g_clear_pointer(&preview, axis_conversion_preview_free);
 	g_assert_cmpint(request(fx, film, "space_saver", AXIS_CONVERSION_REPLACE), >, 0);
+}
+
+/*
+ * Spec (conversion-execution, A kept file is converted only by choice): a
+ * kept movie file asked for with the choice is converted by a real worker,
+ * passes the same ten checks (the tenth works the conditions out again, with
+ * the choice the conversion recorded) and takes its original's place; the
+ * file is as kept afterwards as it was before, in the same link, and a later
+ * request without the choice is refused by the condition "kept" as before.
+ * A conversion asked for without the choice, of a file that is kept by the
+ * time it is checked, is rejected by check 10 as before.
+ */
+static void
+test_replace_kept_by_choice(Fixture *fx, gconstpointer data)
+{
+	static const gchar *const kept_text = "Kept: Axis does not replace this file.";
+	g_autoptr(GError) error = NULL;
+	g_autoptr(AxisConversionPreview) preview = NULL;
+	g_autofree gchar *path = NULL;
+	g_autofree gchar *link = NULL;
+	g_autofree gchar *detail = NULL;
+	AxisTestWorker *w;
+	guint number;
+	guint other_number;
+	gint64 space_saver;
+	gint64 file;
+	gint64 other;
+	gint64 before_ino;
+	gint64 id = 0;
+	gint64 plain;
+	guint k;
+
+	SKIP_UNLESS_READY(fx);
+	space_saver = revision_of(fx, "space_saver");
+	file = add_movie(fx, "movie.mkv", &number);
+	other = add_movie(fx, "movie.mkv", &other_number);
+	path = movie_path(fx, number, "mkv");
+	before_ino = inode_of(path);
+	prove_on_devices(fx, space_saver);
+	sql(fx, "INSERT INTO meta_title (kind, title, year, provider, provider_id) VALUES ('film', 'Kept Film', 2001,"
+		" 'fixture', 'kept-film'), ('film', 'Other Film', 2002, 'fixture', 'other-film')");
+	sql(fx, "INSERT INTO movie (title_id, quality_profile_id) SELECT t.id, (SELECT min(id) FROM quality_profile)"
+		" FROM meta_title t WHERE t.provider = 'fixture'");
+	link = g_strdup_printf("INSERT INTO movie_file (file_id, movie_id, quality, kept, kept_how) SELECT %" G_GINT64_FORMAT
+		", m.id, 'webdl_1080p', true, 'brought' FROM movie m JOIN meta_title t ON t.id = m.title_id"
+		" WHERE t.provider_id = 'kept-film'", file);
+	sql(fx, link);
+	g_clear_pointer(&link, g_free);
+	link = g_strdup_printf("INSERT INTO movie_file (file_id, movie_id, quality, kept) SELECT %" G_GINT64_FORMAT
+		", m.id, 'webdl_1080p', false FROM movie m JOIN meta_title t ON t.id = m.title_id"
+		" WHERE t.provider_id = 'other-film'", other);
+	sql(fx, link);
+
+	w = start_worker(fx);
+	/* Not without the choice. */
+	request_refused(fx, file, space_saver, AXIS_CONVERSION_REPLACE, TRUE, kept_text);
+	if (!axis_conversions_request_full(fx->conv, file, space_saver, AXIS_CONVERSION_REPLACE, TRUE, TRUE, "root", &id,
+	        &error))
+		g_error("the request with the choice was refused: %s", error->message);
+	g_assert_cmpint(axis_test_library_n(fx->t, "SELECT count(*) FROM conversion WHERE id = %" G_GINT64_FORMAT
+		" AND convert_kept AND outcome = 'replace'", id), ==, 1);
+	wait_state(fx, w, id, "verifying");
+	finish_ok(fx, id);
+	assert_state(fx, id, "done");
+	assert_all_passed(fx, id);
+	detail = axis_test_library_q(fx->t, "SELECT detail FROM conversion_check WHERE conversion_id = %" G_GINT64_FORMAT
+		" AND number = 10", id);
+	g_assert_cmpstr(detail, ==, "Every gate of the request holds now.");
+	/* Replaced in place: another file under the same name, the same row. */
+	g_assert_cmpint(inode_of(path), !=, before_ino);
+	g_assert_cmpint(inode_of(path), ==, axis_test_library_n(fx->t, "SELECT output_inode FROM conversion WHERE id = %"
+		G_GINT64_FORMAT, id));
+	/* Still kept, as it was, in the same link. */
+	g_assert_cmpint(axis_test_library_n(fx->t, "SELECT count(*) FROM movie_file WHERE file_id = %" G_GINT64_FORMAT
+		" AND kept AND kept_how = 'brought'", file), ==, 1);
+	g_assert_cmpint(n(fx, "SELECT count(*) FROM movie_file WHERE kept"), ==, 1);
+	/* And what reads the mark reads it as before: the condition refuses
+	 * without the choice. */
+	probe_file(fx, file);
+	g_assert_true(axis_conversions_preview(fx->conv, file, space_saver, AXIS_CONVERSION_REPLACE, &preview, &error));
+	g_assert_no_error(error);
+	g_assert_true(preview->kept);
+	for (k = 0; k < preview->gates->len; k++) {
+		const AxisConversionGate *gate = g_ptr_array_index(preview->gates, k);
+
+		if (strcmp(gate->id, "kept") == 0)
+			g_assert_true(gate->applies && !gate->passed);
+	}
+
+	/* A file that becomes kept while its conversion, asked for without the
+	 * choice, is in flight: rejected by check 10, the original as it was. */
+	plain = request(fx, other, "space_saver", AXIS_CONVERSION_REPLACE);
+	wait_state(fx, w, plain, "verifying");
+	g_clear_pointer(&link, g_free);
+	link = g_strdup_printf("UPDATE movie_file SET kept = true WHERE file_id = %" G_GINT64_FORMAT, other);
+	sql(fx, link);
+	finish_ok(fx, plain);
+	stop_worker(fx, w);
+	assert_rejected_by(fx, plain, 10);
+	g_clear_pointer(&detail, g_free);
+	detail = axis_test_library_q(fx->t, "SELECT detail FROM conversion_check WHERE conversion_id = %" G_GINT64_FORMAT
+		" AND number = 10", plain);
+	g_assert_nonnull(strstr(detail, kept_text));
 }
 
 /* Spec: the gates again when a worker takes the work. */
@@ -5869,6 +6009,7 @@ main(int argc, char **argv)
 	ADD("path-trickery", test_path_trickery);
 	ADD("gates-at-request", test_gates_at_request);
 	ADD("gate-kept", test_gate_kept);
+	ADD("replace-kept-by-choice", test_replace_kept_by_choice);
 	ADD("gates-at-claim", test_gates_at_claim);
 	ADD("recover-same-name", test_recover_same_name);
 	ADD("recover-new-name", test_recover_new_name);

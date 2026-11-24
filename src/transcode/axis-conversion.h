@@ -495,6 +495,8 @@ typedef struct
 	gint64                 keep_seconds;	/* convert.keep_original */
 	GPtrArray             *gates;	/* AxisConversionGate */
 	gboolean               ok;	/* every gate that applies holds */
+	gboolean               kept;	/* the file is kept (by hand, or brought over) now */
+	gboolean               convert_kept;	/* the preview was worked out with the choice to convert kept files */
 } AxisConversionPreview;
 
 void
@@ -524,6 +526,25 @@ axis_conversions_preview(
 );
 
 /**
+ * axis_conversions_preview_full:
+ * @convert_kept: the administrator chose to convert the file although Axis
+ *   keeps it (convert-kept-files)
+ *
+ * axis_conversions_preview(), with the choice: it lifts the condition "kept"
+ * and no other.  The kept mark itself is not changed by a conversion.
+ */
+gboolean
+axis_conversions_preview_full(
+	AxisConversions        *self,
+	gint64                  file_id,
+	gint64                  revision_id,
+	AxisConversionOutcome   outcome,
+	gboolean                convert_kept,
+	AxisConversionPreview **preview,
+	GError                **error
+);
+
+/**
  * axis_conversions_request:
  * @confirmed: the administrator ticked that the original will be deleted
  *   (needed for a replacement)
@@ -547,9 +568,33 @@ axis_conversions_request(
 );
 
 /**
+ * axis_conversions_request_full:
+ * @convert_kept: the administrator ticked "Also convert files Axis keeps"
+ *   on the confirmation
+ *
+ * axis_conversions_request(), with the choice recorded with the conversion:
+ * the condition "kept" holds for it at the request, when a worker takes the
+ * work and just before the original is replaced.  Every other condition and
+ * every check is as without it, and the converted file stays kept.
+ */
+gboolean
+axis_conversions_request_full(
+	AxisConversions        *self,
+	gint64                  file_id,
+	gint64                  revision_id,
+	AxisConversionOutcome   outcome,
+	gboolean                confirmed,
+	gboolean                convert_kept,
+	const gchar            *user,
+	gint64                 *conversion_id,
+	GError                **error
+);
+
+/**
  * axis_conversions_request_for_run:
  * @confirmed: the person who started the run ticked, on the run's page,
  *   that originals will be deleted (needed for a replacement)
+ * @convert_kept: the run converts kept files (its stored choice)
  * @user: that person
  * @run_id, @entry_id: the conversion run and its entry that ask
  * @refused_gate: (out) (optional) (transfer full): the id of the gate that
@@ -567,6 +612,7 @@ axis_conversions_request_for_run(
 	gint64                  revision_id,
 	AxisConversionOutcome   outcome,
 	gboolean                confirmed,
+	gboolean                convert_kept,
 	const gchar            *user,
 	gint64                  run_id,
 	gint64                  entry_id,
@@ -921,7 +967,66 @@ typedef struct
 	gboolean all_passed;	/* every check passed */
 	const AxisConversionMark *cleared_by;	/* a rejection by checks 3 to 8 a strict mark clears, or NULL */
 	const AxisConversionMark *voided_by;	/* a trial's pass a lenient mark voids, or NULL */
+	gboolean convert_kept;	/* asked for with the choice to convert kept files */
+	gdouble  job_fraction;	/* the encode job's progress, -1 when it has reported none */
+	gdouble  verify_fraction;	/* the check job's progress, -1 when it has reported none */
+	gint64   job_running_s;	/* how long the encode job has been running, -1 when it is not */
+	gint64   verify_running_s;	/* how long the check job has been running, -1 when it is not */
+	gint64   duration_ms;	/* the source's duration as probed, 0 when not known */
 } AxisConversionRecord;
+
+/**
+ * AxisConversionProgress:
+ * @stage: "waiting" (for a worker), "encoding", "checking", "replacing"
+ *   (a replacement being put in place), "keeping" (a trial's file being put
+ *   aside), or %NULL for a conversion that is not in flight
+ * @fraction: 0 to 1, or -1 when nothing is known of how far it is (the bar is
+ *   then indeterminate)
+ * @speed: how many times real time the source is read (2.5: an hour of the
+ *   source in 24 minutes), or -1 when it cannot be worked out
+ * @left_s: an estimate of the seconds left of this stage, or -1
+ *
+ * Where a conversion in flight is, worked out from what the worker reports
+ * today (a fraction and a message with the encode job, and with the check
+ * job), the time the job has been running, and the source's duration.
+ */
+typedef struct
+{
+	const gchar *stage;
+	gdouble      fraction;
+	gdouble      speed;
+	gint64       left_s;
+} AxisConversionProgress;
+
+/* The stage's word for people ("Encoding", "Checking", "Replacing", ...). */
+const gchar *
+axis_conversion_progress_stage_label(const gchar *stage);
+
+/**
+ * axis_conversion_progress:
+ * @state: the conversion's state
+ * @outcome: "trial" or "replace"
+ * @job_state, @job_fraction, @job_running_s: the encode job's (a fraction
+ *   below 0: it has reported none)
+ * @verify_state, @verify_fraction, @verify_running_s: the check job's
+ * @duration_ms: the source's duration, 0 when not known
+ *
+ * Pure: no clock is read.  Speed and time left need ten seconds of running
+ * and one percent done at least, so that the first figures are not wild.
+ */
+void
+axis_conversion_progress(
+	const gchar            *state,
+	const gchar            *outcome,
+	const gchar            *job_state,
+	gdouble                 job_fraction,
+	gint64                  job_running_s,
+	const gchar            *verify_state,
+	gdouble                 verify_fraction,
+	gint64                  verify_running_s,
+	gint64                  duration_ms,
+	AxisConversionProgress *progress
+);
 
 void
 axis_conversion_record_free(AxisConversionRecord *record);

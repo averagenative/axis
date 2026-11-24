@@ -723,7 +723,11 @@ test_list_kept(Fixture *fx, gconstpointer data)
 	g_assert_cmpint(N(fx, "SELECT scope_files FROM conversion_run WHERE id = %" G_GINT64_FORMAT, run), ==, 3);
 	g_assert_cmpstr(axis_conversion_run_reason_label("kept"), ==, "Kept: Axis does not replace this file");
 	g_assert_cmpstr(axis_conversion_run_reason_help("kept"), ==,
-		"Let Axis upgrade it again on its links page to allow a conversion.");
+		"Axis does not replace these files with another release. To convert them in place, add them to this run: "
+		"they stay kept. Or let Axis upgrade a file again on its links page.");
+	/* The default is off, and nothing of the choice is recorded. */
+	g_assert_cmpstr(Q(fx, "SELECT convert_kept::text || coalesce(convert_kept_by, '-') FROM conversion_run WHERE id = %"
+		G_GINT64_FORMAT, run), ==, "false-");
 
 	/* A person lets one go: the next run lists it. */
 	sql(fx, "UPDATE movie_file SET kept = false, kept_how = NULL WHERE file_id = %" G_GINT64_FORMAT, film);
@@ -832,16 +836,23 @@ test_list_scopes(Fixture *fx, gconstpointer data)
 		both[0] = fx->movies;
 		both[1] = fx->tv;
 		g_assert_true(axis_conversion_runs_create_full(fx->runs, AXIS_CONVERSION_RUN_ROOTS, both, 2, 0, fx->space_saver,
-			"alice", &first, &created, &error));
+			FALSE, "alice", &first, &created, &error));
 		g_assert_no_error(error);
 		g_assert_true(created);
 		both[0] = fx->tv;
 		both[1] = fx->movies;
 		g_assert_true(axis_conversion_runs_create_full(fx->runs, AXIS_CONVERSION_RUN_ROOTS, both, 2, 0, fx->space_saver,
-			"alice", &again, &created, &error));
+			FALSE, "alice", &again, &created, &error));
 		g_assert_no_error(error);
 		g_assert_false(created);
 		g_assert_cmpint(again, ==, first);
+		/* The same selection with the other choice about kept files is
+		 * another run (convert-kept-files). */
+		g_assert_true(axis_conversion_runs_create_full(fx->runs, AXIS_CONVERSION_RUN_ROOTS, both, 2, 0, fx->space_saver,
+			TRUE, "alice", &again, &created, &error));
+		g_assert_no_error(error);
+		g_assert_true(created);
+		g_assert_cmpint(again, !=, first);
 	}
 
 	/* What a run cannot be made of. */
@@ -1895,7 +1906,7 @@ test_link_after_stop(Fixture *fx, gconstpointer data)
 	sql(fx, "UPDATE conversion_run_entry SET state = 'asked', outcome = 'replace', asked_at = now() WHERE id = %"
 		G_GINT64_FORMAT, entry);
 	g_assert_true(axis_conversions_request_for_run(fx->conv, file, fx->space_saver, AXIS_CONVERSION_REPLACE, TRUE,
-		"alice", run, entry, &replacement, &gate, &error));
+		FALSE, "alice", run, entry, &replacement, &gate, &error));
 	g_assert_no_error(error);
 	g_assert_cmpint(replacement, >, trial);
 
@@ -2076,11 +2087,494 @@ test_marks(Fixture *fx, gconstpointer data)
 	axis_conversion_marks_set_for_test(NULL, 0);
 }
 
+/* ── Kept files, by choice (convert-kept-files) ─────────────────── */
+
+/* Marks @file kept: by hand, as a movie's file, or brought over, as an
+ * episode's (of a made-up movie or series of its own). */
+static void
+keep_file(
+	Fixture  *fx,
+	gint64    file,
+	gboolean  brought
+){
+	sql(fx, "INSERT INTO meta_title (kind, title, year, provider, provider_id) VALUES ('%s', 'Kept %" G_GINT64_FORMAT
+		"', 2001, 'fixture', 'kept-%" G_GINT64_FORMAT "')", brought ? "series" : "film", file, file);
+	if (brought) {
+		sql(fx, "INSERT INTO series (title_id, quality_profile_id) SELECT t.id, (SELECT min(id) FROM quality_profile)"
+			" FROM meta_title t WHERE t.provider_id = 'kept-%" G_GINT64_FORMAT "'", file);
+		sql(fx, "INSERT INTO series_file (file_id, series_id, quality, kept, kept_how) SELECT %" G_GINT64_FORMAT
+			", s.id, 'webdl_1080p', true, 'brought' FROM series s JOIN meta_title t ON t.id = s.title_id"
+			" WHERE t.provider_id = 'kept-%" G_GINT64_FORMAT "'", file, file);
+	} else {
+		sql(fx, "INSERT INTO movie (title_id, quality_profile_id) SELECT t.id, (SELECT min(id) FROM quality_profile)"
+			" FROM meta_title t WHERE t.provider_id = 'kept-%" G_GINT64_FORMAT "'", file);
+		sql(fx, "INSERT INTO movie_file (file_id, movie_id, quality, kept) SELECT %" G_GINT64_FORMAT
+			", m.id, 'webdl_1080p', true FROM movie m JOIN meta_title t ON t.id = m.title_id"
+			" WHERE t.provider_id = 'kept-%" G_GINT64_FORMAT "'", file, file);
+	}
+}
+
+/* How many links of files are kept: the mark, as everything else reads it. */
+static gint64
+kept_marks(Fixture *fx)
+{
+	return N(fx, "SELECT (SELECT count(*) FROM movie_file WHERE kept) + (SELECT count(*) FROM series_file WHERE kept)");
+}
+
+/* The words every reason with files of @run, "reason:files", by reason. */
+static const gchar *
+reasons_of(
+	Fixture *fx,
+	gint64   run
+){
+	return Q(fx, "SELECT coalesce(string_agg(reason || ':' || files, ',' ORDER BY reason), '') FROM conversion_run_reason"
+		" WHERE run_id = %" G_GINT64_FORMAT, run);
+}
+
+/* A run made with the choice to convert kept files (by "alice"), listed. */
+static gint64
+make_run_kept(Fixture *fx)
+{
+	g_autoptr(GError) error = NULL;
+	gint64 id = 0;
+
+	g_assert_true(axis_conversion_runs_create_full(fx->runs, AXIS_CONVERSION_RUN_MOVIES, NULL, 0, 0, fx->space_saver,
+		TRUE, "alice", &id, NULL, &error));
+	g_assert_no_error(error);
+	g_assert_true(axis_conversion_runs_build_list(fx->runs, id, NULL, &error));
+	g_assert_no_error(error);
+	g_assert_cmpstr(Q(fx, "SELECT state FROM conversion_run WHERE id = %" G_GINT64_FORMAT, id), ==, "ready");
+	return id;
+}
+
+/* Lantern Hill kept by hand, Copper Road brought over, Glass Orchard not
+ * kept; and two kept files that have another reason of their own to be left
+ * out: Quiet Field (efficient already) and Faint Signal (HDR uncertain). */
+static void
+kept_library(Fixture *fx)
+{
+	movie(fx, "Lantern Hill (2001)", 12);
+	movie(fx, "Copper Road (2002)", 24);
+	movie(fx, "Glass Orchard (2003)", 18);
+	put_video(fx, fx->movies, "Quiet Field (2005)/Quiet Field (2005).mkv", "hevc", 1.5, FALSE, -1, -1);
+	put_video(fx, fx->movies, "Faint Signal (2006)/Faint Signal (2006).mkv", "h264", 12, TRUE, -1, -1);
+	settle(fx);
+	keep_file(fx, file_of(fx, fx->movies, "Lantern Hill (2001)/Lantern Hill (2001).mkv"), FALSE);
+	keep_file(fx, file_of(fx, fx->movies, "Copper Road (2002)/Copper Road (2002).mkv"), TRUE);
+	keep_file(fx, file_of(fx, fx->movies, "Quiet Field (2005)/Quiet Field (2005).mkv"), FALSE);
+	keep_file(fx, file_of(fx, fx->movies, "Faint Signal (2006)/Faint Signal (2006).mkv"), TRUE);
+	g_assert_cmpint(kept_marks(fx), ==, 4);
+}
+
+/* Lets the list job of a run to which kept files are being added do its
+ * work, as the job would. */
+static void
+add_kept(
+	Fixture     *fx,
+	gint64       run,
+	const gchar *expected_state
+){
+	g_autoptr(GError) error = NULL;
+
+	g_assert_true(axis_conversion_runs_include_kept(fx->runs, run, "dora", &error));
+	g_assert_no_error(error);
+	g_assert_cmpstr(Q(fx, "SELECT state || ' ' || convert_kept::text || ' ' || convert_kept_by FROM conversion_run"
+		" WHERE id = %" G_GINT64_FORMAT, run), ==, "listing true dora");
+	g_assert_cmpint(N(fx, "SELECT count(*) FROM job j JOIN conversion_run r ON r.list_job_id = j.id WHERE r.id = %"
+		G_GINT64_FORMAT " AND j.kind = 'convert.run.list' AND j.state = 'queued'", run), ==, 1);
+	g_assert_true(axis_conversion_runs_build_list(fx->runs, run, NULL, &error));
+	g_assert_no_error(error);
+	g_assert_cmpstr(Q(fx, "SELECT state || coalesce(' ' || relist_state, '') FROM conversion_run WHERE id = %"
+		G_GINT64_FORMAT, run), ==, expected_state);
+}
+
+/*
+ * Spec (conversion-runs, Kept files are converted only by choice): off by
+ * default, a run leaves every kept file out as today.  With the choice the
+ * kept files are listed like any other; a kept file that has another reason
+ * of its own stays out, under that reason; every request the run makes
+ * carries the choice, so the gate "kept" holds for it; and the mark itself
+ * is never changed, by listing, asking or a conversion that ended done.
+ */
+static void
+test_kept_by_choice(Fixture *fx, gconstpointer data)
+{
+	g_autoptr(GError) error = NULL;
+	g_autoptr(AxisConversionRunInfo) info = NULL;
+	g_autofree gchar *order = NULL;
+	g_autofree gchar *gate = NULL;
+	gint64 plain;
+	gint64 chosen;
+	gint64 copper;
+	gint64 conversion;
+	gint64 refused = 0;
+
+	kept_library(fx);
+	sql(fx, "INSERT INTO conversion_profile_proof (revision_id, method) VALUES (%" G_GINT64_FORMAT ", 'canary')",
+		fx->space_saver);
+	copper = file_of(fx, fx->movies, "Copper Road (2002)/Copper Road (2002).mkv");
+
+	/* Off by default: exactly as before. */
+	plain = make_run(fx, AXIS_CONVERSION_RUN_MOVIES, NULL, 0, 0, fx->space_saver);
+	order = entry_order(fx, plain);
+	g_assert_cmpstr(order, ==, "Glass Orchard (2003).mkv");
+	g_assert_cmpstr(reasons_of(fx, plain), ==, "kept:4");
+	g_clear_pointer(&order, g_free);
+
+	/* Chosen: the kept files that would be converted are listed, by saving;
+	 * the two with a reason of their own stay out, under it. */
+	chosen = make_run_kept(fx);
+	order = entry_order(fx, chosen);
+	g_assert_cmpstr(order, ==, "Copper Road (2002).mkv,Glass Orchard (2003).mkv,Lantern Hill (2001).mkv");
+	g_assert_cmpint(reason_count(fx, chosen, "kept"), ==, 0);
+	g_assert_cmpint(reason_count(fx, chosen, "hdr_uncertain"), ==, 1);
+	g_assert_cmpint(reason_count(fx, chosen, "already_efficient") + reason_count(fx, chosen, "better_codec"), ==, 1);
+	g_assert_cmpint(N(fx, "SELECT scope_files FROM conversion_run WHERE id = %" G_GINT64_FORMAT, chosen), ==, 5);
+	g_assert_true(axis_conversion_runs_get(fx->runs, chosen, &info, &error));
+	g_assert_no_error(error);
+	g_assert_true(info->convert_kept);
+	g_assert_cmpstr(info->convert_kept_by, ==, "alice");
+	g_assert_cmpint(info->convert_kept_us, >, 0);
+	g_assert_cmpint(kept_marks(fx), ==, 4);
+
+	/* Without the choice the request of a kept file is refused by its gate,
+	 * for a run as for a person. */
+	g_assert_false(axis_conversions_request_for_run(fx->conv, copper, fx->space_saver, AXIS_CONVERSION_REPLACE, TRUE,
+		FALSE, "alice", chosen, N(fx, "SELECT id FROM conversion_run_entry WHERE run_id = %" G_GINT64_FORMAT
+		" AND file_id = %" G_GINT64_FORMAT, chosen, copper), &refused, &gate, &error));
+	g_assert_error(error, AXIS_CONVERSION_ERROR, AXIS_CONVERSION_ERROR_REFUSED);
+	g_assert_cmpstr(gate, ==, "kept");
+	g_assert_nonnull(strstr(error->message, "Kept: Axis does not replace this file."));
+	g_clear_error(&error);
+	g_assert_cmpint(N(fx, "SELECT count(*) FROM conversion"), ==, 0);
+
+	/* The run asks, replacing: its requests carry the choice. */
+	start(fx, chosen, AXIS_CONVERSION_REPLACE);
+	g_assert_cmpuint(step(fx).asked, ==, 1);
+	g_assert_cmpstr(asked_names(fx, chosen), ==, "Copper Road (2002).mkv");
+	conversion = asked_conversion(fx, chosen, "Copper Road (2002).mkv");
+	g_assert_cmpstr(Q(fx, "SELECT outcome || ' ' || state || ' ' || convert_kept::text || ' ' || requested_by"
+		" FROM conversion WHERE id = %" G_GINT64_FORMAT, conversion), ==, "replace queued true alice");
+	end_conversion(fx, conversion, "done", 0, 0.4);
+	g_assert_cmpuint(step(fx).asked, ==, 1);
+	g_assert_cmpstr(Q(fx, "SELECT state FROM conversion_run_entry WHERE conversion_id = %" G_GINT64_FORMAT, conversion),
+		==, "done");
+	/* A file that is not kept is asked for with the run's choice as well:
+	 * it is the run's, and makes no difference to a file without the mark. */
+	g_assert_cmpstr(asked_names(fx, chosen), ==, "Glass Orchard (2003).mkv");
+	/* Nothing of it changed a mark. */
+	g_assert_cmpint(kept_marks(fx), ==, 4);
+	g_assert_cmpint(N(fx, "SELECT count(*) FROM series_file WHERE file_id = %" G_GINT64_FORMAT " AND kept"
+		" AND kept_how = 'brought'", copper), ==, 1);
+}
+
+/*
+ * Spec (conversion-runs, The choice stays with the run): a run of trials made
+ * with the choice keeps it when it is switched to replacing originals: the
+ * kept file it tried is asked for again as a replacement, with the choice.
+ */
+static void
+test_kept_trials_then_replace(Fixture *fx, gconstpointer data)
+{
+	g_autoptr(GError) error = NULL;
+	gint64 run;
+	gint64 trial;
+	gint64 replacement;
+
+	kept_library(fx);
+	run = make_run_kept(fx);
+	start(fx, run, AXIS_CONVERSION_TRIAL);
+	g_assert_cmpuint(step(fx).asked, ==, 1);
+	trial = asked_conversion(fx, run, "Copper Road (2002).mkv");
+	g_assert_cmpstr(Q(fx, "SELECT outcome || ' ' || convert_kept::text FROM conversion WHERE id = %" G_GINT64_FORMAT,
+		trial), ==, "trial true");
+	end_conversion(fx, trial, "done", 0, 0.4);
+	step(fx);
+	g_assert_true(axis_conversion_runs_pause(fx->runs, run, "alice", &error));
+	g_assert_no_error(error);
+	/* What is in flight finishes before the switch. */
+	end_asked(fx, run, "done", 0);
+	step(fx);
+
+	sql(fx, "INSERT INTO conversion_profile_proof (revision_id, method) VALUES (%" G_GINT64_FORMAT ", 'canary')",
+		fx->space_saver);
+	g_assert_true(axis_conversion_runs_replace(fx->runs, run, TRUE, "carol", &error));
+	g_assert_no_error(error);
+	/* The choice, and who made it, are as they were: not the switch's. */
+	g_assert_cmpstr(Q(fx, "SELECT outcome || ' ' || convert_kept::text || ' ' || convert_kept_by || ' ' || confirmed_by"
+		" FROM conversion_run WHERE id = %" G_GINT64_FORMAT, run), ==, "replace true alice carol");
+	g_assert_true(axis_conversion_runs_resume(fx->runs, run, "carol", &error));
+	g_assert_no_error(error);
+	g_assert_cmpuint(step(fx).asked, ==, 1);
+	g_assert_cmpstr(asked_names(fx, run), ==, "Copper Road (2002).mkv");
+	replacement = asked_conversion(fx, run, "Copper Road (2002).mkv");
+	g_assert_cmpint(replacement, >, trial);
+	g_assert_cmpstr(Q(fx, "SELECT outcome || ' ' || convert_kept::text || ' ' || requested_by FROM conversion WHERE id = %"
+		G_GINT64_FORMAT, replacement), ==, "replace true carol");
+	g_assert_cmpint(kept_marks(fx), ==, 4);
+}
+
+/*
+ * Spec (conversion-runs, Kept files added to a run): "Add these N files to
+ * the run" turns the choice on for a run that is ready and adds the files it
+ * left out as kept to its list: each is listed after what was there (ranked
+ * among themselves), or left out for its other reason; none stays left out as
+ * kept, and what was listed is untouched.  It is refused for a run that has
+ * the choice, that is running, cancelled, being listed, or has a file in
+ * flight; and a job that ends without adding them leaves the run as it was.
+ */
+static void
+test_kept_added_to_ready(Fixture *fx, gconstpointer data)
+{
+	g_autoptr(GError) error = NULL;
+	g_autofree gchar *order = NULL;
+	gint64 run;
+	gint64 glass_entry;
+	gint64 other;
+
+	kept_library(fx);
+	run = make_run(fx, AXIS_CONVERSION_RUN_MOVIES, NULL, 0, 0, fx->space_saver);
+	glass_entry = N(fx, "SELECT id FROM conversion_run_entry WHERE run_id = %" G_GINT64_FORMAT, run);
+	g_assert_cmpstr(reasons_of(fx, run), ==, "kept:4");
+
+	/* A job that ended without adding them: the run is ready as it was, the
+	 * choice off, and it says so. */
+	g_assert_true(axis_conversion_runs_include_kept(fx->runs, run, "dora", &error));
+	g_assert_no_error(error);
+	g_assert_cmpstr(Q(fx, "SELECT state || ' ' || relist_state || ' ' || convert_kept::text || ' ' || convert_kept_by"
+		" FROM conversion_run WHERE id = %" G_GINT64_FORMAT, run), ==, "listing ready true dora");
+	/* Being listed: not again, and nothing else of it. */
+	g_assert_false(axis_conversion_runs_include_kept(fx->runs, run, "dora", &error));
+	g_assert_error(error, AXIS_CONVERSION_ERROR, AXIS_CONVERSION_ERROR_STATE);
+	g_clear_error(&error);
+	sql(fx, "UPDATE job SET state = 'failed', finished_at = now(), last_error = 'stopped in a test' WHERE id ="
+		" (SELECT list_job_id FROM conversion_run WHERE id = %" G_GINT64_FORMAT ")", run);
+	sql(fx, "UPDATE conversion_run SET updated_at = now() - interval '1 minute' WHERE id = %" G_GINT64_FORMAT, run);
+	step(fx);
+	g_assert_cmpstr(Q(fx, "SELECT state || ' ' || coalesce(relist_state, '-') || ' ' || convert_kept::text || ' ' ||"
+		" coalesce(convert_kept_by, '-') FROM conversion_run WHERE id = %" G_GINT64_FORMAT, run), ==,
+		"ready - false -");
+	g_assert_nonnull(strstr(Q(fx, "SELECT list_text FROM conversion_run WHERE id = %" G_GINT64_FORMAT, run),
+		"The files Axis keeps were not added, and the run is as it was"));
+	g_assert_cmpstr(reasons_of(fx, run), ==, "kept:4");
+	g_assert_cmpint(N(fx, "SELECT count(*) FROM conversion_run_entry WHERE run_id = %" G_GINT64_FORMAT, run), ==, 1);
+
+	/* Added. */
+	add_kept(fx, run, "ready");
+	order = entry_order(fx, run);
+	g_assert_cmpstr(order, ==, "Glass Orchard (2003).mkv,Copper Road (2002).mkv,Lantern Hill (2001).mkv");
+	g_assert_cmpint(N(fx, "SELECT id FROM conversion_run_entry WHERE run_id = %" G_GINT64_FORMAT " AND position = 1", run),
+		==, glass_entry);
+	g_assert_cmpstr(Q(fx, "SELECT string_agg(position::text || ':' || files, ',' ORDER BY position) FROM"
+		" conversion_run_unit WHERE run_id = %" G_GINT64_FORMAT, run), ==, "1:1,2:1,3:1");
+	g_assert_cmpint(N(fx, "SELECT count(*) FROM conversion_run_entry WHERE run_id = %" G_GINT64_FORMAT
+		" AND (position < 1 OR unit_position < 1 OR state <> 'waiting')", run), ==, 0);
+	g_assert_cmpint(reason_count(fx, run, "kept"), ==, 0);
+	g_assert_cmpint(N(fx, "SELECT count(*) FROM conversion_run_excluded WHERE run_id = %" G_GINT64_FORMAT
+		" AND reason = 'kept'", run), ==, 0);
+	g_assert_cmpint(reason_count(fx, run, "hdr_uncertain"), ==, 1);
+	g_assert_cmpint(reason_count(fx, run, "already_efficient") + reason_count(fx, run, "better_codec"), ==, 1);
+	g_assert_cmpint(N(fx, "SELECT scope_files FROM conversion_run WHERE id = %" G_GINT64_FORMAT, run), ==, 5);
+	g_assert_cmpstr(Q(fx, "SELECT convert_kept::text || ' ' || convert_kept_by || ' ' || created_by || coalesce(list_text, '')"
+		" FROM conversion_run WHERE id = %" G_GINT64_FORMAT, run), ==, "true dora alice");
+	g_assert_cmpint(kept_marks(fx), ==, 4);
+	/* It has the choice now: not twice. */
+	g_assert_false(axis_conversion_runs_include_kept(fx->runs, run, "dora", &error));
+	g_assert_error(error, AXIS_CONVERSION_ERROR, AXIS_CONVERSION_ERROR_STATE);
+	g_clear_error(&error);
+
+	/* Not for a run that is running, has a file in flight, or was cancelled;
+	 * not without a person; not for a run that is not there. */
+	other = make_run(fx, AXIS_CONVERSION_RUN_MOVIES, NULL, 0, 0, fx->space_saver);
+	g_assert_false(axis_conversion_runs_include_kept(fx->runs, other, "", &error));
+	g_assert_error(error, AXIS_CONVERSION_ERROR, AXIS_CONVERSION_ERROR_REFUSED);
+	g_clear_error(&error);
+	g_assert_false(axis_conversion_runs_include_kept(fx->runs, other + 1000, "dora", &error));
+	g_assert_error(error, AXIS_CONVERSION_ERROR, AXIS_CONVERSION_ERROR_NOT_FOUND);
+	g_clear_error(&error);
+	start(fx, other, AXIS_CONVERSION_TRIAL);
+	g_assert_false(axis_conversion_runs_include_kept(fx->runs, other, "dora", &error));
+	g_assert_error(error, AXIS_CONVERSION_ERROR, AXIS_CONVERSION_ERROR_STATE);
+	g_clear_error(&error);
+	g_assert_cmpuint(step(fx).asked, ==, 1);
+	g_assert_true(axis_conversion_runs_pause(fx->runs, other, "alice", &error));
+	g_assert_false(axis_conversion_runs_include_kept(fx->runs, other, "dora", &error));
+	g_assert_error(error, AXIS_CONVERSION_ERROR, AXIS_CONVERSION_ERROR_STATE);
+	g_assert_nonnull(strstr(error->message, "in flight"));
+	g_clear_error(&error);
+	g_assert_true(axis_conversion_runs_cancel(fx->runs, other, "alice", &error));
+	g_assert_no_error(error);
+	step(fx);
+	g_assert_false(axis_conversion_runs_include_kept(fx->runs, other, "dora", &error));
+	g_assert_error(error, AXIS_CONVERSION_ERROR, AXIS_CONVERSION_ERROR_STATE);
+	g_clear_error(&error);
+	g_assert_cmpstr(Q(fx, "SELECT state || ' ' || convert_kept::text FROM conversion_run WHERE id = %" G_GINT64_FORMAT,
+		other), ==, "cancelled false");
+	g_assert_cmpstr(reasons_of(fx, other), ==, "kept:4");
+}
+
+/*
+ * Spec (conversion-runs, Kept files added to a run): a paused run with files
+ * done keeps everything it had: the entries done, their conversions, its
+ * pause and why; the kept files come after.  A finished run to which files
+ * were added waits, paused, for a person to resume it; then it asks for them
+ * with the choice.
+ */
+static void
+test_kept_added_later(Fixture *fx, gconstpointer data)
+{
+	g_autoptr(GError) error = NULL;
+	g_autofree gchar *order = NULL;
+	gint64 run;
+	gint64 done;
+	gint64 conversion;
+
+	kept_library(fx);
+	movie(fx, "Paper Tide (2004)", 9);
+	settle(fx);
+	run = make_run(fx, AXIS_CONVERSION_RUN_MOVIES, NULL, 0, 0, fx->space_saver);
+	start(fx, run, AXIS_CONVERSION_TRIAL);
+	g_assert_cmpuint(step(fx).asked, ==, 1);
+	done = asked_conversion(fx, run, "Glass Orchard (2003).mkv");
+	end_conversion(fx, done, "done", 0, 0.4);
+	g_assert_cmpuint(step(fx).asked, ==, 1);
+	g_assert_true(axis_conversion_runs_pause(fx->runs, run, "alice", &error));
+	g_assert_no_error(error);
+	/* Paper Tide is in flight still. */
+	g_assert_false(axis_conversion_runs_include_kept(fx->runs, run, "dora", &error));
+	g_assert_error(error, AXIS_CONVERSION_ERROR, AXIS_CONVERSION_ERROR_STATE);
+	g_clear_error(&error);
+	g_assert_cmpstr(Q(fx, "SELECT convert_kept::text FROM conversion_run WHERE id = %" G_GINT64_FORMAT, run), ==, "false");
+	end_asked(fx, run, "done", 0);
+	step(fx);
+
+	add_kept(fx, run, "paused");
+	assert_state(fx, run, "paused/person");
+	g_assert_cmpstr(Q(fx, "SELECT pause_text || ' ' || paused_by FROM conversion_run WHERE id = %" G_GINT64_FORMAT, run),
+		==, "Paused by alice. alice");
+	order = entry_order(fx, run);
+	g_assert_cmpstr(order, ==, "Glass Orchard (2003).mkv,Paper Tide (2004).mkv,Copper Road (2002).mkv,"
+		"Lantern Hill (2001).mkv");
+	g_assert_cmpstr(Q(fx, "SELECT string_agg(state, ',' ORDER BY position) FROM conversion_run_entry WHERE run_id = %"
+		G_GINT64_FORMAT, run), ==, "done,done,waiting,waiting");
+	g_assert_cmpint(N(fx, "SELECT conversion_id FROM conversion_run_entry WHERE run_id = %" G_GINT64_FORMAT
+		" AND position = 1", run), ==, done);
+	g_assert_true(axis_conversion_runs_resume(fx->runs, run, "alice", &error));
+	g_assert_no_error(error);
+	g_assert_cmpuint(step(fx).asked, ==, 1);
+	g_assert_cmpstr(asked_names(fx, run), ==, "Copper Road (2002).mkv");
+	conversion = asked_conversion(fx, run, "Copper Road (2002).mkv");
+	g_assert_cmpstr(Q(fx, "SELECT convert_kept::text FROM conversion WHERE id = %" G_GINT64_FORMAT, conversion), ==, "true");
+	/* The trial made before the choice does not carry it. */
+	g_assert_cmpstr(Q(fx, "SELECT convert_kept::text FROM conversion WHERE id = %" G_GINT64_FORMAT, done), ==, "false");
+	end_conversion(fx, conversion, "done", 0, 0.4);
+	step(fx);
+	end_asked(fx, run, "done", 0);
+	step(fx);
+	assert_state(fx, run, "finished");
+	g_assert_cmpint(kept_marks(fx), ==, 4);
+
+	/* A finished run. */
+	{
+		gint64 finished;
+
+		sql(fx, "DELETE FROM conversion_memory");
+		finished = make_run(fx, AXIS_CONVERSION_RUN_MOVIES, NULL, 0, 0, fx->space_saver);
+		g_assert_cmpstr(reasons_of(fx, finished), ==, "kept:4");
+		start(fx, finished, AXIS_CONVERSION_TRIAL);
+		step(fx);
+		end_asked(fx, finished, "done", 0);
+		step(fx);
+		end_asked(fx, finished, "done", 0);
+		step(fx);
+		assert_state(fx, finished, "finished");
+		add_kept(fx, finished, "paused");
+		assert_state(fx, finished, "paused/person");
+		g_assert_cmpstr(Q(fx, "SELECT pause_text FROM conversion_run WHERE id = %" G_GINT64_FORMAT, finished), ==,
+			"dora added 2 files Axis keeps to the list of this run, which had finished. Resume the run to convert them.");
+		g_assert_cmpint(N(fx, "SELECT count(*) FROM conversion_run WHERE id = %" G_GINT64_FORMAT
+			" AND finished_at IS NULL AND finish_text IS NULL AND paused_by = 'dora'", finished), ==, 1);
+		g_assert_true(axis_conversion_runs_resume(fx->runs, finished, "dora", &error));
+		g_assert_no_error(error);
+		g_assert_cmpuint(step(fx).asked, ==, 1);
+		g_assert_cmpstr(asked_names(fx, finished), ==, "Copper Road (2002).mkv");
+	}
+}
+
+/*
+ * Spec (conversion-runs, Kept files added to a run): an episode that was
+ * left out as kept joins its series' unit, after the episodes that were
+ * listed; the unit's totals count it; a unit a person took out of the list
+ * stays out, its new file with it; a cap is worked out again.
+ */
+static void
+test_kept_added_to_series(Fixture *fx, gconstpointer data)
+{
+	g_autoptr(GError) error = NULL;
+	g_autofree gchar *order = NULL;
+	AxisConversionRunLimits limits;
+	gint64 run;
+
+	episode(fx, "Harbour Lights", 1, 1, 10);
+	episode(fx, "Harbour Lights", 1, 2, 10);
+	episode(fx, "Harbour Lights", 1, 3, 10);
+	episode(fx, "Quiet Meadow", 1, 1, 30);
+	episode(fx, "Quiet Meadow", 1, 2, 30);
+	episode(fx, "Tin Lantern", 1, 1, 20);
+	settle(fx);
+	identify_series(fx, "Harbour Lights", "Harbour Lights", 2011);
+	identify_series(fx, "Quiet Meadow", "Quiet Meadow", 2015);
+	identify_series(fx, "Tin Lantern", "Tin Lantern", 2018);
+	keep_file(fx, file_of(fx, fx->tv, "Harbour Lights/Season 01/Harbour Lights - S01E02.mkv"), TRUE);
+	keep_file(fx, file_of(fx, fx->tv, "Quiet Meadow/Season 01/Quiet Meadow - S01E01.mkv"), TRUE);
+	keep_file(fx, file_of(fx, fx->tv, "Tin Lantern/Season 01/Tin Lantern - S01E01.mkv"), TRUE);
+
+	run = make_run(fx, AXIS_CONVERSION_RUN_TV, NULL, 0, 0, fx->space_saver);
+	order = unit_order(fx, run);
+	g_assert_cmpstr(order, ==, "series:Quiet Meadow,series:Harbour Lights");
+	g_clear_pointer(&order, g_free);
+	/* Quiet Meadow is taken out by a person; a cap of one file. */
+	g_assert_true(axis_conversion_runs_remove_unit(fx->runs, run, 1, "alice", &error));
+	g_assert_no_error(error);
+	memset(&limits, 0, sizeof(limits));
+	limits.at_once = 1;
+	limits.cap_files = 3;
+	limits.window_start = limits.window_end = -1;
+	g_assert_true(axis_conversion_runs_set_limits(fx->runs, run, &limits, "alice", &error));
+	g_assert_no_error(error);
+	g_assert_cmpint(N(fx, "SELECT coalesce(cap_unit, -1) FROM conversion_run WHERE id = %" G_GINT64_FORMAT, run), ==, -1);
+
+	add_kept(fx, run, "ready");
+	order = unit_order(fx, run);
+	g_assert_cmpstr(order, ==, "series:Quiet Meadow,series:Harbour Lights,series:Tin Lantern");
+	g_clear_pointer(&order, g_free);
+	order = entry_order(fx, run);
+	g_assert_cmpstr(order, ==, "Quiet Meadow - S01E02.mkv,Harbour Lights - S01E01.mkv,Harbour Lights - S01E03.mkv,"
+		"Quiet Meadow - S01E01.mkv,Harbour Lights - S01E02.mkv,Tin Lantern - S01E01.mkv");
+	g_assert_cmpstr(Q(fx, "SELECT string_agg(unit_position::text || state, ',' ORDER BY position) FROM"
+		" conversion_run_entry WHERE run_id = %" G_GINT64_FORMAT, run), ==,
+		"1removed,2waiting,2waiting,1removed,2waiting,3waiting");
+	g_assert_cmpstr(Q(fx, "SELECT string_agg(position::text || ':' || files || ':' || removed::text, ',' ORDER BY position)"
+		" FROM conversion_run_unit WHERE run_id = %" G_GINT64_FORMAT, run), ==, "1:2:true,2:3:false,3:1:false");
+	g_assert_cmpint(N(fx, "SELECT bytes FROM conversion_run_unit WHERE run_id = %" G_GINT64_FORMAT " AND position = 2",
+		run), ==, N(fx, "SELECT sum(size) FROM conversion_run_entry WHERE run_id = %" G_GINT64_FORMAT
+		" AND unit_position = 2", run));
+	/* The cap of three files is reached in Harbour Lights now. */
+	g_assert_cmpint(N(fx, "SELECT coalesce(cap_unit, -1) FROM conversion_run WHERE id = %" G_GINT64_FORMAT, run), ==, 2);
+	g_assert_cmpint(reason_count(fx, run, "kept"), ==, 0);
+	g_assert_cmpint(kept_marks(fx), ==, 3);
+}
+
 int
 main(int argc, char **argv)
 {
 	g_test_init(&argc, &argv, NULL);
 
+	AXIS_TEST_ADD_DB_CASE("/conversion-runs/kept/by-choice", Fixture, NULL, test_kept_by_choice);
+	AXIS_TEST_ADD_DB_CASE("/conversion-runs/kept/trials-then-replace", Fixture, NULL, test_kept_trials_then_replace);
+	AXIS_TEST_ADD_DB_CASE("/conversion-runs/kept/added-to-ready", Fixture, NULL, test_kept_added_to_ready);
+	AXIS_TEST_ADD_DB_CASE("/conversion-runs/kept/added-later", Fixture, NULL, test_kept_added_later);
+	AXIS_TEST_ADD_DB_CASE("/conversion-runs/kept/added-to-series", Fixture, NULL, test_kept_added_to_series);
 	AXIS_TEST_ADD_DB_CASE("/conversion-runs/list/ranked", Fixture, NULL, test_list_ranked);
 	AXIS_TEST_ADD_DB_CASE("/conversion-runs/list/series", Fixture, NULL, test_list_series);
 	AXIS_TEST_ADD_DB_CASE("/conversion-runs/list/scopes", Fixture, NULL, test_list_scopes);

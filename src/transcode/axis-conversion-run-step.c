@@ -414,11 +414,24 @@ fail_lost_lists(
 	AxisConversionRuns  *self,
 	GError             **error
 ){
+	/* A run to whose list the kept files were being added (convert-kept-
+	 * files) is as it was before: its state, its list, the choice off.  The
+	 * job works in one transaction, so nothing of it is there. */
+	if (!exec(self, "UPDATE conversion_run r SET state = r.relist_state, relist_state = NULL, convert_kept = false,"
+	        " convert_kept_by = NULL, convert_kept_at = NULL, updated_at = now(),"
+	        " list_text = left('The files Axis keeps were not added, and the run is as it was: the job ended without "
+	        "adding them (' || coalesce(j.state::text, 'gone') || coalesce(': ' || j.last_error, '') || ').', 2000)"
+	        " FROM conversion_run r2 LEFT JOIN job j ON j.id = r2.list_job_id"
+	        " WHERE r.id = r2.id AND r.state = 'listing' AND r.relist_state IS NOT NULL"
+	        "  AND (j.id IS NULL OR j.state IN ('failed', 'cancelled', 'succeeded'))"
+	        "  AND r.updated_at < now() - interval '5 seconds'", 0, NULL, NULL, error))
+		return FALSE;
 	return exec(self, "UPDATE conversion_run r SET state = 'failed', finished_at = now(), updated_at = now(),"
 		" list_text = left('The list job ended without a list (' || coalesce(j.state::text, 'gone')"
 		"  || coalesce(': ' || j.last_error, '') || '). Make a new run.', 2000)"
 		" FROM conversion_run r2 LEFT JOIN job j ON j.id = r2.list_job_id"
-		" WHERE r.id = r2.id AND r.state = 'listing' AND (j.id IS NULL OR j.state IN ('failed', 'cancelled', 'succeeded'))"
+		" WHERE r.id = r2.id AND r.state = 'listing' AND r.relist_state IS NULL"
+		"  AND (j.id IS NULL OR j.state IN ('failed', 'cancelled', 'succeeded'))"
 		"  AND r.created_at < now() - interval '5 seconds'", 0, NULL, NULL, error);
 }
 
@@ -440,6 +453,7 @@ typedef struct
 	gchar  *confirmed_by;
 	gint64  in_flight;
 	gint64  in_flight_trials;
+	gboolean convert_kept;	/* the run's stored choice (convert-kept-files) */
 } Running;
 
 static void
@@ -467,7 +481,7 @@ load_running(
 	        " coalesce((extract(epoch FROM r.started_at) * 1000000)::bigint, 0), r.started_by, r.confirmed_by,"
 	        " (SELECT count(*) FROM conversion_run_entry e WHERE e.run_id = r.id AND e.state = 'asked'),"
 	        " (SELECT count(*) FROM conversion_run_entry e WHERE e.run_id = r.id AND e.state = 'asked'"
-	        "  AND e.outcome = 'trial'), coalesce(r.current_unit, 0)"
+	        "  AND e.outcome = 'trial'), coalesce(r.current_unit, 0), r.convert_kept"
 	        " FROM conversion_run r WHERE r.state = 'running' ORDER BY r.id LIMIT 1", 0, NULL, &result, error))
 		return FALSE;
 	if (axis_db_result_get_n_rows(result) != 1)
@@ -487,6 +501,7 @@ load_running(
 	r->in_flight = int_at(result, 0, 11);
 	r->in_flight_trials = int_at(result, 0, 12);
 	r->current_unit = (gint)int_at(result, 0, 13);
+	axis_db_result_get_boolean(result, 0, 14, &r->convert_kept);
 	return TRUE;
 }
 
@@ -813,8 +828,8 @@ ask_one(
 	if (axis_db_result_get_n_rows(marked) != 1)
 		return ASK_STOP;
 	if (axis_conversions_request_for_run(self->conversions, file_id, run->revision_id, replace ?
-	        AXIS_CONVERSION_REPLACE : AXIS_CONVERSION_TRIAL, replace && run->confirmed_by != NULL, user != NULL ? user :
-	        "?", run->id, entry_id, &conversion, &gate, &local)) {
+	        AXIS_CONVERSION_REPLACE : AXIS_CONVERSION_TRIAL, replace && run->confirmed_by != NULL, run->convert_kept,
+	        user != NULL ? user : "?", run->id, entry_id, &conversion, &gate, &local)) {
 		g_autoptr(AxisDbResult) state = NULL;
 		g_autofree gchar *conv = int_text(conversion);
 		const gchar *more[2];

@@ -113,6 +113,8 @@ axis_conversion_run_info_free(AxisConversionRunInfo *info)
 	g_free(info->paused_by);
 	g_free(info->wait_code);
 	g_free(info->wait_text);
+	g_free(info->convert_kept_by);
+	g_free(info->relist_state);
 	if (info->waits != NULL)
 		g_ptr_array_unref(info->waits);
 	g_free(info);
@@ -142,6 +144,8 @@ axis_conversion_run_entry_free(AxisConversionRunEntry *entry)
 	g_free(entry->outcome);
 	g_free(entry->reason_code);
 	g_free(entry->reason_text);
+	g_free(entry->job_state);
+	g_free(entry->verify_state);
 	g_free(entry);
 }
 
@@ -167,8 +171,8 @@ axis_conversion_run_excluded_free(AxisConversionRunExcluded *file)
 
 /* ── A run ──────────────────────────────────────────────────────── */
 
-/* The run's row (0..41), then for a list the counts of its files by state
- * (42..47). */
+/* The run's row (0..45), then for a list the counts of its files by state
+ * (46..51). */
 #define RUN_COLUMNS \
 	"r.id, r.revision_id, pr.name, p.slug, pr.number," \
 	" EXISTS (SELECT 1 FROM conversion_profile_proof pf WHERE pf.revision_id = r.revision_id)," \
@@ -178,7 +182,8 @@ axis_conversion_run_excluded_free(AxisConversionRunExcluded *file)
 	" r.started_by, " US("r.started_at") ", r.confirmed_by, " US("r.confirmed_at") ", " US("r.finished_at") "," \
 	" r.finish_text, r.list_text, " US("r.listed_at") ", j.state::text, coalesce(j.progress, 0), j.progress_message," \
 	" r.scope_files, r.pause_code, r.pause_text, r.paused_by, " US("r.paused_at") ", r.wait_code, r.wait_text," \
-	" " US("r.wait_since") ", r.failed_in_row, r.refused_in_row, p.archived"
+	" " US("r.wait_since") ", r.failed_in_row, r.refused_in_row, p.archived," \
+	" r.convert_kept, r.convert_kept_by, " US("r.convert_kept_at") ", r.relist_state"
 
 #define RUN_FROM \
 	" FROM conversion_run r JOIN conversion_profile_revision pr ON pr.id = r.revision_id" \
@@ -232,6 +237,10 @@ info_from(
 	info->wait_us = int_at(result, i, 38);
 	info->failed_in_row = (gint)int_at(result, i, 39);
 	info->refused_in_row = (gint)int_at(result, i, 40);
+	info->convert_kept = bool_at(result, i, 42);
+	info->convert_kept_by = text_at(result, i, 43);
+	info->convert_kept_us = int_at(result, i, 44);
+	info->relist_state = text_at(result, i, 45);
 	return info;
 }
 
@@ -280,9 +289,9 @@ axis_conversion_runs_list(
 	for (i = 0; i < axis_db_result_get_n_rows(result); i++) {
 		AxisConversionRunInfo *info = info_from(result, i);
 
-		counts_from(info, result, i, 42);
+		counts_from(info, result, i, 46);
 		/* Saved for real: replacements done. */
-		info->done_after = int_at(result, i, 48);
+		info->done_after = int_at(result, i, 52);
 		g_ptr_array_add(list, info);
 	}
 	*out = list;
@@ -590,11 +599,23 @@ axis_conversion_runs_unit(
 	"e.id, e.position, e.unit_position, coalesce(e.file_id, 0), coalesce(e.volume_id, 0), v.name, e.rel_path," \
 	" coalesce(e.season_number, -1), coalesce(e.episode_number, -1), e.size, e.low, e.mid, e.high, e.state," \
 	" coalesce(e.conversion_id, 0), c.state, coalesce(e.trial_id, 0), e.outcome, coalesce(e.result_size, -1)," \
-	" e.reason_code, e.reason_text, " US("e.settled_at")
+	" e.reason_code, e.reason_text, " US("e.settled_at") "," \
+	" j.state::text, coalesce(j.progress, -1)," \
+	" CASE WHEN j.state = 'running' AND j.started_at IS NOT NULL" \
+	"  THEN greatest(extract(epoch FROM now() - j.started_at), 0)::bigint ELSE -1 END," \
+	" vj.state::text, coalesce(vj.progress, -1)," \
+	" CASE WHEN vj.state = 'running' AND vj.started_at IS NOT NULL" \
+	"  THEN greatest(extract(epoch FROM now() - vj.started_at), 0)::bigint ELSE -1 END," \
+	" CASE WHEN e.state = 'asked' THEN coalesce((SELECT mi.duration_ms FROM media_info mi" \
+	"  WHERE mi.file_id = e.file_id), 0) ELSE 0 END"
 
+/* The jobs are those of a file in flight only: a settled entry's row joins
+ * none (its page of the list reads no job). */
 #define ENTRY_FROM \
 	" FROM conversion_run_entry e LEFT JOIN volume v ON v.id = e.volume_id" \
-	" LEFT JOIN conversion c ON c.id = e.conversion_id"
+	" LEFT JOIN conversion c ON c.id = e.conversion_id" \
+	" LEFT JOIN job j ON e.state = 'asked' AND j.id = c.job_id" \
+	" LEFT JOIN job vj ON e.state = 'asked' AND vj.id = c.verify_job_id"
 
 static AxisConversionRunEntry *
 entry_from(
@@ -625,6 +646,13 @@ entry_from(
 	e->reason_code = text_at(result, i, 19);
 	e->reason_text = text_at(result, i, 20);
 	e->settled_us = int_at(result, i, 21);
+	e->job_state = text_at(result, i, 22);
+	e->job_fraction = double_at(result, i, 23);
+	e->job_running_s = int_at(result, i, 24);
+	e->verify_state = text_at(result, i, 25);
+	e->verify_fraction = double_at(result, i, 26);
+	e->verify_running_s = int_at(result, i, 27);
+	e->duration_ms = int_at(result, i, 28);
 	return e;
 }
 

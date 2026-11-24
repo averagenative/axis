@@ -378,6 +378,7 @@ axis_conversion_gates(
 	const AxisConversionFacts   *facts,
 	const AxisConversionInputs  *inputs,
 	AxisConversionOutcome        outcome,
+	gboolean                     convert_kept,
 	AxisVolumeGuard             *held,
 	gboolean                     plan_machines,
 	const AxisConversionRow     *stamp,
@@ -570,9 +571,14 @@ axis_conversion_gates(
 
 	/* G11b: a file a person keeps by hand, or one brought over from Radarr or
 	 * Sonarr, is not replaced by a conversion until a person lets it go (the
-	 * keep is read now, so lifting it makes the file eligible again). */
-	add_gate(gates, "kept", "The file is not kept by hand or brought over", replace, !facts->kept,
-		facts->kept ? g_strdup(AXIS_CONVERSION_KEPT_TEXT) : NULL);
+	 * keep is read now, so lifting it makes the file eligible again).  An
+	 * administrator may choose to convert kept files (convert-kept-files):
+	 * @convert_kept lifts this gate, and this gate only; the mark is read
+	 * here and written nowhere, so the converted file is as kept as its
+	 * original was. */
+	add_gate(gates, "kept", "The file is not kept by hand or brought over", replace, !facts->kept || convert_kept,
+		!facts->kept ? NULL :
+		g_strdup(convert_kept ? AXIS_CONVERSION_KEPT_CHOSEN_TEXT : AXIS_CONVERSION_KEPT_TEXT));
 
 	/* G12 */
 	if (guard != NULL) {
@@ -670,12 +676,15 @@ build_preview(
 	const AxisConversionFacts  *facts,
 	const AxisConversionInputs *inputs,
 	AxisConversionOutcome       outcome,
+	gboolean                    convert_kept,
 	AxisConversionPreview     **out,
 	GError                    **error
 ){
 	g_autoptr(AxisConversionPreview) preview = g_new0(AxisConversionPreview, 1);
 
 	preview->outcome = outcome;
+	preview->kept = facts->kept;
+	preview->convert_kept = convert_kept;
 	preview->gates = g_ptr_array_new_with_free_func(gate_free);
 	preview->keep_seconds = axis_conversion_setting_integer(self, AXIS_CONVERSION_SETTING_KEEP_ORIGINAL, 0);
 	if (facts->file != NULL) {
@@ -690,7 +699,8 @@ build_preview(
 	preview->volume_name = facts->volume != NULL ? g_strdup(facts->volume->name) : NULL;
 	preview->revision = facts->revision != NULL ? axis_profile_revision_ref(facts->revision) : NULL;
 	preview->source_quality = g_strdup(facts->source_quality);
-	if (!axis_conversion_gates(self, conn, facts, inputs, outcome, NULL, TRUE, NULL, preview, preview->gates, error))
+	if (!axis_conversion_gates(self, conn, facts, inputs, outcome, convert_kept, NULL, TRUE, NULL, preview,
+	        preview->gates, error))
 		return FALSE;
 	preview->ok = axis_conversion_preview_refusal(preview) == NULL;
 	*out = g_steal_pointer(&preview);
@@ -703,6 +713,19 @@ axis_conversions_preview(
 	gint64                  file_id,
 	gint64                  revision_id,
 	AxisConversionOutcome   outcome,
+	AxisConversionPreview **preview,
+	GError                **error
+){
+	return axis_conversions_preview_full(self, file_id, revision_id, outcome, FALSE, preview, error);
+}
+
+gboolean
+axis_conversions_preview_full(
+	AxisConversions        *self,
+	gint64                  file_id,
+	gint64                  revision_id,
+	AxisConversionOutcome   outcome,
+	gboolean                convert_kept,
 	AxisConversionPreview **preview,
 	GError                **error
 ){
@@ -729,7 +752,7 @@ axis_conversions_preview(
 	if (ok) {
 		axis_conversion_inputs_load(self, &facts, &inputs);
 		conn = axis_db_pool_acquire(self->pool, error);
-		ok = conn != NULL && build_preview(self, conn, &facts, &inputs, outcome, preview, error);
+		ok = conn != NULL && build_preview(self, conn, &facts, &inputs, outcome, convert_kept, preview, error);
 		if (conn != NULL)
 			axis_db_pool_release(self->pool, conn);
 	}
@@ -756,7 +779,9 @@ source_hdr_class(const AxisEstimateFile *file)
  * The one request: a person's from the confirmation page, or a run's for
  * the person who started it (@run_id, @entry_id; 0 for none), with exactly
  * the same gates.  *@refused_gate (when given) is the id of the gate that
- * refused, when one did.
+ * refused, when one did.  @convert_kept is the person's tick, or the run's
+ * choice: it is recorded with the conversion, so that the claim and check
+ * 10 read the gate "kept" as the request did.
  */
 static gboolean
 request(
@@ -765,6 +790,7 @@ request(
 	gint64                  revision_id,
 	AxisConversionOutcome   outcome,
 	gboolean                confirmed,
+	gboolean                convert_kept,
 	const gchar            *user,
 	gint64                  run_id,
 	gint64                  entry_id,
@@ -814,7 +840,7 @@ request(
 	conn = axis_db_pool_acquire(self->pool, error);
 	if (conn == NULL)
 		goto out;
-	if (!build_preview(self, conn, &facts, &inputs, outcome, &preview, error))
+	if (!build_preview(self, conn, &facts, &inputs, outcome, convert_kept, &preview, error))
 		goto out;
 	refusal = axis_conversion_preview_refusal(preview);
 	if (refusal != NULL) {
@@ -877,7 +903,7 @@ request(
 		g_autofree gchar *estimate = preview->estimated ? axis_conversion_int_text(preview->estimate_mid) : NULL;
 		g_autofree gchar *run = run_id > 0 ? axis_conversion_int_text(run_id) : NULL;
 		g_autofree gchar *entry = entry_id > 0 ? axis_conversion_int_text(entry_id) : NULL;
-		const gchar *params[22];
+		const gchar *params[23];
 
 		params[0] = file_text;
 		params[1] = volume;
@@ -901,13 +927,14 @@ request(
 		params[19] = source_hdr_class(file);
 		params[20] = run;
 		params[21] = entry;
+		params[22] = convert_kept ? "true" : "false";
 		if (!axis_db_conn_exec(conn, "INSERT INTO conversion (file_id, volume_id, root_id, root_path, rel_path,"
 		        " new_rel_path, container, revision_id, outcome, requested_by, verdict, src_size, src_mtime_sec,"
 		        " src_mtime_nsec, src_ctime_sec, src_ctime_nsec, src_inode, src_nlink, source_quality, source_hdr,"
-		        " run_id, run_entry_id)"
+		        " run_id, run_entry_id, convert_kept)"
 		        " VALUES ($1::bigint, $2::bigint, $3::bigint, $4, $5, $6, $7, $8::bigint, $9, $10, $11, $12::bigint,"
 		        "  $13::bigint, $14::integer, $15::bigint, $16::integer, $17::bigint, $18::bigint, $19, $20,"
-		        "  $21::bigint, $22::bigint) RETURNING id", 22,
+		        "  $21::bigint, $22::bigint, $23::boolean) RETURNING id", 23,
 		        params, &inserted, error))
 			goto rollback;
 		axis_db_result_get_int64(inserted, 0, 0, conversion_id);
@@ -966,11 +993,13 @@ request(
 		goto rollback;
 	if (run_id > 0)
 		g_message("audit: %s requested conversion %" G_GINT64_FORMAT " (%s) of file %" G_GINT64_FORMAT " with revision %"
-			G_GINT64_FORMAT " through conversion run %" G_GINT64_FORMAT, user, *conversion_id,
-			axis_conversion_outcome_to_string(outcome), file_id, revision_id, run_id);
+			G_GINT64_FORMAT " through conversion run %" G_GINT64_FORMAT "%s", user, *conversion_id,
+			axis_conversion_outcome_to_string(outcome), file_id, revision_id, run_id,
+			convert_kept && facts.kept ? "; the file is kept, and the run converts kept files" : "");
 	else
 		g_message("audit: %s requested conversion %" G_GINT64_FORMAT " (%s) of file %" G_GINT64_FORMAT " with revision %"
-			G_GINT64_FORMAT, user, *conversion_id, axis_conversion_outcome_to_string(outcome), file_id, revision_id);
+			G_GINT64_FORMAT "%s", user, *conversion_id, axis_conversion_outcome_to_string(outcome), file_id, revision_id,
+			convert_kept && facts.kept ? "; the file is kept, and they chose to convert it" : "");
 	goto out;
 
 rollback:
@@ -1002,7 +1031,23 @@ axis_conversions_request(
 	gint64                 *conversion_id,
 	GError                **error
 ){
-	return request(self, file_id, revision_id, outcome, confirmed, user, 0, 0, conversion_id, NULL, error);
+	return request(self, file_id, revision_id, outcome, confirmed, FALSE, user, 0, 0, conversion_id, NULL, error);
+}
+
+gboolean
+axis_conversions_request_full(
+	AxisConversions        *self,
+	gint64                  file_id,
+	gint64                  revision_id,
+	AxisConversionOutcome   outcome,
+	gboolean                confirmed,
+	gboolean                convert_kept,
+	const gchar            *user,
+	gint64                 *conversion_id,
+	GError                **error
+){
+	return request(self, file_id, revision_id, outcome, confirmed, convert_kept, user, 0, 0, conversion_id, NULL,
+		error);
 }
 
 gboolean
@@ -1012,6 +1057,7 @@ axis_conversions_request_for_run(
 	gint64                  revision_id,
 	AxisConversionOutcome   outcome,
 	gboolean                confirmed,
+	gboolean                convert_kept,
 	const gchar            *user,
 	gint64                  run_id,
 	gint64                  entry_id,
@@ -1021,8 +1067,8 @@ axis_conversions_request_for_run(
 ){
 	g_return_val_if_fail(run_id > 0 && entry_id > 0, FALSE);
 
-	return request(self, file_id, revision_id, outcome, confirmed, user, run_id, entry_id, conversion_id,
-		refused_gate, error);
+	return request(self, file_id, revision_id, outcome, confirmed, convert_kept, user, run_id, entry_id,
+		conversion_id, refused_gate, error);
 }
 
 gboolean
@@ -1188,7 +1234,8 @@ axis_conversions_describe(
 			goto rollback;
 	}
 	axis_conversion_inputs_load(self, &facts, &inputs);
-	if (!axis_conversion_gates(self, conn, &facts, &inputs, row->outcome, NULL, FALSE, row, NULL, gates, error))
+	if (!axis_conversion_gates(self, conn, &facts, &inputs, row->outcome, row->convert_kept, NULL, FALSE, row, NULL,
+	        gates, error))
 		goto rollback;
 	for (i = 0; i < gates->len; i++) {
 		const AxisConversionGate *gate = g_ptr_array_index(gates, i);

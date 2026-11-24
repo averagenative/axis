@@ -33,6 +33,7 @@
 #include "axis-test-web.h"
 #include "api/axis-worker-store.h"
 #include "core/axis-module-state.h"
+#include "core/axis-size.h"
 #include "library/axis-library.h"
 #include "probe/axis-probe.h"
 #include "transcode/axis-conversion.h"
@@ -1187,11 +1188,550 @@ test_scale(Fixture *fx, gconstpointer data)
 	}
 }
 
+/* ── Kept files, by choice (convert-kept-files) ─────────────────── */
+
+/* Marks the movie file at @title kept by hand (a made-up movie of its own). */
+static gint64
+keep_movie(
+	Fixture     *fx,
+	const gchar *title
+){
+	g_autofree gchar *rel = g_strdup_printf("%s/%s.mkv", title, title);
+	gint64 file = axis_test_scenario_file(&fx->view, fx->movies, rel);
+
+	sql(fx, "INSERT INTO meta_title (kind, title, year, provider, provider_id) VALUES ('film', 'Kept %" G_GINT64_FORMAT
+		"', 2001, 'fixture', 'kept-%" G_GINT64_FORMAT "')", file, file);
+	sql(fx, "INSERT INTO movie (title_id, quality_profile_id) SELECT t.id, (SELECT min(id) FROM quality_profile)"
+		" FROM meta_title t WHERE t.provider_id = 'kept-%" G_GINT64_FORMAT "'", file);
+	sql(fx, "INSERT INTO movie_file (file_id, movie_id, quality, kept) SELECT %" G_GINT64_FORMAT
+		", m.id, 'webdl_1080p', true FROM movie m JOIN meta_title t ON t.id = m.title_id"
+		" WHERE t.provider_id = 'kept-%" G_GINT64_FORMAT "'", file, file);
+	return file;
+}
+
+/*
+ * Spec (conversion-runs, Kept files are converted only by choice; Kept
+ * files added to a run): the plan offers the choice, off, with its sentence;
+ * a run made without it says that kept files are left out and offers, on the
+ * row of those files, to add them; only an administrator with the token may;
+ * the page then says who chose it; a run made with the choice lists them
+ * from the start; and the action is refused for a run that is running or has
+ * a file in flight, whatever the form says.
+ */
+static void
+test_kept(Fixture *fx, gconstpointer data)
+{
+	g_autofree gchar *form = NULL;
+	g_autofree gchar *chosen_form = NULL;
+	g_autofree gchar *path = NULL;
+	g_autofree gchar *action = NULL;
+	g_autofree gchar *done = NULL;
+	AxisTestReply reply;
+	gint64 run;
+	gint64 chosen;
+	gint64 busy;
+
+	movie(fx, "Lantern Hill (2001)", 12);
+	movie(fx, "Copper Road (2002)", 24);
+	movie(fx, "Glass Orchard (2003)", 18);
+	keep_movie(fx, "Lantern Hill (2001)");
+	keep_movie(fx, "Glass Orchard (2003)");
+
+	/* The plan: the choice, not ticked, with what it means. */
+	reply = page(fx, "/conversions/runs/new", "runs-new-kept");
+	assert_contains(reply.body, "Also convert files Axis keeps");
+	assert_contains(reply.body, "A kept file is re-encoded in place after every check passes. It stays kept, so Axis "
+		"still does not replace it with another release.");
+	assert_contains(reply.body, "name=\"convert_kept\"");
+	assert_lacks(reply.body, "name=\"convert_kept\" checked");
+	axis_test_reply_clear(&reply);
+
+	/* A viewer cannot make a run with it, nor anyone without the token. */
+	form = g_strdup_printf("scope=movies&revision=%" G_GINT64_FORMAT, fx->space_saver);
+	chosen_form = g_strdup_printf("%s&convert_kept=yes", form);
+	reply = post_as(fx, fx->viewer, "/conversions/runs", chosen_form);
+	g_assert_cmpuint(reply.status, ==, 403);
+	axis_test_reply_clear(&reply);
+	reply = axis_test_web_request(fx->session, fx->port, "POST", "/conversions/runs", fx->admin, NULL, chosen_form);
+	g_assert_cmpuint(reply.status, ==, 403);
+	axis_test_reply_clear(&reply);
+	g_assert_cmpint(N(fx, "SELECT count(*) FROM conversion_run"), ==, 0);
+
+	/* Made without it: kept files are left out, and can be added. */
+	run = plan(fx, form);
+	list(fx, run);
+	g_assert_cmpstr(Q(fx, "SELECT convert_kept::text FROM conversion_run WHERE id = %" G_GINT64_FORMAT, run), ==, "false");
+	path = g_strdup_printf("/conversions/runs/%" G_GINT64_FORMAT, run);
+	action = g_strdup_printf("%s/include-kept", path);
+	reply = page(fx, path, "run-kept-left-out");
+	assert_contains(reply.body, "Files Axis keeps");
+	assert_contains(reply.body, "Left out: the run converts no file that Axis keeps");
+	assert_contains(reply.body, "Kept: Axis does not replace this file");
+	assert_contains(reply.body, "Add these 2 files to the run");
+	assert_contains(reply.body, "/include-kept\"");
+	assert_contains(reply.body, "1 movies and series, 1 files of the 3 looked at");
+	axis_test_reply_clear(&reply);
+	reply = post_as(fx, fx->viewer, action, "");
+	g_assert_cmpuint(reply.status, ==, 403);
+	axis_test_reply_clear(&reply);
+	reply = axis_test_web_request(fx->session, fx->port, "POST", action, fx->admin, NULL, "");
+	g_assert_cmpuint(reply.status, ==, 403);
+	axis_test_reply_clear(&reply);
+	g_assert_cmpstr(Q(fx, "SELECT state || ' ' || convert_kept::text FROM conversion_run WHERE id = %" G_GINT64_FORMAT,
+		run), ==, "ready false");
+
+	/* An administrator adds them: back at the row, the list being added to. */
+	reply = post_as(fx, fx->admin, action, "");
+	done = g_strdup_printf("%s?done=kept&at=run-left-out#run-left-out", path);
+	expect_redirect(&reply, done);
+	g_assert_cmpstr(Q(fx, "SELECT state || ' ' || relist_state || ' ' || convert_kept_by FROM conversion_run WHERE id = %"
+		G_GINT64_FORMAT, run), ==, "listing ready root");
+	{
+		g_autofree gchar *shown = g_strdup_printf("%s?done=kept&at=run-left-out", path);
+
+		reply = page(fx, shown, "run-kept-adding");
+		assert_contains(reply.body, "The files Axis keeps are being added to the list");
+		assert_contains(reply.body, "Adding the files Axis keeps");
+		assert_contains(reply.body, "id=\"run-left-out\"");
+		assert_lacks(reply.body, "Add these 2 files to the run");
+		axis_test_reply_clear(&reply);
+	}
+	list(fx, run);
+	reply = page(fx, path, "run-kept-added");
+	assert_contains(reply.body, "Ready to start");
+	assert_contains(reply.body, "Included: a kept file is converted in place after every check passes, and stays kept. "
+		"Chosen by root, ");
+	assert_contains(reply.body, "3 movies and series, 3 files of the 3 looked at");
+	assert_contains(reply.body, "Every file looked at is in the list.");
+	assert_lacks(reply.body, "Add these");
+	axis_test_reply_clear(&reply);
+	/* Not twice. */
+	reply = post_as(fx, fx->admin, action, "");
+	g_assert_cmpuint(reply.status, ==, 409);
+	assert_contains(reply.body, "converts the files Axis keeps already");
+	axis_test_reply_clear(&reply);
+	g_assert_cmpint(N(fx, "SELECT (SELECT count(*) FROM movie_file WHERE kept)"), ==, 2);
+
+	/* The run has the choice now: the same selection asked for with it, not
+	 * started yet, is this run. */
+	reply = post_as(fx, fx->admin, "/conversions/runs", chosen_form);
+	{
+		g_autofree gchar *again = g_strdup_printf("%s?done=exists&at=run-controls#run-controls", path);
+
+		expect_redirect(&reply, again);
+	}
+	/* The same selection without the choice is another run; and anything
+	 * but the tick is no choice. */
+	{
+		g_autofree gchar *odd = g_strdup_printf("%s&convert_kept=1", form);
+
+		busy = plan(fx, odd);
+		g_assert_cmpint(busy, !=, run);
+		g_assert_cmpstr(Q(fx, "SELECT convert_kept::text FROM conversion_run WHERE id = %" G_GINT64_FORMAT, busy), ==,
+			"false");
+		list(fx, busy);
+	}
+	/* Made with the choice: the kept files are listed from the start. */
+	{
+		g_autoptr(GError) error = NULL;
+
+		g_assert_true(axis_conversion_runs_cancel(fx->runs, run, "root", &error));
+		g_assert_no_error(error);
+	}
+	chosen = plan(fx, chosen_form);
+	g_assert_cmpint(chosen, !=, run);
+	list(fx, chosen);
+	g_assert_cmpstr(Q(fx, "SELECT convert_kept::text || ' ' || convert_kept_by FROM conversion_run WHERE id = %"
+		G_GINT64_FORMAT, chosen), ==, "true root");
+	g_assert_cmpint(N(fx, "SELECT count(*) FROM conversion_run_entry WHERE run_id = %" G_GINT64_FORMAT, chosen), ==, 3);
+	g_assert_cmpint(N(fx, "SELECT count(*) FROM conversion_run_reason WHERE run_id = %" G_GINT64_FORMAT, chosen), ==, 0);
+
+	/* Running, then paused with a file in flight: refused, and the row says
+	 * what to do instead. */
+	{
+		g_autoptr(GError) error = NULL;
+		g_autofree gchar *busy_path = g_strdup_printf("/conversions/runs/%" G_GINT64_FORMAT, busy);
+		g_autofree gchar *busy_action = g_strdup_printf("%s/include-kept", busy_path);
+
+		g_assert_true(axis_conversion_runs_start(fx->runs, busy, AXIS_CONVERSION_TRIAL, FALSE, "root", &error));
+		g_assert_no_error(error);
+		reply = page(fx, busy_path, NULL);
+		assert_contains(reply.body, "Pause the run to add these files.");
+		assert_lacks(reply.body, "Add these 2 files to the run");
+		axis_test_reply_clear(&reply);
+		reply = post_as(fx, fx->admin, busy_action, "");
+		g_assert_cmpuint(reply.status, ==, 409);
+		axis_test_reply_clear(&reply);
+		step(fx);
+		g_assert_true(axis_conversion_runs_pause(fx->runs, busy, "root", &error));
+		g_assert_no_error(error);
+		reply = page(fx, busy_path, NULL);
+		assert_contains(reply.body, "You can add these files once nothing of the run is in flight.");
+		assert_lacks(reply.body, "Add these 2 files to the run");
+		axis_test_reply_clear(&reply);
+		reply = post_as(fx, fx->admin, busy_action, "");
+		g_assert_cmpuint(reply.status, ==, 409);
+		assert_contains(reply.body, "in flight");
+		axis_test_reply_clear(&reply);
+		g_assert_cmpstr(Q(fx, "SELECT state || ' ' || convert_kept::text FROM conversion_run WHERE id = %" G_GINT64_FORMAT,
+			busy), ==, "paused false");
+		reply = post_as(fx, fx->admin, "/conversions/runs/999999/include-kept", "");
+		g_assert_cmpuint(reply.status, ==, 404);
+		axis_test_reply_clear(&reply);
+	}
+}
+
+/*
+ * Spec (conversion-execution, A kept file is converted only by choice): the
+ * confirmation of a replacement of a kept file that nothing else holds back
+ * offers the choice as a tick of its own, not ticked; without the tick the
+ * request is refused by the condition, with it the conversion is asked for
+ * and carries the choice; only an administrator may.
+ */
+static void
+test_kept_single(Fixture *fx, gconstpointer data)
+{
+	g_autofree gchar *new_replace = NULL;
+	g_autofree gchar *form = NULL;
+	g_autofree gchar *ticked = NULL;
+	AxisTestReply reply;
+	gint64 file;
+	gint64 other;
+
+	movie(fx, "Lantern Hill (2001)", 12);
+	movie(fx, "Copper Road (2002)", 24);
+	file = keep_movie(fx, "Lantern Hill (2001)");
+	other = axis_test_scenario_file(&fx->view, fx->movies, "Copper Road (2002)/Copper Road (2002).mkv");
+	sql(fx, "INSERT INTO conversion_profile_proof (revision_id, method) VALUES (%" G_GINT64_FORMAT ", 'canary')",
+		fx->space_saver);
+
+	new_replace = g_strdup_printf("/conversions/new?file=%" G_GINT64_FORMAT "&revision=%" G_GINT64_FORMAT
+		"&outcome=replace", file, fx->space_saver);
+	reply = page(fx, new_replace, "new-replace-kept");
+	assert_contains(reply.body, "Kept: Axis does not replace this file.");
+	assert_contains(reply.body, "Also convert files Axis keeps");
+	assert_contains(reply.body, "A kept file is re-encoded in place after every check passes. It stays kept");
+	assert_contains(reply.body, "name=\"convert_kept\"");
+	assert_lacks(reply.body, "name=\"convert_kept\" checked");
+	assert_contains(reply.body, "I understand: the original will be deleted");
+	assert_lacks(reply.body, "This conversion cannot start now");
+	axis_test_reply_clear(&reply);
+	/* A file that is not kept is not offered it. */
+	{
+		g_autofree gchar *plain = g_strdup_printf("/conversions/new?file=%" G_GINT64_FORMAT "&revision=%" G_GINT64_FORMAT
+			"&outcome=replace", other, fx->space_saver);
+
+		reply = page(fx, plain, NULL);
+		assert_lacks(reply.body, "convert_kept");
+		axis_test_reply_clear(&reply);
+	}
+
+	form = g_strdup_printf("file=%" G_GINT64_FORMAT "&revision=%" G_GINT64_FORMAT "&outcome=replace&confirm=yes", file,
+		fx->space_saver);
+	ticked = g_strdup_printf("%s&convert_kept=yes", form);
+	/* Without the tick: refused by the condition. */
+	reply = post_as(fx, fx->admin, "/conversions", form);
+	g_assert_cmpuint(reply.status, ==, 409);
+	assert_contains(reply.body, "Kept: Axis does not replace this file.");
+	axis_test_reply_clear(&reply);
+	/* Not a viewer's, nor without the token. */
+	reply = post_as(fx, fx->viewer, "/conversions", ticked);
+	g_assert_cmpuint(reply.status, ==, 403);
+	axis_test_reply_clear(&reply);
+	reply = axis_test_web_request(fx->session, fx->port, "POST", "/conversions", fx->admin, NULL, ticked);
+	g_assert_cmpuint(reply.status, ==, 403);
+	axis_test_reply_clear(&reply);
+	g_assert_cmpint(N(fx, "SELECT count(*) FROM conversion"), ==, 0);
+
+	reply = post_as(fx, fx->admin, "/conversions", ticked);
+	g_assert_cmpuint(reply.status, ==, 303);
+	axis_test_reply_clear(&reply);
+	g_assert_cmpstr(Q(fx, "SELECT outcome || ' ' || convert_kept::text || ' ' || requested_by FROM conversion"
+		" WHERE file_id = %" G_GINT64_FORMAT, file), ==, "replace true root");
+	g_assert_cmpint(N(fx, "SELECT count(*) FROM movie_file WHERE file_id = %" G_GINT64_FORMAT " AND kept", file), ==, 1);
+	reply = page(fx, "/conversions/1", NULL);
+	assert_contains(reply.body, "Asked for with the choice to convert kept files: if the file is kept, it is converted "
+		"in place and stays kept.");
+	axis_test_reply_clear(&reply);
+}
+
+/* ── Progress bars ──────────────────────────────────────────────── */
+
+/*
+ * The <progress> element of @body named @label (its accessible name) has
+ * @max and @value as its attributes (in whatever order they are written), or
+ * neither when @max is NULL: a bar without a value is indeterminate.  The
+ * same words stand beside it as text.
+ */
+static void
+assert_bar(
+	const gchar *body,
+	const gchar *label,
+	const gchar *max,
+	const gchar *value
+){
+	g_autofree gchar *plain = axis_test_web_unbroken(body);
+	g_autofree gchar *name = g_strdup_printf("aria-label=\"%s\"", label);
+	g_autofree gchar *words = g_strdup_printf("<span class=\"conversion-progress-text\">%s</span>", label);
+	g_autofree gchar *tag = NULL;
+	const gchar *at = strstr(plain, name);
+	const gchar *open;
+	const gchar *close;
+
+	if (at == NULL)
+		g_error("expected a bar named '%s' in:\n%s", label, body);
+	for (open = at; open > plain && *open != '<'; open--)
+		;
+	close = strchr(at, '>');
+	g_assert_nonnull(close);
+	tag = g_strndup(open, (gsize)(close - open + 1));
+	if (!g_str_has_prefix(tag, "<progress "))
+		g_error("'%s' names %s, not a progress element", label, tag);
+	if (max == NULL) {
+		if (strstr(tag, "value=") != NULL || strstr(tag, "max=") != NULL)
+			g_error("the bar '%s' should have no value (indeterminate): %s", label, tag);
+	} else {
+		g_autofree gchar *max_attr = g_strdup_printf(" max=\"%s\"", max);
+		g_autofree gchar *value_attr = g_strdup_printf(" value=\"%s\"", value);
+
+		if (strstr(tag, max_attr) == NULL || strstr(tag, value_attr) == NULL)
+			g_error("the bar '%s' should be %s of %s: %s", label, value, max, tag);
+	}
+	if (strstr(plain, words) == NULL)
+		g_error("expected the words '%s' beside the bar in:\n%s", label, body);
+}
+
+/* Half way after two minutes of a ten-minute source. */
+#define HALF "Encoding: 50%, 2.5 times real time, about 2 minutes left"
+
+/* The encode job of @conversion as a worker has it now: running since
+ * @seconds ago, having reported @progress ("NULL" for nothing yet). */
+static void
+job_running(
+	Fixture     *fx,
+	gint64       conversion,
+	gint         seconds,
+	const gchar *progress
+){
+	sql(fx, "UPDATE conversion SET state = 'encoding' WHERE id = %" G_GINT64_FORMAT, conversion);
+	sql(fx, "UPDATE job SET state = 'running', attempts = 1, lease_token = coalesce(lease_token, gen_random_uuid()),"
+		" lease_expires_at = now() + interval '1 hour', started_at = now() - interval '%d seconds', progress = %s,"
+		" progress_message = CASE WHEN %s IS NULL THEN NULL ELSE 'converting: ' || round(%s * 100) || '%% of the source"
+		" read' END WHERE id = (SELECT job_id FROM conversion WHERE id = %" G_GINT64_FORMAT ")", seconds, progress,
+		progress, progress, conversion);
+}
+
+/*
+ * Spec (conversion-execution, Progress that can be seen; conversion-runs, A
+ * run's progress as bars): a conversion in flight has a progress bar with
+ * its words beside it and as its name: no value (indeterminate) while
+ * nothing is known, the percent of 100 at 0, in the middle and at the end,
+ * the speed and the time left once they can be worked out, the stage in
+ * words; the block asks for itself again while the conversion is in flight
+ * and not after; the Latest conversions table and a run's page carry the
+ * same bar, and the run's page a bar of its files and one of what it saved.
+ */
+static void
+test_progress(Fixture *fx, gconstpointer data)
+{
+	g_autoptr(GError) error = NULL;
+	g_autofree gchar *form = NULL;
+	g_autofree gchar *run_path = NULL;
+	g_autofree gchar *status = NULL;
+	g_autofree gchar *one = NULL;
+	g_autofree gchar *progress = NULL;
+	AxisTestReply reply;
+	gint64 conversion;
+	gint64 run;
+
+	movie(fx, "Lantern Hill (2001)", 12);
+	movie(fx, "Copper Road (2002)", 24);
+	form = g_strdup_printf("scope=movies&revision=%" G_GINT64_FORMAT, fx->space_saver);
+	run = plan(fx, form);
+	list(fx, run);
+	run_path = g_strdup_printf("/conversions/runs/%" G_GINT64_FORMAT, run);
+	status = g_strdup_printf("%s/status", run_path);
+
+	/* A run that has not started: its files as a bar at nothing of two. */
+	reply = get_as(fx, fx->admin, status);
+	g_assert_cmpuint(reply.status, ==, 200);
+	assert_bar(reply.body, "0 of 2 files settled (0%)", "2", "0");
+	axis_test_reply_clear(&reply);
+
+	g_assert_true(axis_conversion_runs_start(fx->runs, run, AXIS_CONVERSION_TRIAL, FALSE, "root", &error));
+	g_assert_no_error(error);
+	step(fx);
+	conversion = N(fx, "SELECT conversion_id FROM conversion_run_entry WHERE run_id = %" G_GINT64_FORMAT
+		" AND state = 'asked'", run);
+	g_assert_cmpint(conversion, >, 0);
+	/* Ten minutes of source from here on, so that a speed can be worked out
+	 * (the files were listed and asked for as the second they are). */
+	sql(fx, "UPDATE media_info SET duration_ms = 600000");
+	one = g_strdup_printf("/conversions/%" G_GINT64_FORMAT, conversion);
+	progress = g_strdup_printf("%s/progress", one);
+
+	/* Only an administrator's. */
+	reply = get_as(fx, fx->viewer, progress);
+	g_assert_cmpuint(reply.status, ==, 403);
+	axis_test_reply_clear(&reply);
+	reply = get_as(fx, fx->admin, "/conversions/999999/progress");
+	g_assert_cmpuint(reply.status, ==, 404);
+	axis_test_reply_clear(&reply);
+
+	/* Waiting for a worker: nothing is known, the bar has no value. */
+	reply = get_as(fx, fx->admin, progress);
+	g_assert_cmpuint(reply.status, ==, 200);
+	assert_lacks(reply.body, "<html");
+	assert_contains(reply.body, "id=\"conversion-progress\"");
+	assert_contains(reply.body, "hx-trigger=\"every 5s\"");
+	assert_contains(reply.body, "hx-swap=\"outerHTML\"");
+	assert_bar(reply.body, "Waiting for a worker", NULL, NULL);
+	axis_test_reply_clear(&reply);
+
+	/* Taken by a worker that has reported nothing yet: indeterminate. */
+	job_running(fx, conversion, 120, "NULL");
+	reply = get_as(fx, fx->admin, progress);
+	assert_bar(reply.body, "Encoding: no progress reported yet", NULL, NULL);
+	assert_lacks(reply.body, "value=");
+	axis_test_reply_clear(&reply);
+
+	/* 0 percent: a value, of 100. */
+	job_running(fx, conversion, 120, "0");
+	reply = get_as(fx, fx->admin, progress);
+	assert_bar(reply.body, "Encoding: 0%", "100", "0");
+	axis_test_reply_clear(&reply);
+
+	/* Half way after two minutes: 2.5 times real time, about two minutes left. */
+	job_running(fx, conversion, 120, "0.5");
+	reply = get_as(fx, fx->admin, progress);
+	assert_bar(reply.body, HALF, "100", "50");
+	assert_contains(reply.body, "converting: 50% of the source read");
+	axis_test_reply_clear(&reply);
+	/* The same on the conversion's page, in the Latest conversions table and
+	 * its fragment, and on the run's page for the file in flight. */
+	reply = page(fx, one, "conversion-encoding");
+	assert_contains(reply.body, "id=\"conversion-progress\"");
+	assert_bar(reply.body, HALF, "100", "50");
+	axis_test_reply_clear(&reply);
+	reply = page(fx, "/conversions", "conversions-encoding");
+	assert_contains(reply.body, "id=\"conversions-latest\"");
+	assert_contains(reply.body, "hx-get=\"/conversions/latest\"");
+	assert_contains(reply.body, "hx-trigger=\"every 15s\"");
+	assert_bar(reply.body, HALF, "100", "50");
+	axis_test_reply_clear(&reply);
+	reply = get_as(fx, fx->admin, "/conversions/latest");
+	g_assert_cmpuint(reply.status, ==, 200);
+	assert_lacks(reply.body, "<html");
+	assert_contains(reply.body, "id=\"conversions-latest\"");
+	assert_bar(reply.body, HALF, "100", "50");
+	axis_test_web_assert_tables(reply.body);
+	axis_test_reply_clear(&reply);
+	reply = get_as(fx, fx->viewer, "/conversions/latest");
+	g_assert_cmpuint(reply.status, ==, 403);
+	axis_test_reply_clear(&reply);
+	reply = get_as(fx, fx->admin, status);
+	assert_contains(reply.body, "Files being converted or checked now");
+	assert_bar(reply.body, HALF, "100", "50");
+	assert_bar(reply.body, "0 of 2 files settled (0%)", "2", "0");
+	axis_test_reply_clear(&reply);
+
+	/* All of the source read. */
+	job_running(fx, conversion, 120, "1");
+	reply = get_as(fx, fx->admin, progress);
+	assert_bar(reply.body, "Encoding: 100%, 5.0 times real time", "100", "100");
+	assert_lacks(reply.body, " left");
+	axis_test_reply_clear(&reply);
+
+	/* Being checked, then being put aside: the stage in words. */
+	sql(fx, "UPDATE job SET state = 'succeeded', lease_token = NULL, lease_expires_at = NULL, finished_at = now()"
+		" WHERE id = (SELECT job_id FROM conversion WHERE id = %" G_GINT64_FORMAT ")", conversion);
+	sql(fx, "UPDATE conversion SET state = 'verifying' WHERE id = %" G_GINT64_FORMAT, conversion);
+	reply = get_as(fx, fx->admin, progress);
+	assert_bar(reply.body, "Checking: no progress reported yet", NULL, NULL);
+	assert_contains(reply.body, "hx-trigger=\"every 5s\"");
+	axis_test_reply_clear(&reply);
+	sql(fx, "UPDATE conversion SET state = 'placing' WHERE id = %" G_GINT64_FORMAT, conversion);
+	reply = get_as(fx, fx->admin, progress);
+	assert_bar(reply.body, "Keeping the trial aside", NULL, NULL);
+	axis_test_reply_clear(&reply);
+
+	/* Ended: the block asks for nothing more, and points at the page. */
+	sql(fx, "INSERT INTO conversion_check (conversion_id, number, result, detail) SELECT %" G_GINT64_FORMAT ", n,"
+		" 'passed', 'as planned' FROM generate_series(1, 10) n", conversion);
+	sql(fx, "UPDATE conversion SET state = 'done', finished_at = now(), output_size = src_size / 2,"
+		" output_reported = src_size / 2, trial_name = 'trial-1.mkv', trial_state = 'kept' WHERE id = %" G_GINT64_FORMAT,
+		conversion);
+	reply = get_as(fx, fx->admin, progress);
+	g_assert_cmpuint(reply.status, ==, 200);
+	assert_contains(reply.body, "id=\"conversion-progress\"");
+	assert_contains(reply.body, "The conversion is no longer in flight");
+	assert_lacks(reply.body, "hx-get");
+	assert_lacks(reply.body, "<progress");
+	axis_test_reply_clear(&reply);
+	/* Its page has no bar, and the table asks for nothing while no other
+	 * conversion is in flight. */
+	reply = page(fx, one, NULL);
+	assert_lacks(reply.body, "<progress");
+	assert_lacks(reply.body, "no longer in flight");
+	axis_test_reply_clear(&reply);
+
+	/* The run: one file settled of two, and what it saved against the
+	 * estimate, as bars with their words. */
+	sql(fx, "UPDATE conversion_run SET state = 'paused', pause_code = 'person', pause_text = 'Paused in a test.',"
+		" paused_at = now(), paused_by = 'root' WHERE id = %" G_GINT64_FORMAT, run);
+	step(fx);
+	reply = get_as(fx, fx->admin, "/conversions/latest");
+	assert_lacks(reply.body, "hx-get");
+	assert_lacks(reply.body, "<progress");
+	axis_test_reply_clear(&reply);
+	reply = get_as(fx, fx->admin, status);
+	assert_bar(reply.body, "1 of 2 files settled (50%)", "2", "1");
+	/* What it saved, of what was estimated for the whole list, as a percent. */
+	{
+		g_autofree gchar *saved = axis_size_format((guint64)N(fx, "SELECT sum(size - result_size) FROM"
+			" conversion_run_entry WHERE run_id = %" G_GINT64_FORMAT " AND state = 'done'", run));
+		g_autofree gchar *estimate = axis_size_format((guint64)N(fx, "SELECT sum(size - mid) FROM conversion_run_entry"
+			" WHERE run_id = %" G_GINT64_FORMAT, run));
+		g_autofree gchar *label = g_strdup_printf("%s saved of about %s estimated (as trials, nothing replaced)", saved,
+			estimate);
+		g_autofree gchar *percent = g_strdup_printf("%" G_GINT64_FORMAT, N(fx, "SELECT least((SELECT sum(size -"
+			" result_size) FROM conversion_run_entry WHERE run_id = %" G_GINT64_FORMAT " AND state = 'done'),"
+			" sum(size - mid)) * 100 / sum(size - mid) FROM conversion_run_entry WHERE run_id = %" G_GINT64_FORMAT, run,
+			run));
+
+		assert_bar(reply.body, label, "100", percent);
+	}
+	axis_test_reply_clear(&reply);
+	/* A cap of one file: the bar is of the files within it. */
+	{
+		AxisConversionRunLimits limits;
+
+		memset(&limits, 0, sizeof(limits));
+		limits.at_once = 1;
+		limits.cap_files = 1;
+		limits.window_start = limits.window_end = -1;
+		g_assert_true(axis_conversion_runs_set_limits(fx->runs, run, &limits, "root", &error));
+		g_assert_no_error(error);
+	}
+	reply = get_as(fx, fx->admin, status);
+	assert_bar(reply.body, "1 of 1 files within its caps settled (100%)", "1", "1");
+	axis_test_reply_clear(&reply);
+	/* The dashboard's piece of the run carries the same bar. */
+	axis_test_web_read_attention(fx->web);
+	reply = get_as(fx, fx->admin, "/");
+	g_assert_cmpuint(reply.status, ==, 200);
+	assert_bar(reply.body, "1 of 1 files within its caps settled (100%)", "1", "1");
+	axis_test_reply_clear(&reply);
+}
+
 int
 main(int argc, char **argv)
 {
 	g_test_init(&argc, &argv, NULL);
 
+	AXIS_TEST_ADD_DB_CASE("/web/conversion-runs/kept", Fixture, NULL, test_kept);
+	AXIS_TEST_ADD_DB_CASE("/web/conversion-runs/kept-single", Fixture, NULL, test_kept_single);
+	AXIS_TEST_ADD_DB_CASE("/web/conversion-runs/progress", Fixture, NULL, test_progress);
 	AXIS_TEST_ADD_DB_CASE("/web/conversion-runs/pages", Fixture, NULL, test_pages);
 	AXIS_TEST_ADD_DB_CASE("/web/conversion-runs/actions", Fixture, NULL, test_actions);
 	AXIS_TEST_ADD_DB_CASE("/web/conversion-runs/back-to-place", Fixture, NULL, test_back_to_place);
