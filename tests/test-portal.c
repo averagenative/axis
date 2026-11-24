@@ -468,6 +468,54 @@ post(
 	return send_from(fx, "POST", path, cookie, form, NULL, NULL);
 }
 
+typedef struct
+{
+	GMainLoop *loop;
+	GBytes    *bytes;
+} Typed;
+
+static void
+on_typed(
+	GObject      *source,
+	GAsyncResult *result,
+	gpointer      user_data
+){
+	Typed *typed = user_data;
+
+	typed->bytes = soup_session_send_and_read_finish(SOUP_SESSION(source), result, NULL);
+	g_main_loop_quit(typed->loop);
+}
+
+/* A post whose body is declared @type; the status. */
+static guint
+post_typed(
+	Fixture     *fx,
+	const gchar *path,
+	const gchar *cookie,
+	const gchar *type,
+	const gchar *body
+){
+	g_autofree gchar *url = g_strdup_printf("http://127.0.0.1:%u%s", (guint)fx->port, path);
+	g_autoptr(SoupMessage) message = soup_message_new("POST", url);
+	g_autoptr(GBytes) payload = g_bytes_new(body, strlen(body));
+	SoupMessageHeaders *headers = soup_message_get_request_headers(message);
+	Typed typed;
+
+	soup_message_add_flags(message, SOUP_MESSAGE_NO_REDIRECT);
+	soup_message_headers_append(headers, "Cookie", cookie);
+	soup_message_headers_append(headers, "X-Forwarded-Proto", "https");
+	soup_message_headers_append(headers, "X-Forwarded-For", OUTSIDE);
+	soup_message_set_request_body_from_bytes(message, type, payload);
+	typed.loop = g_main_loop_new(NULL, FALSE);
+	typed.bytes = NULL;
+	soup_session_send_and_read_async(fx->session, message, G_PRIORITY_DEFAULT, NULL, on_typed, &typed);
+	g_main_loop_run(typed.loop);
+	g_main_loop_unref(typed.loop);
+	g_assert_nonnull(typed.bytes);
+	g_bytes_unref(typed.bytes);
+	return soup_message_get_status(message);
+}
+
 static const gchar *
 session_name(Fixture *fx)
 {
@@ -1818,6 +1866,20 @@ test_post_without_token(Fixture *fx, gconstpointer data)
 		assert_status(&reply, 400);
 		axis_test_reply_clear(&reply);
 	}
+	/* A body that is not an urlencoded form is not read as one, whatever it
+	 * holds: the token in JSON, in a multipart form, in plain text. */
+	{
+		g_autofree gchar *json = g_strdup_printf("{\"_csrf\":\"%s\",\"kind\":\"movie\"}", csrf);
+		g_autofree gchar *multipart = g_strdup_printf("--zz\r\nContent-Disposition: form-data; name=\"_csrf\"\r\n\r\n%s"
+			"\r\n--zz\r\nContent-Disposition: form-data; name=\"kind\"\r\n\r\nmovie\r\n--zz--\r\n", csrf);
+
+		g_assert_cmpuint(post_typed(fx, "/title/3/request", cookie, "application/json", json), ==, 415);
+		g_assert_cmpuint(post_typed(fx, "/title/3/request", cookie, "multipart/form-data; boundary=zz", multipart), ==,
+			415);
+		g_assert_cmpuint(post_typed(fx, "/title/3/request", cookie, "text/plain", good), ==, 415);
+		g_assert_cmpuint(post_typed(fx, "/title/3/request", cookie, "application/x-www-form-urlencoded-not", good), ==,
+			415);
+	}
 	g_assert_cmpuint(asked(fx, NULL), ==, before);
 
 	/* With the token, from the portal's own pages: made. */
@@ -2197,8 +2259,12 @@ test_daemon_away(Fixture *fx, gconstpointer data)
 	reply = get(fx, "/login", NULL);
 	assert_status(&reply, 200);
 	axis_test_reply_clear(&reply);
-	g_assert_true(soup_server_listen_local(fx->daemon, fx->daemon_port, SOUP_SERVER_LISTEN_IPV4_ONLY, &error));
-	g_assert_no_error(error);
+	if (!soup_server_listen_local(fx->daemon, fx->daemon_port, SOUP_SERVER_LISTEN_IPV4_ONLY, &error)) {
+		/* (Another program took the port in the meantime: the test programs
+		 * run side by side.  The rest needs the stand-in back on it.) */
+		g_test_message("the stand-in could not listen on its port again: %s", error->message);
+		return;
+	}
 	reply = get(fx, "/requests", cookie);
 	assert_status(&reply, 200);
 	axis_test_reply_clear(&reply);
