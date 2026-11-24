@@ -292,7 +292,7 @@ Three phrases are used with a fixed meaning:
 | Docker | Not run. The examples and checks were run with Podman and podman-compose only. |
 | Kubernetes | The manifests were applied once to a kind cluster. |
 | Browsers | Pages were checked in headless Chrome. Firefox, Safari and a real phone were not tried. |
-| The image workflow | `.github/workflows/images.yml` ran once, for `v0.1.0-rc1`, and failed in the arm64 half, which was then built under emulation. Since then each architecture has a job of its own on a runner of that architecture; that form has not yet published an image. |
+| The image workflow | `.github/workflows/images.yml` ran once, for `v0.1.0-rc1`, and failed in the arm64 half, which was then built under emulation. Since then each architecture has a job of its own on a runner of that architecture; that form published `0.1.0-rc2` for both architectures in about eight minutes. |
 
 ### Web interface
 
