@@ -556,7 +556,6 @@ axis_acquire_prune_searches(
 		g_mutex_unlock(&self->hook_lock);
 		return TRUE;
 	}
-	self->prune_after_us = at + (gint64)AXIS_ACQUIRE_PRUNE_EVERY_S * G_USEC_PER_SEC;
 	g_mutex_unlock(&self->hook_lock);
 
 	params[0] = kept;
@@ -573,6 +572,11 @@ axis_acquire_prune_searches(
 		if (n < AXIS_ACQUIRE_PRUNE_BATCH)
 			break;
 	}
+	/* The hour is spent only by a time that worked: after a failure the next
+	 * follow-up tries again. */
+	g_mutex_lock(&self->hook_lock);
+	self->prune_after_us = at + (gint64)AXIS_ACQUIRE_PRUNE_EVERY_S * G_USEC_PER_SEC;
+	g_mutex_unlock(&self->hook_lock);
 	if (deleted_out != NULL)
 		*deleted_out = deleted;
 	return TRUE;
