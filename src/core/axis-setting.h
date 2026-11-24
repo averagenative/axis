@@ -50,8 +50,8 @@ typedef enum
  *   returning the value the daemon started with until it is restarted; the
  *   Settings page says so.  Few settings should need this.
  * @AXIS_SETTING_ZERO_OFF: 0 is allowed besides [minimum, maximum], and
- *   means that what the setting limits is switched off ("0: kept for
- *   ever"); its help says so.  Only for %AXIS_SETTING_INTEGER,
+ *   means that what the setting limits is switched off ("0: kept
+ *   forever"); its help says so.  Only for %AXIS_SETTING_INTEGER,
  *   %AXIS_SETTING_DURATION and %AXIS_SETTING_BYTE_SIZE.
  */
 typedef enum
