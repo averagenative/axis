@@ -86,14 +86,17 @@ Open **Media**, then **Requests**. The page is called **My requests**.
 - **What you asked for** lists each request with its **Title**, **Seasons**,
   **State** and when you asked.
 
-A request that failed says why in one of four sentences:
+A request that failed says why in one of three sentences:
 
 | What you see | What it means |
 | --- | --- |
 | "The title could not be added." | An administrator has to look at it. |
 | "A download failed. Axis is looking again." | Axis tries the next release by itself. |
 | "A download finished and needs the administrator." | The download arrived, and an administrator must decide how to import it. |
-| "The title was removed." | An administrator removed the title before it arrived. |
+
+A request that reads **Removed from Axis** is closed: an administrator
+removed the title after it was added. You can ask for the title again. The
+closed request still counts against your limit for the window it was made in.
 
 To take back a request that still waits, select **Withdraw**. Withdrawing
 gives its count back. If other people follow the request, the first of them
@@ -139,6 +142,16 @@ row in the **Decided** card shows the reason and a **Try again** button.
 2. Select **Try again**. Axis shows "The title was added and its search
    started."
 
+Axis never removes what an approval added, even when the approval fails part
+of the way. A series request can fail after Axis added the series and
+monitored some of its seasons, for example when a season that the request
+lists is no longer in the series' details. The series then stays in **TV**
+with those seasons monitored, and **Try again** monitors the rest.
+
+**Try again** is offered only while the title was never added. Once the
+title is in Axis, what you change on its own page (for example a season you
+stop monitoring) stays as you left it.
+
 ## Set limits and automatic approval for a person (administrators)
 
 1. Open **Media**, then **Requests**. In the **Defaults** card, select
@@ -173,6 +186,15 @@ find the **Requests** card:
 A request that is declined keeps its count. A request that is withdrawn
 gives it back. Administrators are not limited.
 
+Besides these limits, a person who is not an administrator can make at most
+100 requests in any 24 hours, whatever became of them. Withdrawing a request
+does not give back its place under this ceiling. You cannot change it. It
+stops a person, or someone who knows their password, from filling the
+database by asking and withdrawing again and again.
+
+A person whose limit for a kind is 0 cannot follow another person's request
+of that kind either.
+
 ## What happens when an account goes
 
 When you disable or delete an account on the **Users** page, Axis withdraws
@@ -187,6 +209,9 @@ and the titles that they added stay as they are.
 | "No movie request is left until Monday." | You reached your limit. Wait for the next window, withdraw a request that still waits, or ask an administrator for a higher limit. |
 | "The request lists 4 seasons and 3 seasons are left until Monday." | Ask for fewer seasons. Axis refuses the whole request and makes none. |
 | "You cannot ask for series." | An administrator set your limit for that kind to 0. |
+| "You made 100 requests in the last 24 hours, withdrawn ones included, and that is the most anyone may; ask again later." | You reached the daily ceiling. Wait until your oldest request of the last 24 hours is a day old. |
+| "That library folder is not one for movies." | You chose a folder for TV to approve a movie, or the other way round. Choose a folder of the request's kind. |
+| "Its title was added and is still in Axis." | **Try again** applies only to a title that was never added. |
 | "The title is closed to requests." | An administrator closed the title. Only an administrator can open it again. |
 | "Series cannot be requested here." | The TV module is off. An administrator can switch it on under **System**, then **Modules**. |
 | "Choose a library folder and a quality profile for it." | No default is set, and the approval named none. Choose both and approve again. |

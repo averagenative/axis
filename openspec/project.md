@@ -732,7 +732,13 @@ Anime support is for a well-known series that is found, downloaded and numbered 
 - Only the first slice of `add-request-portal` is built: requests inside Axis's own pages. A person who asks is an ordinary user, who still sees the other pages of Axis (file names, release names, downloads). The requester role, the portal API and the portal program are not built.
 - Not reviewed by someone who did not write it. No request has been made in a real browser or against a real indexer, download client or library.
 - An approval records the decision first and adds the title after. A daemon that stops in between leaves an approved request with no title; it reads as "could not be added" two minutes later, and an administrator selects "Try again". Nothing retries it by itself.
-- A title's state costs up to 8 statements for a page of cards, and one of them lists every account (to know whose limit is 0). That is right for a household's accounts and was not measured with hundreds.
+- A title's state costs up to 8 statements for a page of cards, and one of them lists the accounts whose limit is 0. It runs on the page's worker thread, not on the main loop.
+- A placing of an approved title holds one connection of the pool for its lock while the movies or TV module adds the title on others, so several placings at once take one connection each beyond the modules' own.
+- A series approval that fails part of the way leaves the series added with the seasons monitored so far (Axis never removes what an approval added); the request reads "could not be added", and "Try again" monitors the rest.
+- A request whose title was added and then removed from Axis is closed as "Removed from Axis", and the title can be asked for again. A movie that an administrator stops monitoring and whose file is deleted is not handled: its request stays approved and reads "Approved: Axis is looking for it", and nobody can ask for the movie again until an administrator removes it or monitors it.
+- A movie that Axis manages but does not monitor, and that has no file, gives a request that is approved at once ("existing") and reads "Axis is looking for it", while nothing looks.
+- The search's adult filter drops adult titles from the provider's answers; Axis stores no mark of it. A title stored by another way (an administrator's lookup by identifier, an import from Radarr or Sonarr, an identification) can be opened and asked for by its number, adult or not. P2's portal must store the mark before its `title` operation can refuse such a title.
+- A request joined to another when two records of its title merge still counts against the quota of the person who made it.
 - The Request button on a Discover card is drawn by the same code as on a search result's card, but no test opens a Discover page as a user.
 - A series on disk that Axis does not manage does not read as available; a movie does.
 - "Aired" is by the UTC date, without the TV module's delay after airing.

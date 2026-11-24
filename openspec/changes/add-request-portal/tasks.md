@@ -8,15 +8,15 @@ Test programs: `tests/test-requests.c` (the model, with a database), `tests/test
 
 Build:
 
-- [x] 1.1 Migration `0083_requests.sql` (0080 to 0082 were taken by then): `request`, `request_season`, `request_follower`, `request_closed_title`, the partial unique indexes for one open request, the two switches and two limits on `app_user`. Tested in `tests/test-db-migrate.c` on a database with accounts (`/db/migrate/requests-on-accounts`).
+- [x] 1.1 Migration `0083_requests.sql` (0080 to 0082 were taken by then): `request`, `request_season`, `request_follower`, `request_closed_title`, the partial unique indexes for one open request, the two switches and two limits on `app_user`; after the first review also `made_by` with its index (the daily ceiling), the decision `removed` and the trigger that sets it, and a merge trigger that keeps people and seasons. Tested in `tests/test-db-migrate.c` on a database with accounts (`/db/migrate/requests-on-accounts`).
 - [x] 1.2 `src/requests/`: the model, the season expansion, the duplicate and follower rules, the quota count from rows, the decision transaction, the derived state in a bounded number of statements for a page (8 for 20 titles, 5 for 50 requests, measured by the test; not one statement: the movies' and the series' facts are read by their own modules' statements).
-- [x] 1.3 The approval path: add or find the title, monitor the request's seasons, record, queue the search; "Try again" for an approval that could not add. The decision is one transaction; the placing of the title comes after its commit, because `axis_movies_add()` and `axis_tv_add()` use connections of their own (see `design.md`, "As built in P1").
+- [x] 1.3 The approval path: add or find the title, monitor the request's seasons, record, queue the search; "Try again" for an approval that could not add. The decision is one transaction; the placing of the title comes after its commit, because `axis_movies_add()` and `axis_tv_add()` use connections of their own. Two placings of one title wait for each other, and a placing never removes what it added; "Try again" is refused once the title is added and in Axis (see `design.md`, "As built in P1").
 - [x] 1.4 Settings: `requests.window`, `requests.movies_per_window`, `requests.seasons_per_window`, `requests.auto_max_seasons`, `requests.show_who_asked`, and the four defaults for placement (set on the Requests page, where the folders and profiles are listed by name).
 - [x] 1.5 Pages: `/requests` for administrators and as "My requests", `/requests/<identifier>`, Request on search results, Discover cards and title pages, the state on every card. Two things differ from this line. The people's switches and limits are on a page of the Requests module, `/requests/people`, which the Users page links to; they are not on the Users page itself. And the Request piece on a Discover card is drawn by the same code as on a search result's card, but no test opens a Discover page as a user (see 1.15).
 - [x] 1.6 The two notices of requests in the attention sources.
 - [x] 1.7 A user guide page, "Let other people ask for titles" (`docs/20-let-other-people-ask-for-titles.md`), and the known limits of this slice in `openspec/project.md`.
 
-The test paths below are the plan's. Where a scenario's test has another path in the tree, the task names it. `tests/test-requests.c` has 35 cases and `tests/test-web-requests.c` has 12; one case often covers several scenarios.
+The test paths below are the plan's. Where a scenario's test has another path in the tree, the task names it. `tests/test-requests.c` has 41 cases and `tests/test-web-requests.c` has 12; one case often covers several scenarios.
 
 Tests, `requests` specification:
 
@@ -25,7 +25,7 @@ Tests, `requests` specification:
 - [x] 1.12 `/requests/model/first-and-latest`: The first and the latest season (the first and the latest in the case of 1.11, on a series of two seasons; the latest of the series with seasons 0 to 3, and the specials only when picked, in this one).
 - [x] 1.13 `/requests/model/no-episodes-no-text`: No episodes and nothing typed. The model's part is this case (a season the record does not have, a season picked twice, nothing picked, a title of another kind). A post with an episode number or a note is refused by the form's rule, tested in `/web/requests/user-asks`.
 - [x] 1.14 `/requests/model/module-off`: A module that is off (a layer without the TV module), and `/web/requests/module-off` (the TV module registered and switched off).
-- [ ] 1.15 `/web/requests/user-asks-from-discover`: An ordinary user asks from Discover. Not tested as named: `/web/requests/user-asks` asks from a title's page and reads the Request form on a search result's card. The Discover card's piece is the same branch of the same function, but the Discover page's lists come from the TMDb fake, which the requests' test fixture does not set up, so no test opens a Discover page as a user.
+- [ ] 1.15 `/web/requests/user-asks-from-discover`: An ordinary user asks from Discover. Not tested as named: `/web/requests/user-asks` asks from a title's page and reads the Request form on a search result's card. The Discover card's piece is the same branch of the same function, but Discover shows the lists of a provider that offers them, and the requests' fixture provider offers none (the Discover tests use a TMDb fake, which the requests' fixture does not set up), so no test opens a Discover page as a user.
 - [x] 1.16 `/web/requests/user-cannot-add`: An ordinary user still cannot add (in `/web/requests/user-asks`).
 - [x] 1.17 `/web/requests/forged-post`: A forged request post (in `/web/requests/user-asks`; also without a session).
 - [x] 1.18 `/requests/decide/waiting-fetches-nothing`: Waiting fetches nothing.
@@ -49,7 +49,7 @@ Tests, `requests` specification:
 - [x] 1.36 `/requests/quota/new-window`: A new window (day and month in this case, week in `/requests/quota/limit-reached`; the two days a year of 23 and 25 hours in `/requests/quota/window-bounds`, a pure test that skips them where the system has no data for the time zone it uses).
 - [x] 1.37 `/requests/quota/withdraw-gives-back`: Withdrawing gives the count back (in `/requests/quota/limit-reached`).
 - [x] 1.38 `/requests/quota/decline-keeps`: A decline keeps the count (in `/requests/quota/limit-reached`).
-- [x] 1.39 `/requests/quota/limit-of-none`: A limit of none (refused: in `/requests/quota/seasons-count-each`; not offered: in `/web/requests/series-page`).
+- [x] 1.39 `/requests/quota/limit-of-none`: A limit of none (refused: in `/requests/quota/seasons-count-each`; no following either: in `/requests/follow/movie`; not offered: in `/web/requests/series-page`).
 - [x] 1.40 `/web/requests/states-of-a-search`: The states of a search (an administrator and two ordinary users; a requester in P2).
 - [x] 1.41 `/requests/state/seasons-of-a-series`: Seasons of a series (in `/requests/follow/seasons-left-out` and `/web/requests/series-page`).
 - [x] 1.42 `/web/requests/who-asked-shown`: Who asked, shown (in `/web/requests/who-asked`).
@@ -73,9 +73,9 @@ Tests, `requests` specification:
 - [x] 1.60 `/requests/state/series-partly`: A series is partly available.
 - [x] 1.61 `/requests/state/failure-plain-words`: A failure in plain words (in `/requests/state/movie` and `/web/requests/mine`).
 - [x] 1.62 `/requests/state/import-needs-person`: An import that needs a person (in `/requests/state/movie`).
-- [x] 1.63 `/requests/state/removed`: Removed (in `/requests/state/movie`).
-- [x] 1.64 `/requests/decide/folder-gone`: The folder is gone (and `/web/requests/try-again`).
-- [x] 1.65 `/requests/decide/tried-again`: Tried again (in `/requests/decide/folder-gone` and `/web/requests/try-again`).
+- [x] 1.63 `/requests/state/removed`: Removed (in `/requests/state/movie`; a series in `/requests/state/series-removed`; on the pages in `/web/requests/try-again`).
+- [x] 1.64 `/requests/decide/folder-gone`: The folder is gone (and `/web/requests/try-again`; a folder of the other kind is refused in the same case).
+- [x] 1.65 `/requests/decide/tried-again`: Tried again (in `/requests/decide/folder-gone` and `/web/requests/try-again`, with a second "Try again" refused once the title is in Axis).
 - [x] 1.66 `/web/requests/mine`: My requests.
 - [x] 1.67 `/web/requests/anothers-by-identifier`: Another person's request by its identifier (in `/web/requests/mine`: the same status and the same body as for an identifier never issued, to read, to withdraw and to stop following).
 - [x] 1.68 `/web/requests/nothing-of-inner-workings`: Nothing of the engine's inner workings (in `/web/requests/mine`: a marked folder name, the profile's name, a release name, a file name and a protocol; no indexer or download client is set up in the fixture, so none could appear).
@@ -84,8 +84,14 @@ Tests, `requests` specification:
 - [x] 1.71 `/web/requests/switches-and-limits`: The switches and limits of a person (on `/requests/people`; see 1.5).
 - [x] 1.72 `/requests/account/disabled`: A disabled requester, run with a disabled and with a deleted ordinary user; and `/web/requests/account-goes`, through the Users page with accounts in the database and a real login. Again with a requester in P2.
 - [x] 1.73 `/requests/state/one-query-a-page`: the state of 20 titles and of 50 requests is read in a bounded number of queries, on a library of 5,000 movies and 1,500 series.
+- [x] 1.74 `/requests/quota/daily-ceiling`: Asking and withdrawing again and again (also a request handed over to a follower, which stays counted for its maker, and an administrator, who is not limited).
+- [x] 1.75 `/requests/decide/two-placings`: Two placings of one series (forced to meet).
+- [x] 1.76 `/requests/read/who-asked-series`: Who asked, hidden, for another season.
+- [x] 1.77 `/requests/model/title-merge`: Two waiting requests for a movie.
+- [x] 1.78 `/requests/model/merge-approved-wins`: The approved one stays (on the record that goes, and on the record kept).
+- [x] 1.79 `/requests/model/merge-seasons`: Seasons that are not shared (with an approved request on each side).
 
-Tests beyond the plan: `/requests/quota/race` (with room for one, of six requests at the same moment exactly one is made), `/requests/model/title-merge` (two records of a title merge), `/requests/decide/stopped-before-placing` (a daemon that stopped between a decision and the placing), `/web/requests/nothing-typed-is-logged`.
+Tests beyond the plan: `/requests/quota/race` (with room for one, of six requests at the same moment exactly one is made), `/requests/decide/stopped-before-placing` (a daemon that stopped between a decision and the placing), `/web/requests/nothing-typed-is-logged`.
 
 Tests, `attention` specification:
 
@@ -100,7 +106,7 @@ All six are one case, `/web/attention/requests` in `tests/test-web-requests.c`.
 
 Gate:
 
-- [ ] 1.90 Independent review of P1: who may read and change a request, the decision transaction, the quota count. Record the reviewer and the findings in `design.md`; fix each finding with a test. Not done: the slice is built and waits for it. The four gates (`make check`, `make fuzz`, `make check-container`, `make check-examples`) were not run by the author either; only the test programs the slice touches were, under both sanitizers.
+- [ ] 1.90 Independent review of P1: who may read and change a request, the decision transaction, the quota count. Record the reviewer and the findings in `design.md`; fix each finding with a test. A first review was made and its findings were fixed or recorded as known limits (`design.md`, "Independent review"); the fixes wait for review. Not tested by a case: the account row read `FOR SHARE` (a disable that meets a request) and the title that is removed between the facts' read and the request's transaction. The four gates (`make check`, `make fuzz`, `make check-container`, `make check-examples`) were not run by the author either; only the test programs the slice touches were, under both sanitizers.
 
 ## 2. P2: the scoped token and the narrow API
 
