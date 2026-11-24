@@ -296,8 +296,20 @@ typedef struct
 	Step            wrong;		/* the first step whose input is not good, or STEP_NONE */
 	gchar          *problem;	/* a sentence for that step's page */
 	gchar          *token;		/* secret: step 4 only */
+	gchar          *text;		/* step 4: made before the worker is, so a failure creates nothing */
+	gchar          *token_text;
+	gchar          *start_text;
+	gchar          *file;		/* may stay NULL: the text is a command */
 	GError         *error;
 } AttachWork;
+
+static const gchar *attach_version = AXIS_VERSION;
+
+void
+axis_web_workers_attach_set_version(const gchar *version)
+{
+	attach_version = version != NULL ? version : AXIS_VERSION;
+}
 
 static void
 attach_work_free(gpointer data)
@@ -311,6 +323,10 @@ attach_work_free(gpointer data)
 	g_clear_pointer(&work->plan, axis_attach_plan_free);
 	g_free(work->problem);
 	axis_secret_free(work->token);
+	g_free(work->text);
+	g_free(work->token_text);
+	g_free(work->start_text);
+	g_free(work->file);
 	g_clear_error(&work->error);
 	g_free(work);
 }
@@ -434,7 +450,20 @@ attach_run(
 	if (!check_disks(work) || work->target == STEP_MOUNTS)
 		return;
 
-	/* Step 4, and only here: the worker and its token. */
+	/* Step 4: every text first, so that what cannot be shown creates nothing
+	 * (a version that is no image tag, for one). */
+	work->text = axis_attach_generate(work->plan, attach_version);
+	work->token_text = axis_attach_token_text(work->plan);
+	work->start_text = axis_attach_start_text(work->plan);
+	work->file = axis_attach_file_name(work->plan);
+	if (work->text == NULL || work->token_text == NULL || work->start_text == NULL) {
+		wrong(work, STEP_MACHINE, "This Axis is a build whose version is not a name a container image can have (only "
+			"letters, digits, '.', '_' and '-' are allowed), so the guide cannot write the text for it. No worker "
+			"was created. Use a release's image and an Axis of the same version.");
+		return;
+	}
+
+	/* And only here: the worker and its token. */
 	if (!axis_worker_store_create(self->pool, self->tokens, work->plan->name, work->by, &work->token, &id,
 	        &work->error)) {
 		if (g_error_matches(work->error, AXIS_WORKER_STORE_ERROR, AXIS_WORKER_STORE_ERROR_EXISTS))
@@ -782,7 +811,7 @@ page_mounts(
 	for (i = 0; i < plan->disks->len; i++) {
 		const AxisAttachDisk *disk = g_ptr_array_index(plan->disks, i);
 		const Disk *known = disk_find(work->disks, disk->volume);
-		g_autofree gchar *text = axis_attach_mount_text(disk);
+		g_autofree gchar *text = axis_attach_mount_text(disk, plan->tool);
 
 		ADD(card, heading(3, known != NULL ? known->name : "A disk"));
 		ADD(card, axis_web_storage_text("help", axis_attach_mount_label(disk->mount)));
@@ -848,10 +877,10 @@ page_result(
 	AttachWork  *work
 ){
 	const AxisAttachPlan *plan = work->plan;
-	g_autofree gchar *text = axis_attach_generate(plan, AXIS_VERSION);
-	g_autofree gchar *token_text = axis_attach_token_text(plan);
-	g_autofree gchar *start_text = axis_attach_start_text(plan);
-	g_autofree gchar *file = axis_attach_file_name(plan);
+	const gchar *text = work->text;
+	const gchar *token_text = work->token_text;
+	const gchar *start_text = work->start_text;
+	const gchar *file = work->file;
 	g_autofree gchar *query = waiting_query(plan);
 	g_autofree gchar *waiting = g_strdup_printf("/workers/attach/waiting?%s", query);
 	g_autofree gchar *title = g_strdup_printf("Worker %s", plan->name);
@@ -864,7 +893,7 @@ page_result(
 	HtmxResponse *response;
 
 	if (text == NULL || token_text == NULL || start_text == NULL) {
-		/* A plan that passed its check always has text. */
+		/* Made, and checked, before the worker was created. */
 		g_object_unref(content);
 		g_object_unref(token_card);
 		g_object_unref(start_card);
@@ -885,7 +914,8 @@ page_result(
 	ADD(content, token_card);
 
 	if (file != NULL) {
-		save = g_strdup_printf("Save this as %s.", file);
+		save = g_strdup_printf("Save this as %s%s.", file, plan->tool == AXIS_ATTACH_TOOL_COMPOSE ?
+			", in the directory part 1 made" : "");
 		text_card = axis_web_storage_card("2. The file for this worker");
 		ADD(text_card, axis_web_storage_text(NULL, save));
 	} else {
@@ -896,7 +926,8 @@ page_result(
 	ADD(text_card, block(text, "attach-text"));
 	ADD(text_card, axis_web_storage_text("help", "The container runs read-only, without capabilities, without new "
 		"privileges, with a limit on its processes, and writes only to /tmp (a tmpfs) and to the work area of each "
-		"disk. The image is this server's version: a worker of another version is refused."));
+		"disk. The image is this server's version: a worker of another version is refused. The tag must be "
+		"the image your server runs: if it is a nightly or a build of your own, change the tag by hand."));
 	ADD(text_card, axis_web_storage_text("help", encoder_needs(plan->encoder)));
 	ADD(content, text_card);
 
@@ -935,6 +966,24 @@ attach_done(
 	}
 }
 
+/* Whether a normalised address names this machine: localhost, 127.x.x.x or
+ * [::1]. */
+static gboolean
+host_is_loopback(const gchar *url)
+{
+	const gchar *host = strstr(url, "://");
+	gsize length;
+
+	if (host == NULL)
+		return FALSE;
+	host += 3;
+	length = strcspn(host, ":/");
+	if (host[0] == '[')
+		return g_str_has_prefix(host, "[::1]");
+	return (length == 9 && g_ascii_strncasecmp(host, "localhost", 9) == 0) ||
+	       (length >= 4 && strncmp(host, "127.", 4) == 0);
+}
+
 /* The address the browser used to reach Axis, in its plain form, as the
  * default for the worker's: the scheme and the host of this request (a
  * trusted proxy's, when there is one).  NULL when it has no such form.
@@ -955,6 +1004,12 @@ browser_address(HtmxRequest *request)
 	typed = g_strdup_printf("%s://%s", state != NULL && state->https ? "https" : "http", host);
 	if (!axis_attach_url_normalize(typed, &url, NULL, NULL))
 		return NULL;
+	/* Reached on this machine itself or through a tunnel: the address
+	 * names no machine a worker could reach, so offer none. */
+	if (host_is_loopback(url)) {
+		g_free(url);
+		return NULL;
+	}
 	return url;
 }
 

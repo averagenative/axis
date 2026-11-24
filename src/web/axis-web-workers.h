@@ -87,6 +87,17 @@ axis_web_workers_note_registered(
 	const gchar    *name
 );
 
+/**
+ * axis_web_workers_attach_set_version:
+ * @version: (nullable): the version the guide names in its texts
+ *
+ * For tests: the guide names this build's version (AXIS_VERSION) unless
+ * told another.  %NULL puts this build's version back.  The string must
+ * outlive its use.
+ */
+void
+axis_web_workers_attach_set_version(const gchar *version);
+
 void
 axis_web_workers_free(AxisWebWorkers *self);
 

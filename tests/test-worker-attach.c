@@ -74,6 +74,7 @@ test_exact_docker(void)
 	axis_attach_plan_add_disk(plan, 5, "/mnt/axis/disk-5", AXIS_ATTACH_MOUNT_SSHFS);
 	text = axis_attach_generate(plan, VERSION);
 	g_assert_cmpstr(text, ==,
+		"[ \"$(id -u)\" -ne 0 ] && [ -s \"$HOME/.config/axis-worker/desk.token\" ] && \\\n"
 		"docker run -d --name axis-worker-desk \\\n"
 		"    --entrypoint /usr/bin/axis-worker \\\n"
 		"    --user \"$(id -u):$(id -g)\" \\\n"
@@ -111,6 +112,7 @@ test_exact_podman(void)
 	axis_attach_plan_add_disk(plan, 1, "/srv/films", AXIS_ATTACH_MOUNT_BIND);
 	text = axis_attach_generate(plan, VERSION);
 	g_assert_cmpstr(text, ==,
+		"[ \"$(id -u)\" -ne 0 ] && [ -s \"$HOME/.config/axis-worker/desk.token\" ] && \\\n"
 		"podman run -d --name axis-worker-desk \\\n"
 		"    --entrypoint /usr/bin/axis-worker \\\n"
 		"    --userns=keep-id \\\n"
@@ -136,9 +138,14 @@ test_exact_podman(void)
 	token = axis_attach_token_text(plan);
 	g_assert_cmpstr(token, ==,
 		"mkdir -p ~/.config/axis-worker\n"
-		"umask 077\n"
-		"cat > ~/.config/axis-worker/desk.token     # paste the token, Enter, then Ctrl-D\n"
-		"chmod 600 ~/.config/axis-worker/desk.token\n");
+		"install -m 600 /dev/null ~/.config/axis-worker/desk.token\n"
+		"# the next command reads the token: paste it, Enter, then Ctrl-D\n"
+		"( umask 077; cat > ~/.config/axis-worker/desk.token )\n");
+	/* Safe to paste whole: the line that reads from the terminal is the last,
+	 * and the shell's own umask is not changed. */
+	g_assert_true(g_str_has_suffix(token, "cat > ~/.config/axis-worker/desk.token )\n"));
+	g_assert_cmpuint(count_of(token, "cat >"), ==, 1);
+	g_assert_null(strstr(token, "\numask 077\n"));
 }
 
 static void
@@ -206,19 +213,20 @@ test_exact_compose(void)
 	g_assert_cmpstr(file, ==, "compose.yaml");
 	start = axis_attach_start_text(plan);
 	g_assert_cmpstr(start, ==,
-		"# in the directory that holds compose.yaml and secrets/\n"
+		"# in the directory made in part 1: it holds compose.yaml and secrets/\n"
 		"printf 'PUID=%s\\nPGID=%s\\n' \"$(id -u)\" \"$(id -g)\" > .env\n"
 		"printf 'RENDER_GID=%s\\n' \"$(stat -c %g /dev/dri/renderD128)\" >> .env\n"
 		"docker compose up -d\n"
 		"docker compose logs -f worker\n");
 	token = axis_attach_token_text(plan);
 	g_assert_cmpstr(token, ==,
-		"# in the directory where you save compose.yaml\n"
-		"mkdir -p secrets\n"
-		"chmod 700 secrets\n"
-		"umask 077\n"
-		"cat > secrets/axis_worker_token     # paste the token, Enter, then Ctrl-D\n"
-		"chmod 600 secrets/axis_worker_token\n");
+		"# a directory of its own for this worker: compose.yaml is saved in it too\n"
+		"mkdir axis-worker-desk && cd axis-worker-desk\n"
+		"mkdir -m 700 secrets\n"
+		"install -m 600 /dev/null secrets/axis_worker_token\n"
+		"# the next command reads the token: paste it, Enter, then Ctrl-D\n"
+		"( umask 077; cat > secrets/axis_worker_token )\n");
+	g_assert_true(g_str_has_suffix(token, "cat > secrets/axis_worker_token )\n"));
 }
 
 static void
@@ -297,38 +305,61 @@ test_exact_mounts(void)
 	disk.volume = 4;
 	disk.host_path = (gchar *)"/mnt/axis/disk-4";
 	disk.mount = AXIS_ATTACH_MOUNT_BIND;
-	bind = axis_attach_mount_text(&disk);
+	bind = axis_attach_mount_text(&disk, AXIS_ATTACH_TOOL_DOCKER);
 	g_assert_cmpstr(bind, ==, "ls -a /mnt/axis/disk-4     # must show .axis-volume\n");
 	disk.mount = AXIS_ATTACH_MOUNT_NFS;
-	nfs = axis_attach_mount_text(&disk);
+	nfs = axis_attach_mount_text(&disk, AXIS_ATTACH_TOOL_DOCKER);
 	g_assert_cmpstr(nfs, ==,
 		"sudo mkdir -p /mnt/axis/disk-4\n"
-		"sudo mount -t nfs4 -o rw,hard SERVER:/PATH/ON/SERVER /mnt/axis/disk-4\n"
+		"sudo mount -t nfs4 -o rw,hard,nosuid,nodev,noexec SERVER:/PATH/ON/SERVER /mnt/axis/disk-4\n"
 		"ls -a /mnt/axis/disk-4     # must show .axis-volume\n");
+
+	/* sshfs under Docker (root's daemon reaching a user's mount): allow_other,
+	 * the kernel keeping the files' modes, and /etc/fuse.conf only when the
+	 * line is not there. */
 	disk.mount = AXIS_ATTACH_MOUNT_SSHFS;
-	sshfs = axis_attach_mount_text(&disk);
+	sshfs = axis_attach_mount_text(&disk, AXIS_ATTACH_TOOL_DOCKER);
 	g_assert_cmpstr(sshfs, ==,
-		"# once, as root: let a user's FUSE mount be seen by a container\n"
-		"echo user_allow_other | sudo tee -a /etc/fuse.conf\n"
+		"# Docker runs as root, which a user's sshfs mount refuses unless allow_other is given (with\n"
+		"# default_permissions the files keep their own modes, so other accounts here get no more).\n"
+		"grep -qx user_allow_other /etc/fuse.conf || echo user_allow_other | sudo tee -a /etc/fuse.conf\n"
 		"\n"
 		"sudo mkdir -p /mnt/axis/disk-4\n"
 		"sudo chown \"$(id -u):$(id -g)\" /mnt/axis/disk-4\n"
 		"sshfs AXIS_USER@SERVER:/PATH/ON/SERVER /mnt/axis/disk-4 \\\n"
-		"    -o allow_other,reconnect,ServerAliveInterval=15,ServerAliveCountMax=3\n"
+		"    -o allow_other,default_permissions,idmap=user,reconnect,ServerAliveInterval=15,ServerAliveCountMax=3\n"
 		"ls -a /mnt/axis/disk-4     # must show .axis-volume\n");
+	g_free(sshfs);
+	sshfs = axis_attach_mount_text(&disk, AXIS_ATTACH_TOOL_COMPOSE);
+	assert_has(sshfs, "allow_other,default_permissions,idmap=user,");
+	g_free(sshfs);
+
+	/* Under rootless Podman the user who mounts runs the container: no
+	 * allow_other, and /etc/fuse.conf is left alone. */
+	sshfs = axis_attach_mount_text(&disk, AXIS_ATTACH_TOOL_PODMAN);
+	g_assert_cmpstr(sshfs, ==,
+		"sudo mkdir -p /mnt/axis/disk-4\n"
+		"sudo chown \"$(id -u):$(id -g)\" /mnt/axis/disk-4\n"
+		"sshfs AXIS_USER@SERVER:/PATH/ON/SERVER /mnt/axis/disk-4 \\\n"
+		"    -o reconnect,ServerAliveInterval=15,ServerAliveCountMax=3\n"
+		"ls -a /mnt/axis/disk-4     # must show .axis-volume\n");
+	g_free(sshfs);
+	sshfs = axis_attach_mount_text(&disk, AXIS_ATTACH_TOOL_QUADLET);
+	g_assert_null(strstr(sshfs, "allow_other"));
+	g_assert_null(strstr(sshfs, "fuse.conf"));
 	disk.mount = AXIS_ATTACH_MOUNT_SMB;
-	smb = axis_attach_mount_text(&disk);
+	smb = axis_attach_mount_text(&disk, AXIS_ATTACH_TOOL_DOCKER);
 	g_assert_cmpstr(smb, ==,
 		"sudo mkdir -p /mnt/axis/disk-4\n"
 		"sudo mount -t cifs //SERVER/SHARE /mnt/axis/disk-4 \\\n"
-		"    -o credentials=$HOME/.config/axis-worker/smb,uid=$(id -u),gid=$(id -g),serverino\n"
+		"    -o credentials=$HOME/.config/axis-worker/smb,uid=$(id -u),gid=$(id -g),serverino,nosuid,nodev,noexec\n"
 		"ls -a /mnt/axis/disk-4     # must show .axis-volume\n");
 
 	/* A path that is not in its plain form gets no text. */
 	disk.host_path = (gchar *)"/mnt/axis/$(reboot)";
-	g_assert_null(axis_attach_mount_text(&disk));
+	g_assert_null(axis_attach_mount_text(&disk, AXIS_ATTACH_TOOL_DOCKER));
 	disk.host_path = (gchar *)"/mnt/axis/disk-4/";
-	g_assert_null(axis_attach_mount_text(&disk));
+	g_assert_null(axis_attach_mount_text(&disk, AXIS_ATTACH_TOOL_DOCKER));
 }
 
 /* ── Every combination ──────────────────────────────────────────── */
@@ -522,8 +553,9 @@ test_every_combination(void)
 				g_assert_nonnull(start);
 				assert_no_token_shape(token);
 				assert_no_token_shape(start);
-				assert_has(token, "chmod 600 ");
-				assert_has(token, "umask 077\n");
+				assert_has(token, "install -m 600 /dev/null ");
+				assert_has(token, "( umask 077; cat > ");
+				g_assert_true(g_str_has_suffix(token, " )\n"));
 			}
 		}
 	}

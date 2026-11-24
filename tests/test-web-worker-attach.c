@@ -20,6 +20,7 @@
 #include "axis-test-worker.h"
 #include "axis-version.h"
 #include "web/axis-password.h"
+#include "web/axis-web-workers.h"
 #include "web/axis-worker-attach.h"
 
 #define UUID_A "3f2a5c1e-7b9d-4e2f-8a6b-1c3d5e7f9a0b"
@@ -289,8 +290,10 @@ test_who_may(Fixture *fx, gconstpointer data)
 
 /* ── The five pages ─────────────────────────────────────────────── */
 
-/* Spec: the token is created at step 4 and is on no page, in no field and
- * in no address before */
+/* Spec: the token is created at step 4 and is on no page and in no field
+ * before (the pages' addresses are not examined here: the token is made
+ * only after the last form, and what the pages link to is the worker's name,
+ * its encoder and its disks) */
 static void
 test_steps(Fixture *fx, gconstpointer data)
 {
@@ -313,13 +316,14 @@ test_steps(Fixture *fx, gconstpointer data)
 	all = g_strconcat(m, a, b, NULL);
 	tick_a = g_strdup_printf("name=\"disk-%s\"", fx->a);
 
-	/* Step 1: the address the browser used is offered, and nothing else of
-	 * this host. */
+	/* Step 1: reached through the loopback address, which no worker could
+	 * reach, the page offers no address (test_offered_address has the
+	 * others). */
 	reply = get(fx, fx->admin, "/workers/attach");
 	g_assert_cmpuint(reply.status, ==, 200);
 	assert_contains(reply.body, "Step 1 of 5");
 	offered = g_strdup_printf("value=\"http://127.0.0.1:%u\"", (guint)fx->d->port);
-	assert_contains(reply.body, offered);
+	assert_lacks(reply.body, offered);
 	assert_contains(reply.body, "action=\"/workers/attach/disks\"");
 	assert_no_token_yet(fx, reply.body);
 	axis_test_reply_clear(&reply);
@@ -348,8 +352,13 @@ test_steps(Fixture *fx, gconstpointer data)
 	reply = post(fx, fx->admin, "/workers/attach/mounts", all);
 	g_assert_cmpuint(reply.status, ==, 200);
 	assert_contains(reply.body, "Step 3 of 5");
-	assert_contains(reply.body, "sudo mount -t nfs4 -o rw,hard SERVER:/PATH/ON/SERVER /mnt/axis/films\n");
+	assert_contains(reply.body,
+		"sudo mount -t nfs4 -o rw,hard,nosuid,nodev,noexec SERVER:/PATH/ON/SERVER /mnt/axis/films\n");
 	assert_contains(reply.body, "sshfs AXIS_USER@SERVER:/PATH/ON/SERVER /mnt/axis/b ");
+	/* Quadlet is Podman: the user who mounts runs the container, so no other
+	 * account is let in and /etc/fuse.conf is not touched. */
+	assert_lacks(reply.body, "allow_other");
+	assert_lacks(reply.body, "fuse.conf");
 	assert_contains(reply.body, "action=\"/workers/attach/create\"");
 	assert_contains(reply.body, "action=\"/workers/attach/disks\"");
 	assert_lacks(reply.body, "/srv/a");
@@ -398,7 +407,8 @@ test_steps(Fixture *fx, gconstpointer data)
 	assert_contains(reply.body, "DropCapability=all\n");
 	assert_contains(reply.body, "NoNewPrivileges=true\n");
 	assert_contains(reply.body, "shed-pc.token:/run/secrets/axis_worker_token:ro\n");
-	assert_contains(reply.body, "cat &gt; ~/.config/axis-worker/shed-pc.token");
+	assert_contains(reply.body, "install -m 600 /dev/null ~/.config/axis-worker/shed-pc.token\n");
+	assert_contains(reply.body, "( umask 077; cat &gt; ~/.config/axis-worker/shed-pc.token )\n</code>");
 	assert_contains(reply.body, "systemctl --user start axis-worker-shed-pc\n");
 	/* The way on names the worker, its encoder and its disks, not the token. */
 	waiting = g_strdup_printf("href=\"/workers/attach/waiting?name=shed-pc&amp;encoder=nvenc&amp;disks=%s.%s\"",
@@ -487,6 +497,89 @@ test_each_tool(Fixture *fx, gconstpointer data)
 		axis_test_reply_clear(&reply);
 	}
 	assert_q(fx, "SELECT count(*) FROM worker", "5");
+}
+
+/* Spec: step 1 offers the address the browser used, in its plain form, and
+ * nothing it could not use: no loopback address, nothing made of a Host
+ * header that holds more than a host and a port */
+static void
+test_offered_address(Fixture *fx, gconstpointer data)
+{
+	static const struct
+	{
+		const gchar *host;
+		const gchar *offered;	/* NULL: no address is offered */
+	} cases[] = {
+		{ "axis.example.org", "value=\"http://axis.example.org\"" },
+		{ "axis.example.org:7800", "value=\"http://axis.example.org:7800\"" },
+		{ "localhost:7800", NULL },
+		{ "127.0.0.1:7800", NULL },
+		{ "[::1]:7800", NULL },
+		{ "user@axis.example.org", NULL },
+		{ "axis.example.org/x\"onfocus=\"alert(1)", NULL },
+		{ "axis.example.org' --privileged '", NULL },
+		{ "axis.example.org:7800;reboot", NULL }
+	};
+	guint i;
+
+	SKIP_WITHOUT_DB(fx);
+	for (i = 0; i < G_N_ELEMENTS(cases); i++) {
+		const gchar *extra[3];
+		AxisTestReply reply;
+
+		extra[0] = "Host";
+		extra[1] = cases[i].host;
+		extra[2] = NULL;
+		reply = axis_test_web_request(fx->d->session, fx->d->port, "GET", "/workers/attach", fx->admin, extra, NULL);
+		if (cases[i].offered != NULL) {
+			g_assert_cmpuint(reply.status, ==, 200);
+			assert_contains(reply.body, "Step 1 of 5");
+			assert_contains(reply.body, cases[i].offered);
+		} else if (reply.status != 400) {
+			/* (The server may refuse a hostile Host header outright.) */
+			g_assert_cmpuint(reply.status, ==, 200);
+			assert_contains(reply.body, "Step 1 of 5");
+			assert_lacks(reply.body, "value=\"http://");
+			assert_lacks(reply.body, "privileged");
+			assert_lacks(reply.body, "onfocus");
+		}
+		axis_test_reply_clear(&reply);
+	}
+}
+
+/* Spec: a build whose version is no image tag is refused before anything is
+ * created: no worker, no token */
+static void
+test_version_not_a_tag(Fixture *fx, gconstpointer data)
+{
+	g_autofree gchar *m = machine("shed", "docker", "cpu", "https://axis.example.org");
+	g_autofree gchar *a = disk(fx->a, "bind", "/srv/films");
+	g_autofree gchar *all = g_strconcat(m, a, NULL);
+	AxisTestReply reply;
+
+	SKIP_WITHOUT_DB(fx);
+	axis_web_workers_attach_set_version("0.1.0+git20261124");
+	reply = post(fx, fx->admin, "/workers/attach/create", all);
+	axis_web_workers_attach_set_version(NULL);
+	g_assert_cmpuint(reply.status, ==, 400);
+	assert_contains(reply.body, "not a name a container image can have");
+	assert_contains(reply.body, "No worker was created");
+	assert_lacks(reply.body, "worker-token");
+	assert_lacks(reply.body, "attach-text");
+	axis_test_reply_clear(&reply);
+	assert_q(fx, "SELECT string_agg(name, ',' ORDER BY name) FROM worker", "garage");
+	assert_q(fx, "SELECT count(*) FROM worker", "1");
+	g_assert_cmpuint(axis_test_log_count(G_LOG_LEVEL_MESSAGE, "*created with the guide*"), ==, 0);
+
+	/* The same form made with the build's own version works, and its run
+	 * text will not start as root or without the token file. */
+	reply = post(fx, fx->admin, "/workers/attach/create", all);
+	g_assert_cmpuint(reply.status, ==, 200);
+	assert_contains(reply.body, " -ne 0 ] ");
+	assert_contains(reply.body, "/axis-worker/shed.token");
+	assert_contains(reply.body, "\ndocker run -d --name axis-worker-shed ");
+	axis_test_reply_clear(&reply);
+	assert_q(fx, "SELECT string_agg(name, ',' ORDER BY name) FROM worker", "garage,shed");
 }
 
 /* ── What is refused ────────────────────────────────────────────── */
@@ -848,7 +941,11 @@ main(int argc, char **argv)
 	g_test_add("/web/worker-attach/who-may", Fixture, NULL, fixture_setup, test_who_may, fixture_teardown);
 	g_test_add("/web/worker-attach/steps", Fixture, NULL, fixture_setup, test_steps, fixture_teardown);
 	g_test_add("/web/worker-attach/each-tool", Fixture, NULL, fixture_setup, test_each_tool, fixture_teardown);
-	g_test_add("/web/worker-attach/refused", Fixture, NULL, fixture_setup, test_refused, fixture_teardown);
+	g_test_add("/web/worker-attach/offered-address", Fixture, NULL, fixture_setup, test_offered_address,
+		fixture_teardown);
+	g_test_add("/web/worker-attach/version-not-a-tag", Fixture, NULL, fixture_setup, test_version_not_a_tag,
+		fixture_teardown);
+	g_test_add("/web/worker-attach/refused",Fixture, NULL, fixture_setup, test_refused, fixture_teardown);
 	g_test_add("/web/worker-attach/waiting", Fixture, NULL, fixture_setup, test_waiting, fixture_teardown);
 
 	return g_test_run();

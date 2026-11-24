@@ -594,7 +594,12 @@ generate_run(
 	GString *out = g_string_new(NULL);
 	guint i;
 
-	g_string_append_printf(out, "%s run -d --name %s", podman ? "podman" : "docker", container);
+	/* Nothing is started as root, or before the token file is there: Docker
+	 * would make a directory of the missing file's path. */
+	g_string_append_printf(out,
+		"[ \"$(id -u)\" -ne 0 ] && [ -s \"$HOME/.config/axis-worker/%s.token\" ] && \\\n"
+		"%s run -d --name %s",
+		plan->name, podman ? "podman" : "docker", container);
 	run_line(out, "--entrypoint " WORKER_BIN);
 	/* The person's own user inside the container: it reads their token
 	 * file, and writes through the mounts as they do. */
@@ -854,19 +859,24 @@ axis_attach_token_text(const AxisAttachPlan *plan)
 
 	if (!axis_attach_plan_check(plan, NULL))
 		return NULL;
+	/* Safe to paste whole into a shell: the file exists with its mode before
+	 * the last line, which alone reads from the terminal, so nothing pasted
+	 * with the commands can end up in the token file; the umask is that of a
+	 * subshell and the shell keeps its own. */
 	if (plan->tool == AXIS_ATTACH_TOOL_COMPOSE)
-		return g_strdup(
-			"# in the directory where you save compose.yaml\n"
-			"mkdir -p secrets\n"
-			"chmod 700 secrets\n"
-			"umask 077\n"
-			"cat > secrets/axis_worker_token     # paste the token, Enter, then Ctrl-D\n"
-			"chmod 600 secrets/axis_worker_token\n");
+		return g_strdup_printf(
+			"# a directory of its own for this worker: compose.yaml is saved in it too\n"
+			"mkdir axis-worker-%s && cd axis-worker-%s\n"
+			"mkdir -m 700 secrets\n"
+			"install -m 600 /dev/null secrets/axis_worker_token\n"
+			"# the next command reads the token: paste it, Enter, then Ctrl-D\n"
+			"( umask 077; cat > secrets/axis_worker_token )\n",
+			plan->name, plan->name);
 	return g_strdup_printf(
 		"mkdir -p ~/.config/axis-worker\n"
-		"umask 077\n"
-		"cat > ~/.config/axis-worker/%s.token     # paste the token, Enter, then Ctrl-D\n"
-		"chmod 600 ~/.config/axis-worker/%s.token\n",
+		"install -m 600 /dev/null ~/.config/axis-worker/%s.token\n"
+		"# the next command reads the token: paste it, Enter, then Ctrl-D\n"
+		"( umask 077; cat > ~/.config/axis-worker/%s.token )\n",
 		plan->name, plan->name);
 }
 
@@ -883,7 +893,7 @@ axis_attach_start_text(const AxisAttachPlan *plan)
 	switch (plan->tool) {
 	case AXIS_ATTACH_TOOL_COMPOSE:
 		return g_strdup_printf(
-			"# in the directory that holds compose.yaml and secrets/\n"
+			"# in the directory made in part 1: it holds compose.yaml and secrets/\n"
 			"printf 'PUID=%%s\\nPGID=%%s\\n' \"$(id -u)\" \"$(id -g)\" > .env\n"
 			"%s"
 			"docker compose up -d\n"
@@ -913,40 +923,55 @@ axis_attach_start_text(const AxisAttachPlan *plan)
 }
 
 gchar *
-axis_attach_mount_text(const AxisAttachDisk *disk)
-{
+axis_attach_mount_text(
+	const AxisAttachDisk *disk,
+	AxisAttachTool        tool
+){
 	g_autofree gchar *path = NULL;
 	const gchar *host;
 
 	g_return_val_if_fail(disk != NULL, NULL);
 
-	if ((guint)disk->mount >= AXIS_ATTACH_N_MOUNTS || !axis_attach_host_path_normalize(disk->host_path, &path, NULL) ||
-	    strcmp(path, disk->host_path) != 0)
+	if ((guint)disk->mount >= AXIS_ATTACH_N_MOUNTS || (guint)tool >= AXIS_ATTACH_N_TOOLS ||
+	    !axis_attach_host_path_normalize(disk->host_path, &path, NULL) || strcmp(path, disk->host_path) != 0)
 		return NULL;
 	host = disk->host_path;
 	switch (disk->mount) {
 	case AXIS_ATTACH_MOUNT_NFS:
 		return g_strdup_printf(
 			"sudo mkdir -p %s\n"
-			"sudo mount -t nfs4 -o rw,hard SERVER:/PATH/ON/SERVER %s\n"
+			"sudo mount -t nfs4 -o rw,hard,nosuid,nodev,noexec SERVER:/PATH/ON/SERVER %s\n"
 			"ls -a %s     # must show .axis-volume\n",
 			host, host, host);
 	case AXIS_ATTACH_MOUNT_SSHFS:
+		/* Podman, rootless, runs the container as the user who mounts: no
+		 * other account is let in.  Docker's daemon is root, which a user's
+		 * FUSE mount refuses unless allow_other is given; then the kernel is
+		 * made to keep the files' own modes (default_permissions). */
+		if (tool == AXIS_ATTACH_TOOL_PODMAN || tool == AXIS_ATTACH_TOOL_QUADLET)
+			return g_strdup_printf(
+				"sudo mkdir -p %s\n"
+				"sudo chown \"$(id -u):$(id -g)\" %s\n"
+				"sshfs AXIS_USER@SERVER:/PATH/ON/SERVER %s \\\n"
+				"    -o reconnect,ServerAliveInterval=15,ServerAliveCountMax=3\n"
+				"ls -a %s     # must show .axis-volume\n",
+				host, host, host, host);
 		return g_strdup_printf(
-			"# once, as root: let a user's FUSE mount be seen by a container\n"
-			"echo user_allow_other | sudo tee -a /etc/fuse.conf\n"
+			"# Docker runs as root, which a user's sshfs mount refuses unless allow_other is given (with\n"
+			"# default_permissions the files keep their own modes, so other accounts here get no more).\n"
+			"grep -qx user_allow_other /etc/fuse.conf || echo user_allow_other | sudo tee -a /etc/fuse.conf\n"
 			"\n"
 			"sudo mkdir -p %s\n"
 			"sudo chown \"$(id -u):$(id -g)\" %s\n"
 			"sshfs AXIS_USER@SERVER:/PATH/ON/SERVER %s \\\n"
-			"    -o allow_other,reconnect,ServerAliveInterval=15,ServerAliveCountMax=3\n"
+			"    -o allow_other,default_permissions,idmap=user,reconnect,ServerAliveInterval=15,ServerAliveCountMax=3\n"
 			"ls -a %s     # must show .axis-volume\n",
 			host, host, host, host);
 	case AXIS_ATTACH_MOUNT_SMB:
 		return g_strdup_printf(
 			"sudo mkdir -p %s\n"
 			"sudo mount -t cifs //SERVER/SHARE %s \\\n"
-			"    -o credentials=$HOME/.config/axis-worker/smb,uid=$(id -u),gid=$(id -g),serverino\n"
+			"    -o credentials=$HOME/.config/axis-worker/smb,uid=$(id -u),gid=$(id -g),serverino,nosuid,nodev,noexec\n"
 			"ls -a %s     # must show .axis-volume\n",
 			host, host, host);
 	default:

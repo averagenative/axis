@@ -255,10 +255,16 @@ axis_attach_start_text(const AxisAttachPlan *plan);
  * machine, to adapt: the server's address, the path or share on it and the
  * user to log in as are the placeholders SERVER, /PATH/ON/SERVER, SHARE and
  * AXIS_USER, which the person replaces.  Axis prints nothing of its own
- * host.  %NULL when the disk's path is not in its one form.  Transfer full.
+ * host.  The tool matters for sshfs only: Docker's daemon is root and needs
+ * allow_other; rootless Podman mounts and runs as the same user.  %NULL when
+ * the disk's path is not in its one form or the tool is not one.  Transfer
+ * full.
  */
 gchar *
-axis_attach_mount_text(const AxisAttachDisk *disk);
+axis_attach_mount_text(
+	const AxisAttachDisk *disk,
+	AxisAttachTool        tool
+);
 
 G_END_DECLS
 
