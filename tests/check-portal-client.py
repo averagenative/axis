@@ -18,6 +18,22 @@
 #         title=NNN                 the title's page
 #         ask=NNN made|not-made     the answer to the request
 #         requests=NNN listed|not-listed
+#   check-portal-client.py engine-login BASE HOST USER PASSWORD
+#       The login of Axis itself (not the portal's) at BASE, with HOST as the
+#       Host header (empty: none): opens /login and posts USER and PASSWORD
+#       with the form's token, whatever the page was.  Prints:
+#         form=NNN                  the login page's status (000: no answer)
+#         login=NNN                 303 when the login worked
+#         session=yes|no            whether a session cookie of Axis was set
+#   check-portal-client.py page BASE HOST PATH
+#       GET of PATH at BASE with HOST as the Host header, redirects not
+#       followed.  Prints "status=NNN" (000: no answer), "hsts=VALUE" (or
+#       "-"), "cookie=NAME secure|plain" for each cookie set, and
+#       "password-field=yes|no".
+#   check-portal-client.py api-hello BASE
+#       The portal API itself at BASE (the daemon's portal listener), with the
+#       portal token read from standard input (so: the script from a file).
+#       Prints "hello=NNN BODY".
 #   check-portal-client.py paths BASE HOST PATH...
 #       GET of each PATH, redirects not followed.  Prints "PATH NNN" for each
 #       (000 when there was no answer).
@@ -146,6 +162,66 @@ def ask(base, host, user, password, title, client):
     print("requests=%03d %s" % (status, "listed" if listed else "not-listed"))
 
 
+def engine_login(base, host, user, password):
+    """What whoever holds the portal's container would do with an
+    administrator's password: the engine's own login, from here."""
+    jar = http.cookiejar.CookieJar(AnyCookies())
+    opener = make_opener(jar)
+    headers = {"Host": host} if host else {}
+
+    status, page = fetch(opener, urllib.request.Request(base + "/login", headers=headers))
+    print("form=%03d" % status)
+    token = ""
+    for tag in re.findall(r"<input[^>]*>", page):
+        if 'name="_csrf"' in tag:
+            match = re.search(r'value="([^"]*)"', tag)
+            if match:
+                token = match.group(1)
+    # Posted whatever the page was: a refusal must not depend on the form.
+    form = urllib.parse.urlencode({"_csrf": token, "username": user, "password": password}).encode()
+    post = dict(headers)
+    post["Origin"] = base if not host else "%s://%s" % (base.split(":", 1)[0], host)
+    status, _ = fetch(opener, urllib.request.Request(base + "/login", data=form, headers=post, method="POST"))
+    print("login=%03d" % status)
+    session = any(cookie.name.endswith("axis_session") and cookie.value for cookie in jar)
+    print("session=%s" % ("yes" if session else "no"))
+
+
+def api_hello(base):
+    """The portal API's hello at @base, with the token on standard input."""
+    token = sys.stdin.readline().strip()
+    request = urllib.request.Request(
+        base + "/api/v1/portal/hello",
+        data=b"{}",
+        headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"},
+        method="POST",
+    )
+    status, body = fetch(make_opener(http.cookiejar.CookieJar(AnyCookies())), request)
+    print("hello=%03d %s" % (status, " ".join(body.split())[:200]))
+
+
+def page(base, host, path):
+    """One page as a browser gets it first: its status, and what its headers
+    and its body say that the checks ask about."""
+    headers = {"Host": host} if host else {}
+    opener = make_opener(http.cookiejar.CookieJar(AnyCookies()))
+    try:
+        response = opener.open(urllib.request.Request(base + path, headers=headers), timeout=30)
+    except urllib.error.HTTPError as error:
+        response = error
+    except (urllib.error.URLError, OSError):
+        print("status=000")
+        return
+    body = response.read().decode("utf-8", "replace")
+    print("status=%03d" % response.getcode())
+    print("hsts=%s" % (response.headers.get("Strict-Transport-Security") or "-"))
+    for value in response.headers.get_all("Set-Cookie") or []:
+        name = value.split("=", 1)[0].strip()
+        secure = any(part.strip().lower() == "secure" for part in value.split(";")[1:])
+        print("cookie=%s %s" % (name, "secure" if secure else "plain"))
+    print("password-field=%s" % ("yes" if 'name="password"' in body else "no"))
+
+
 def paths(base, host, wanted):
     opener = make_opener(http.cookiejar.CookieJar(AnyCookies()))
     headers = {"Host": host} if host else {}
@@ -209,6 +285,12 @@ def main(argv):
         return 0
     if len(argv) in (7, 8) and argv[1] == "ask":
         ask(argv[2], argv[3], argv[4], argv[5], argv[6], argv[7] if len(argv) == 8 else "")
+    elif len(argv) == 5 and argv[1] == "page":
+        page(argv[2], argv[3], argv[4])
+    elif len(argv) == 3 and argv[1] == "api-hello":
+        api_hello(argv[2])
+    elif len(argv) == 6 and argv[1] == "engine-login":
+        engine_login(argv[2], argv[3], argv[4], argv[5])
     elif len(argv) >= 5 and argv[1] == "paths":
         paths(argv[2], argv[3], argv[4:])
     elif len(argv) == 4 and argv[1] == "reach":

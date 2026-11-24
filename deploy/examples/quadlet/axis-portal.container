@@ -21,8 +21,9 @@ ContainerName=axis-portal
 # EDIT: the same image as in axis.container.
 Image=ghcr.io/averagenative/axis:0.1.0-rc2
 Entrypoint=/usr/bin/axis-portal
-# The network it shares with the daemon, and no other, at a fixed address
-# (see AXIS_PORTAL_TRUSTED_PROXIES below).
+# The network it shares with the daemon, and no other, at a fixed address:
+# the one the daemon is told is the portal's (AXIS_PORTAL_PEERS in
+# axis.container), and see AXIS_PORTAL_TRUSTED_PROXIES below.
 Network=axis-portal.network:ip=172.31.78.3
 # For the reverse proxy on this machine, and only for it: never 0.0.0.0.  The
 # portal must be reached through a proxy that terminates TLS.

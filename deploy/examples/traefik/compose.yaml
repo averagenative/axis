@@ -114,7 +114,11 @@ services:
     # (Written as a map, not a list, so that compose.portal.yaml can add
     # to it: some Compose front ends cannot merge a list with a map.)
     networks:
-      axis-proxy: {}
+      axis-proxy:
+        # Fixed because Traefik's is: where one address of a subnet is
+        # written down, a container without one can be given it first, and
+        # the other then does not start.
+        ipv4_address: 172.30.0.3
       private: {}
 
   postgres:

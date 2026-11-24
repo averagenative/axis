@@ -894,11 +894,16 @@ retarget() {
 
 service_args axis "$any_user"
 retarget
+# The portal of this check (further down) has a fixed address on this
+# network, and the daemon is told it: the portal API answers that address
+# alone, and nobody logs in to Axis itself from it.
+portal_subnet=$("$runtime" network inspect --format '{{(index .Subnets 0).Subnet}}' "$prefix-private2")
+portal_ip=${portal_subnet%.*}.251
 "$runtime" run --detach --name "$any" --label "axis-check=$prefix" \
 	--publish 127.0.0.1::7800 --security-opt label=disable \
 	--secret "$prefix-axis_admin_password,target=axis_admin_password,uid=$any_uid,mode=0400" \
 	--env AXIS_ADMIN_USERNAME=admin --env AXIS_ADMIN_PASSWORD_FILE=/run/secrets/axis_admin_password \
-	--env AXIS_PORTAL_LISTEN_PORT=7801 \
+	--env AXIS_PORTAL_LISTEN_PORT=7801 --env "AXIS_PORTAL_PEERS=$portal_ip" \
 	"${ARGS[@]}" "$image" >/dev/null || die "cannot start axis as $any_user"
 any_port=$("$runtime" port "$any" 7800/tcp | sed -n 's/.*:\([0-9][0-9]*\)$/\1/p' | head -n 1)
 [ -n "$any_port" ] || die "the daemon as $any_user has no published port"
@@ -1044,12 +1049,11 @@ portal_title=$("$runtime" exec "$prefix-postgres2" psql --username axis --dbname
 # at a fixed address plays it (it says https and names a client).
 portal=$prefix-portal
 portal_uid=61234
-portal_subnet=$("$runtime" network inspect --format '{{(index .Subnets 0).Subnet}}' "$prefix-private2")
 proxy_ip=${portal_subnet%.*}.250
 "$runtime" run --detach --name "$portal" --label "axis-check=$prefix" \
 	--user "$portal_uid:$portal_uid" --read-only --read-only-tmpfs=false --cap-drop ALL \
 	--security-opt no-new-privileges --pids-limit 64 --memory 256m \
-	--network "$prefix-private2:alias=portal" \
+	--network "$prefix-private2:alias=portal,ip=$portal_ip" \
 	--secret "$prefix-axis_portal_token,target=axis_portal_token,uid=$portal_uid,mode=0400" \
 	--env AXIS_PORTAL_URL=http://axis:7801 --env AXIS_PORTAL_ALLOW_INSECURE_HTTP=true \
 	--env AXIS_PORTAL_TOKEN_FILE=/run/secrets/axis_portal_token \
@@ -1130,6 +1134,31 @@ out=$(printf 'import urllib.request, urllib.error\ntry:\n    print(urllib.reques
 		--entrypoint /usr/bin/python3 "$image" - 2>&1)
 [ "$out" = 403 ] && pass "from an address that is not listed, the same headers get no login (403)" \
 	|| fail "from an address that is not listed, the same headers get no login (got: $out)"
+# The portal's address (AXIS_PORTAL_PEERS) is the only one the portal API
+# answers: from another container on the same network, with the portal's own
+# token, 403 before the token is looked at.
+out=$("$runtime" run --rm -i --name "$prefix-portal-client" --label "axis-check=$prefix" \
+	--network "$prefix-private2" --read-only --cap-drop ALL --security-opt no-new-privileges --security-opt label=disable \
+	--volume "$PWD/tests/check-portal-client.py:/client.py:ro" --entrypoint /usr/bin/python3 "$image" \
+	/client.py api-hello http://axis:7801 < "$work/secrets/axis_portal_token" 2>&1)
+case $out in
+"hello=403 "*not-a-portal*) pass "the portal API answers the portal's address alone: 403 from another container with the right token" ;;
+*) fail "the portal API answers the portal's address alone (got: $(echo "$out" | tail -c 120))" ;;
+esac
+# And nobody logs in to Axis itself from the portal's address: the
+# administrator's right password, posted from the portal's container to the
+# daemon's main port, opens no session, and the daemon says why.
+out=$("$runtime" exec -i "$portal" python3 - engine-login http://axis:7800 "" admin "$admin_password" \
+	< tests/check-portal-client.py 2>&1 | tr '\n' ' ')
+case $out in
+*form=200*login=401*session=no*) pass "from the portal's container, the administrator's right password is refused at the daemon's login as a wrong one is" ;;
+*) fail "from the portal's container, the administrator's right password is refused at the daemon's login (got: $out)" ;;
+esac
+case $("$runtime" logs "$any" 2>&1) in
+*"audit: login refused: the connection came from $portal_ip, one of the request portal's addresses (server.portal_peers, AXIS_PORTAL_PEERS)"*)
+	pass "and the daemon's log says why, naming the address and the setting" ;;
+*) fail "and the daemon's log says why, naming the address and the setting" ;;
+esac
 case $("$runtime" logs "$portal" "$any" 2>&1) in
 *"$portal_token"*|*"$requester_password"*) fail "the portal's token and the requester's password are in no log" ;;
 *) pass "the portal's token and the requester's password are in no log" ;;

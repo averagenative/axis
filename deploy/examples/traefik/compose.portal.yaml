@@ -22,17 +22,36 @@
 #            nothing.
 #   axis     gains the portal API on port 7801, bound to its address on the
 #            network axis-portal alone, and its main listener (7800) is bound
-#            to its address on the network axis-proxy alone.  So the portal's
-#            container reaches the portal API and nothing else of Axis: not
-#            the login page, not the interface, not the worker API.
+#            to its address on the network axis-proxy alone, so nothing
+#            answers port 7800 on a network the portal is on.
+#
+# The portal's container shares a network with Traefik, and Traefik routes
+# to Axis.  Three things keep the portal's container from the engine's login
+# page, its interface and its worker API by that way round:
+#
+#   1. Traefik answers the portal's address with 403 whatever it asks for
+#      (the router axis-from-portal below).  The portal never needs to ask
+#      Traefik anything: Traefik calls the portal, not the reverse.
+#   2. Axis is told which addresses are the portal's (AXIS_PORTAL_PEERS: the
+#      one it calls the portal API from, and the one Traefik would name as
+#      the client).  From those it takes no login, whether the connection
+#      comes from one or Traefik forwards for one; and its portal API
+#      answers the first of them and nobody else.
+#   3. A requester's account cannot log in to Axis at all, and the portal
+#      API accepts no administrator.
+#
+# Each of the three holds without the others.  For 1 and 2 the portal has a
+# fixed address on both of its networks.
 #
 # The networks:
 #
-#   axis-portal        axis and portal, and nobody else.  The portal's token
-#                      and the requesters' passwords cross it unencrypted
-#                      (plain http, AXIS_PORTAL_ALLOW_INSECURE_HTTP): that is
-#                      why it holds only those two.
-#   axis-portal-proxy  traefik and portal, and nobody else.
+#   axis-portal        axis (172.30.1.2) and portal (172.30.1.3), and nobody
+#                      else.  The portal's token and the requesters' passwords
+#                      cross it unencrypted (plain http,
+#                      AXIS_PORTAL_ALLOW_INSECURE_HTTP): that is why it holds
+#                      only those two.
+#   axis-portal-proxy  traefik (172.30.2.2) and portal (172.30.2.3), and
+#                      nobody else.
 #   axis-proxy         traefik and axis, as before.  The portal is not on it.
 #   private            axis and postgres, as before.  The portal is not on it.
 #
@@ -41,7 +60,8 @@
 services:
   traefik:
     networks:
-      axis-portal-proxy: {}
+      axis-portal-proxy:
+        ipv4_address: 172.30.2.2
 
   axis:
     environment:
@@ -49,6 +69,12 @@ services:
       # and nothing else, on the daemon's address on the portal's network.
       AXIS_PORTAL_LISTEN_PORT: "7801"
       AXIS_PORTAL_LISTEN_HOST: 172.30.1.2
+      # The portal's addresses, on both of its networks, and nothing wider.
+      # The portal API answers these and no other address, and nobody logs in
+      # to Axis itself from them: not directly, and not through Traefik.
+      # Never an address that is also Traefik's.  Without this line the
+      # portal API answers 503 to everyone.
+      AXIS_PORTAL_PEERS: 172.30.1.3, 172.30.2.3
       # The main listener: on the daemon's address on Traefik's network
       # only, so that it is not answered on the portal's network.  The health
       # check asks this address.
@@ -104,7 +130,23 @@ services:
       - traefik.http.routers.axis-portal.tls=true
       - traefik.http.routers.axis-portal.tls.certresolver=letsencrypt
       - traefik.http.services.axis-portal.loadbalancer.server.port=7802
+      - traefik.http.routers.axis-portal.service=axis-portal
       - traefik.http.routers.axis-portal.middlewares=axis-portal-headers,axis-portal-body,axis-portal-inflight,axis-portal-rate
+      # Whatever the portal's own container asks Traefik for is refused (403),
+      # before any other router is tried: the name of Axis, the portal's own
+      # name, anything.  ClientIP is the address of the connection to Traefik
+      # (Traefik 3: a router rule; no forwarded header is read for it), and
+      # 172.30.2.3 is the portal's address on the network it shares with
+      # Traefik.  The allow list that follows admits only Traefik's own
+      # loopback address, which is nobody: Traefik has a middleware that
+      # allows addresses and none that refuses them.
+      - traefik.http.routers.axis-from-portal.rule=ClientIP(`172.30.2.3`)
+      - traefik.http.routers.axis-from-portal.priority=100000
+      - traefik.http.routers.axis-from-portal.entrypoints=websecure
+      - traefik.http.routers.axis-from-portal.tls=true
+      - traefik.http.routers.axis-from-portal.service=axis-portal
+      - traefik.http.routers.axis-from-portal.middlewares=axis-from-portal-refused
+      - traefik.http.middlewares.axis-from-portal-refused.ipallowlist.sourcerange=127.0.0.1/32
       # What the portal cannot do itself, so the proxy must: HSTS (the portal
       # sends it too), a cap on a request's size before it is read, a cap on
       # the requests one address has open, and on how many it makes.
@@ -123,16 +165,22 @@ services:
       retries: 3
       start_period: 20s
     stop_grace_period: 15s
+    # A fixed address on each: they are what AXIS_PORTAL_PEERS and Traefik's
+    # router axis-from-portal name, and with every address of these two
+    # networks fixed, no container can be given another's when the host
+    # starts them in another order.
     networks:
-      - axis-portal
-      - axis-portal-proxy
+      axis-portal:
+        ipv4_address: 172.30.1.3
+      axis-portal-proxy:
+        ipv4_address: 172.30.2.3
 
 networks:
   # The daemon and the portal, and nobody else.  The subnet is fixed so that
-  # the daemon's address on it can be: the portal API listens on that address
-  # alone.
-  # EDIT: another subnet if 172.30.1.0/24 is in use on this host (and then
-  # the two 172.30.1.2 above).
+  # their addresses on it can be: the portal API listens on the daemon's
+  # alone and answers the portal's alone.
+  # EDIT: other subnets if 172.30.1.0/24 or 172.30.2.0/24 is in use on this
+  # host (and then every 172.30.1. and 172.30.2. address in this file).
   #
   # internal: the network has no way out.  Both of the portal's networks are
   # internal, so its container has no route to anything but them: not to the
@@ -151,6 +199,9 @@ networks:
   axis-portal-proxy:
     name: axis-portal-proxy
     internal: true
+    ipam:
+      config:
+        - subnet: 172.30.2.0/24
 
 secrets:
   axis_portal_token:

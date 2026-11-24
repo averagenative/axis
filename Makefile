@@ -569,10 +569,18 @@ check-portal-review:
 	$(Q)python3 -I $(TESTDIR)/tools/check-portal-review.py --self-test
 	$(Q)python3 -I $(TESTDIR)/tools/check-portal-review.py
 
+# tests/check-examples.sh removes what carries its prefix; that it refuses a
+# prefix that could be a real installation's, before it calls any tool
+# (tests/check-examples-prefix.sh; no container tool is run, no build needed).
+.PHONY: check-examples-prefix
+check-examples-prefix:
+	$(ECHO) "  CHECK   the examples check's prefix"
+	$(Q)bash $(TESTDIR)/check-examples-prefix.sh
+
 # The gate: everything, under both sanitizers.  The fuzz targets are only
 # compiled here; `make fuzz` runs them.
 .PHONY: check
-check: check-made-up check-portal-review
+check: check-made-up check-portal-review check-examples-prefix
 	$(Q)$(MAKE) --no-print-directory DEBUG=1 ASAN=1 UBSAN=1 test
 	$(Q)if command -v $(FUZZ_CC) >/dev/null 2>&1; then \
 		$(MAKE) --no-print-directory fuzz-build; \

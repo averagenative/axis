@@ -13,8 +13,9 @@
 # address even when no name resolves.  Do not remove that line.
 #
 # The subnet is fixed so that the daemon's address and the portal's on it can
-# be: the portal API listens on the daemon's address alone, and the portal
-# trusts its own address as its reverse proxy's (axis-portal.container).
+# be: the portal API listens on the daemon's address alone and answers the
+# portal's alone, and the portal trusts its own address as its reverse
+# proxy's (axis-portal.container).
 # EDIT: another subnet if 172.31.78.0/24 is in use on this machine (and then
 # the addresses in axis.container and axis-portal.container).
 [Unit]
