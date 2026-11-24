@@ -134,16 +134,47 @@ To add those files to a run you already made:
    with no file in flight. Pause a running run first, and wait for the file
    in flight to finish.
 2. In **Files left out, and why**, on the row **Kept: Axis does not replace
-   this file**, select **Add these N files to the run**.
-3. Wait while the state is **Making the list**. Axis decides each kept file
+   this file**, read what the row says about this run:
+   - On a run that replaces originals, the files are replaced too. The row
+     says that their N originals are replaced by their converted files once
+     every check passes, and shows the same warning and box as **Replace
+     originals from now on**. Tick **I understand: the originals will be
+     deleted**. Without the tick, Axis refuses and changes nothing. Axis
+     records your confirmation for these files, with the time, and asks for
+     each replacement in your name.
+   - On a run of trials, the files are added as trials. Each is converted
+     and checked, and the converted file is kept aside. The library is not
+     touched, so there is nothing to tick.
+   - On a run that is **Ready to start**, the files join the list. You
+     choose trials or replacing when you start the run.
+3. Select **Add these N files to the run**.
+4. Wait while the state is **Making the list**. Axis decides each kept file
    as it decided the others. A file the profile would convert joins the
    list, after the files that were there. An episode joins its series. A
    file that has another reason of its own, for example **Already
-   efficient**, moves to that reason. Nothing the run already converted,
-   skipped or took out changes.
-4. Start or resume the run. A run that had finished waits, paused, for you
-   to select **Resume the run**. If the run has a cap, raise it under
-   **Limits** to reach the added files.
+   efficient**, moves to that reason. A file that is no longer in the
+   library is not added, so fewer files can be added than the row said.
+   Nothing the run already converted, skipped or took out changes.
+5. Start or resume the run. The run never starts by itself after you add
+   files. A run that had finished waits, paused, for you to select
+   **Resume the run**. On a run that replaces originals, the button says
+   how many originals resuming it replaces, for example **Resume the run,
+   replacing up to 2 originals**. If the run has a cap, raise it under
+   **Limits** to reach the added files. A finished run that cannot convert
+   any of the added files, because they are beyond its caps, in a movie or
+   series you took out, or past its time budget, stays finished and says
+   so under **How it ended**. Make a new run with the choice instead.
+
+A cap is worked out again when files are added, and it keeps a series
+whole. So a run can convert more files in all than a new list under the
+same cap would: the cap counts the files of each whole series again,
+including the files it converted before.
+
+The choice covers the files that are kept when you make it: the files of
+the list when it is made, or the files you add. A file that was not kept
+then, and that you keep by hand later, is not converted: the run skips it
+when its turn comes, with **Kept: Axis does not replace this file**. A
+single conversion works the same way.
 
 The card **What this run converts, and how** says under **Files Axis keeps**
 whether kept files are included, and who chose that and when.
@@ -205,6 +236,7 @@ Only one run runs at a time.
 | "Nothing would be converted: see what is not in the list, below." | Look at **Files left out, and why**. The profile may skip everything, for example HEVC sources. |
 | Nearly every file is under **Kept: Axis does not replace this file** | The library was migrated, or you keep its files by hand. Select **Add these N files to the run** on that row. See [Convert files that Axis keeps](#convert-files-that-axis-keeps). |
 | "Pause the run to add these files." or "You can add these files once nothing of the run is in flight." | Pause the run, wait for the file in flight to finish, and then select **Add these N files to the run**. |
+| "This run replaces originals: adding the files Axis keeps replaces their originals too" | The run replaces originals, and you did not tick the box. Read the warning on the row, tick **I understand: the originals will be deleted**, and select **Add these N files to the run** again. |
 | "The files Axis keeps were not added, and the run is as it was" | The job that adds them stopped. The run and its list did not change, and the choice is off again. Read the rest of the message, and then select **Add these N files to the run** again. |
 | **Start replacing originals** is missing | The version is locked. "A run with a locked version makes trials until enough have passed, then pauses for you to prove it." |
 | "Conversion work has been paused since Axis started" | Select **Resume conversion work**. |
@@ -221,8 +253,9 @@ Only one run runs at a time.
   replaced an original in a real library
   ([Prove a conversion profile with trials](09-prove-a-profile-with-trials.md)).
 - Converting kept files has run in the tests only: one kept movie file
-  replaced by a real encode on a generated clip, and runs on generated
-  libraries. No kept file in a real library has been converted.
+  replaced by a real encode on a generated clip, the claim, the last check
+  and the placement of a kept file with a stand-in output, and runs on
+  generated libraries. No kept file in a real library has been converted.
 - The progress bars have been checked in the tests as HTML. They have not
   been looked at in a browser in every theme. The speed and the time left
   are worked out from the percent the worker reports and the time the job

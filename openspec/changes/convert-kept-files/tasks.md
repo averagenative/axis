@@ -43,10 +43,20 @@
 
 - [x] 6.1 `docs/10`: the choice when planning, the section on kept files, the bars; `docs/09`: the single file and the bars; `docs/08` and `docs/16`: what kept means for estimates and conversions.
 
-## 7. Not done here
+## 7. After the review
 
-- [ ] 7.1 A kept file converted in a real library, and the bars looked at in a browser in every theme.
-- [ ] 7.2 Frames a second and bytes written, which need the worker to report them (a change to the worker protocol).
-- [ ] 7.3 The file in flight on the dashboard's piece of a run.
-- [ ] 7.4 A run's and a conversion's progress on the live event stream in place of the timed requests.
-- [ ] 7.5 Kept files added to a running run, and ranked among the units a run already had.
+- [x] 7.1 Adding kept files to a run that replaces originals needs the tick and the sentence of the switch to replacing; without it the request is refused and nothing changes; the confirmation is recorded for each file added (`conversion_run_entry.confirmed_by`, `confirmed_at`) and its replacement is asked for as that person.
+- [x] 7.2 A run of trials says that the files are added as trials; a run never starts by itself after an addition; the resume control of a replacing run says how many originals it will replace.
+- [x] 7.3 The choice covers a file kept when it is asked for: the request records `convert_kept` only for a file kept then, and a run's entry records whether its file was kept when listed or added (`conversion_run_entry.convert_kept`); a file kept later is refused at the claim, at check 10, or when its turn in a run comes.
+- [x] 7.4 A finished run that can convert none of the files added stays finished and says why; the step reads the run's choice as it marks an entry asked.
+- [x] 7.5 The progress block answers a conversion that is gone with a block that asks for nothing more; a fraction past the end is the end; speed and time left guarded; the source's duration is read for conversions in flight only.
+- [x] 7.6 Tests: the claim, check 10 and the placement with the choice without an encoder (`/conversion-runs/kept/claim-check-place`); a file kept after listing (`/conversion-runs/kept/after-listing`); adding to a replacing run, with and without the tick (`/conversion-runs/kept/added-to-replacing`, `/web/conversion-runs/kept-replacing`); beyond the cap (`/conversion-runs/kept/added-beyond-cap`); the failed addition (`/conversion-runs/kept/add-fails`); pinned, remembered and in flight (`/conversion-runs/kept/other-reasons`); the figures at their edges (`/web/conversion-runs/progress-figures`).
+
+## 8. Not done here
+
+- [ ] 8.1 A kept file converted in a real library, and the bars looked at in a browser in every theme.
+- [ ] 8.2 Frames a second and bytes written, which need the worker to report them (a change to the worker protocol).
+- [ ] 8.3 The file in flight on the dashboard's piece of a run.
+- [ ] 8.4 A run's and a conversion's progress on the live event stream in place of the timed requests (which also go on in a background tab: a visibility condition on the trigger needs script evaluation, which the pages' content policy forbids).
+- [ ] 8.5 Kept files added to a running run, and ranked among the units a run already had.
+- [ ] 8.6 A cap worked out again after an addition counts the whole units again, so a run can convert more files in all than a fresh list under the same cap would (the guide says so).
