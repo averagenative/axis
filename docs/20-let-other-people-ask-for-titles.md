@@ -271,9 +271,14 @@ To make a token, select **Make a token**. Axis shows the token once. Copy it
 then: Axis keeps only a hash of it and cannot show it again. At most four
 tokens can be active.
 
-To replace a token without an interruption, make a second token, give it to
-the portal, then select **Revoke this token** on the first. A revoked token
-is refused from the portal's next request.
+To replace a token without refusing the portal's calls, make a second token,
+give it to the portal, then select **Revoke this token** on the first. A
+revoked token is refused from the portal's next request.
+
+When the portal starts with a new token, everyone who is logged in to the
+portal must log in again. The portal signs its session cookies with a key
+that it derives from its token, so a new token makes the old cookies
+invalid. A restart with the same token logs nobody out.
 
 The setting **Requests through the request portal in one day** (30 by
 default, under **System**, then **Settings**, in the **Requests** card)

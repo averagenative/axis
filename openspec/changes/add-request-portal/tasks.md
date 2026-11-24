@@ -219,18 +219,18 @@ Build:
 - [x] 3.5 The "not reviewed for the internet" line at start (a warning in the log; asserted in `/portal/process/restart`).
 - [x] 3.6 The known limits of this slice in `openspec/project.md` ("The request portal").
 
-The test paths below are the plan's. `tests/test-portal.c` has 26 cases and `tests/test-portal-process.c` has 6; where a scenario's test has another path, the task names it.
+The test paths below are the plan's. `tests/test-portal.c` has 32 cases and `tests/test-portal-process.c` has 7 (26 and 6 before the first review); where a scenario's test has another path, the task names it.
 
 Tests, `portal` specification:
 
 - [x] 3.10 `tests/check-portal-link.sh`: Not linked with the database client.
 - [x] 3.11 `/portal/config/unknown-key`: An unknown key (also `/portal/process/refuses-to-start`, with the real program).
 - [x] 3.12 `/portal/config/plain-http-refused`: Plain HTTP refused (also `/portal/process/refuses-to-start`).
-- [x] 3.13 `/portal/process/nothing-writable`: Nothing writable. The real binary, in a directory it cannot write to, with every write to every file system denied by Landlock: people log in, search and ask, a request is made and withdrawn at the real daemon, and nothing was created. A container with a read-only root is 4.10's.
+- [x] 3.13 `/portal/process/nothing-writable`: Nothing writable. The real binary, in a directory it cannot write to, with every write to every file system denied by Landlock: people log in, search and ask, a request is made and withdrawn at the real daemon, and nothing was created. Without Landlock the case is skipped and says so. A container with a read-only root is 4.10's.
 - [x] 3.14 `/portal/pages/daemon-away`: The daemon is away (also twelve ways for the daemon to fail, each on each operation: none of its words reaches a page).
 - [x] 3.15 `/portal/pages/without-session`: Without a session (every route of the portal's table but login, the stylesheet and the probe; the stand-in daemon counts no call).
-- [x] 3.16 `/portal/pages/probe-loopback-only`: The probe. No test connects from an address that is not loopback: a request that a proxy on this machine forwards for someone else stands in for one, and is answered 404.
-- [x] 3.17 `/portal/pages/headers`: Headers (against the list both interfaces take them from; compared with what the real daemon sends in `/portal/process/restart`).
+- [x] 3.16 `/portal/pages/probe-loopback-only`: The probe. No test connects from an address that is not loopback: a request that a proxy on this machine forwards for someone else stands in for one, and is answered 404, as is one with any other forwarding header or a `Host` that is not a loopback address.
+- [x] 3.17 `/portal/pages/headers`: Headers (the names of the list both interfaces take them from, with the portal's own content security policy and Strict-Transport-Security; compared with what the real daemon sends in `/portal/process/restart`; also on a 413 of the limits, the portal's 415, 429, 503 and its page for plain HTTP).
 - [x] 3.18 `/portal/pages/state-and-form`: A title's state and the form.
 - [x] 3.19 `/portal/pages/provider-text`: Provider text (in element text, in an attribute, in a link; a decline's reason; what was typed into the search box).
 - [x] 3.20 `/portal/pages/failure-plain-words`: A failure in plain words.
@@ -257,9 +257,20 @@ Tests, `portal` specification:
 
 Tests beyond the plan: `/portal/wire/bodies` (the operations' names are the daemon's list; every body the portal writes is one the daemon's reader takes whole; what the writer refuses), `/portal/wire/answers` (an answer with a member its operation does not define, a wrong type, a word that is not one of the fixed ones, is refused whole), `/portal/form/reader` (paths and forms).
 
+After the first review (`design.md`, "As built in P3", "After the review"):
+
+- [x] 3.80 S1: a session cookie is the proof and its seal, a keyed hash under a key derived from the token with a fixed label, checked in constant time; one the portal did not seal is none and costs the daemon nothing. Calls for sessions the daemon has not confirmed and logins share 120 a minute from every address. A full throttle table drops no address that has failures: the ones it has no room for share one count. `/portal/limits/made-up-cookies` (four kinds of cookie that are not sealed, a hundred and sixty of them from one address: no call, the address not delayed, the cookie dropped; another token's seal is none), `/portal/limits/shared-calls` (180 strangers at 180 /64s, the clock stopped: at most 120 calls, a confirmed session served, a login refused unasked, calls again a minute later), `/auth/throttle/shared-when-full`, and in `/portal/process/restart` a new token: the old cookies are none and the person logs in again.
+- [x] 3.81 S2: a session the daemon confirmed in the last 15 minutes is not held to the address throttle of unknown cookies. `/portal/limits/one-device-misbehaves` (a device locks the address; the confirmed session there is served past `whoami`'s 30 seconds, and held once its confirmation has run out or the daemon no longer knows it).
+- [x] 3.82 S3: ten lines of a kind in a minute, then one line with the count, at the minute's end or when the portal stops; the daemon's failures by kind as well. `/portal/log/lines-a-minute`.
+- [x] 3.83 S4: Kubernetes' service links of a Service called axis-portal are left aside and named in one line; any other unknown variable still stops the portal, by its name. `/portal/config/service-links`.
+- [x] 3.84 M1, M2, M13, M17: counted after the daemon confirms; a login that worked clears its address, the daemon's 429 is not the address's failure; a search from another site is 403; refusals for a logged-in person have the frame. In `/portal/limits/search-flood` and `/portal/limits/login-flood`.
+- [x] 3.85 M3, M4, M5, M6, M7, M12: a proxy that says nobody (`/portal/pages/proxy-says-nobody`); the cross-site line (`/portal/session/post-without-token`); HSTS and the portal's policy (`/portal/pages/headers`, `/portal/process/restart`); the probe's headers and Host (`/portal/pages/probe-loopback-only`); the page for plain HTTP (`/portal/session/plain-http`).
+- [x] 3.86 M8, M9, M10: `--healthcheck` and the override on a listener that is not loopback (`/portal/process/refuses-to-start`, `/portal/config/plain-http-refused`); the token file's mode and the token out of `/proc/<pid>/environ` (`/portal/process/token-out-of-sight`).
+- [x] 3.87 M11, M14, M15, M16: one cap for pages and calls (not tested); the worker API's path compared as text (`/web-limits/worker-path`); the tests the review named (above, 3.13, 3.16, 3.17); `fuzz-portal-form` also reads a Cookie header, a session cookie, a `next`, a Content-Type, an Origin and a trusted proxy's headers; the readers refuse an answer for another page (`/portal/wire/answers`).
+
 Gate:
 
-- [ ] 3.90 Independent review of P3: what the portal passes on, its cookies and CSRF, its readers of the daemon's answers. Record it in `design.md`; fix each finding with a test. Not arranged by the author. The four gates (`make check`, `make fuzz`, `make check-container`, `make check-examples`) were not run by the author either; only the test programs the slice touches were, under both sanitizers.
+- [ ] 3.90 Independent review of P3: what the portal passes on, its cookies and CSRF, its readers of the daemon's answers. Record it in `design.md`; fix each finding with a test. A first review was made and its findings were fixed or recorded as known limits (3.80 to 3.87); the fixes wait for review. The four gates (`make check`, `make fuzz`, `make check-container`, `make check-examples`) were not run by the author either; only the test programs the slice touches were, under both sanitizers.
 
 ## 4. P4: limits, lockout, hardening and the deployment examples
 
