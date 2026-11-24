@@ -143,6 +143,9 @@ NAMED_HOSTS = (
     "github.com", "githubusercontent.com", "ghcr.io", "docker.io", "lscr.io", "linuxserver.io",
     "kubernetes.io", "k8s.io", "intel.com", "nvidia.com", "traefik.io", "containo.us",
     "git.podbielniak.com",
+    # Not hosts: the annotations by which two Kubernetes network plugins give
+    # pods an address pool (deploy/examples/kubernetes/portal.yaml).
+    "projectcalico.org", "cilium.io",
     # Sites of other projects that design notes have named.
     "igdb.com", "romm.app", "emulatorjs.org", "ghost-of-usenet.org",
     # Not hosts: Deluge's JSON-RPC method of that name.
@@ -213,6 +216,10 @@ PRIVATE_ADDRESSES = frozenset((
     # addresses on Traefik's network and on the portal's (Compose), and the
     # daemon's address and the portal's on the portal's network (Quadlet).
     "172.30.0.3", "172.30.1.2", "172.31.78.2", "172.31.78.3",
+    # The portal's addresses (AXIS_PORTAL_PEERS) in the same examples: the
+    # portal's on its two networks and Traefik's beside it (Compose), and a
+    # portal pod's fixed address (Kubernetes).
+    "172.30.1.3", "172.30.2.2", "172.30.2.3", "10.42.250.2",
 ))
 
 

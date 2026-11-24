@@ -285,9 +285,10 @@ page_response(Work *work)
 		}
 		if (axis_web_auth_portal_peers_overlap(self->auth, &peer, &proxy)) {
 			g_autofree gchar *text = g_strdup_printf("%s is among the portal's addresses and %s among the trusted "
-				"proxies: they share an address, so every login to Axis that arrives through that proxy is refused. "
-				"Give the portal an address of its own and list only that in portal_peers, then restart Axis.", peer,
-				proxy);
+				"proxies: they share an address. A login to Axis that arrives from an address in both is refused, "
+				"whoever it is forwarded for: if the reverse proxy you reach Axis through is at such an address, nobody "
+				"can log in through it. List only the proxy's own addresses in trusted_proxies and only the portal's "
+				"own in portal_peers, then restart Axis.", peer, proxy);
 
 			axis_web_auth_add(listener, axis_web_auth_notice(TRUE, text));
 		}

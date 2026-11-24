@@ -1342,15 +1342,18 @@ serve(
 		if (axis_config_get_portal_peers(config)[0] != '\0')
 			g_message("portal's addresses: %s (the portal API answers these alone, and nobody logs in to Axis itself "
 				"from them)", axis_config_get_portal_peers(config));
-		/* An address that is both: the proxy administrators come through
-		 * would be refused at the login as the portal is.  (A proxy listed by
-		 * name is compared once its name has resolved: the notice under
-		 * "Worth a look" then says the same.) */
+		/* An address that is both: a login that arrives from it is refused
+		 * as the portal's is, whoever it forwards for, so a reverse proxy at
+		 * such an address lets no administrator in.  (A proxy listed by name
+		 * is compared once its name has resolved: the notice under "Worth a
+		 * look" then says the same.) */
 		if (axis_web_auth_portal_peers_overlap(auth, &peer, &proxy))
 			g_warning("server.portal_peers (AXIS_PORTAL_PEERS) and server.trusted_proxies (AXIS_TRUSTED_PROXIES) "
-				"share an address: %s is among the portal's addresses and %s among the trusted proxies. Every login to "
-				"Axis that arrives through that proxy is refused. Give the portal an address of its own and list only "
-				"that in portal_peers, or reach Axis through a proxy that is not on the portal's address", peer, proxy);
+				"share an address: %s is among the portal's addresses and %s among the trusted proxies. A login to Axis "
+				"that arrives from an address in both is refused, whoever it is forwarded for: if the reverse proxy you "
+				"reach Axis through is at such an address, nobody can log in through it. List only the proxy's own "
+				"addresses in trusted_proxies and only the portal's own in portal_peers, so that the two do not meet",
+				peer, proxy);
 	}
 	/* A browser that logged in stays remembered across restarts (its own
 	 * count of failed logins); without the key file, until this one stops. */

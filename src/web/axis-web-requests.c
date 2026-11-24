@@ -2007,8 +2007,9 @@ portal_limit_source(
 /*
  * (Slice P4, after its review.)  An address is both one of the portal's
  * (server.portal_peers) and a trusted proxy's.  A login to Axis that arrives
- * through that proxy is then refused, whoever it is for: an administrator
- * who set both lists to one address has locked the door they use.  Said
+ * from such an address is refused, whoever it is forwarded for: an
+ * administrator who set both lists to one address has locked the door they
+ * use.  Said
  * under "Worth a look" with what to change, for as long as it holds.  Read
  * from memory; a proxy listed by name counts once its name has resolved.
  */
@@ -2028,9 +2029,9 @@ portal_overlap_source(
 	if (self->auth == NULL || !axis_web_auth_portal_peers_overlap(self->auth, &peer, &proxy))
 		return TRUE;
 	words = g_strdup_printf("The request portal and a trusted reverse proxy share an address: %s is among the portal's "
-		"addresses (portal_peers) and %s among the trusted proxies. Every login to Axis that arrives through that proxy "
-		"is refused. Give the portal an address of its own, list only that in portal_peers, and restart Axis.", peer,
-		proxy);
+		"addresses (portal_peers) and %s among the trusted proxies. A login to Axis that arrives from an address in "
+		"both is refused, whoever it is forwarded for. List only the proxy's own addresses in trusted_proxies and only "
+		"the portal's own in portal_peers, and restart Axis.", peer, proxy);
 	item = axis_attention_item_new("requests.portal_peers_overlap", "", AXIS_ATTENTION_LOOK, 1, 0);
 	axis_attention_item_say(item, words, NULL, NULL);
 	axis_attention_item_link(item, "/admin/portal", "Open Request portal");

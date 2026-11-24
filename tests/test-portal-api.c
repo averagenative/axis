@@ -3039,7 +3039,7 @@ test_portal_peers_forms(Fixture *fx, gconstpointer data)
 	} cases[] = {
 		{ "127.0.0.1", TRUE }, { "::ffff:127.0.0.1", TRUE }, { "[::ffff:127.0.0.1]", TRUE }, { "127.0.0.2", FALSE },
 		{ "::1", FALSE }, { "192.0.2.15", FALSE }, { "192.0.2.16", TRUE }, { "192.0.2.31", TRUE },
-		{ "::ffff:192.0.2.31", TRUE }, { "192.0.2.32", FALSE }, { "172.30.2.3", TRUE }, { "172.30.2.4", FALSE },
+		{ "::ffff:192.0.2.31", TRUE }, { "192.0.2.32", FALSE }, { "172.30.2.3", TRUE }, { "172.30.2.2", FALSE },
 		{ "2001:db8:1:2::7", TRUE }, { "2001:db8:1:2::8", FALSE }, { "2001:db8:1:2:aaaa::7", FALSE },
 		{ "2001:db8:9::1", TRUE }, { "2001:db8:9:0:ffff:ffff:ffff:ffff", TRUE }, { "2001:db8:9:1::1", FALSE },
 		{ "unknown", FALSE }, { "", FALSE }, { NULL, FALSE }
@@ -3170,12 +3170,13 @@ test_portal_peers_forwarded(Fixture *fx, gconstpointer data)
 	assert_holds(reply.body, "Worth a look");
 	assert_holds(reply.body, "The request portal and a trusted reverse proxy share an address: 127.0.0.1 is among the "
 		"portal&#39;s addresses (portal_peers) and 127.0.0.1 among the trusted proxies.");
-	assert_holds(reply.body, "Give the portal an address of its own");
+	assert_holds(reply.body, "List only the proxy&#39;s own addresses in trusted_proxies and only the portal&#39;s own in "
+		"portal_peers");
 	assert_holds(reply.body, "href=\"/admin/portal\"");
 	axis_test_reply_clear(&reply);
 	reply = axis_test_web_request(fx->people, fx->port, "GET", "/admin/portal", admin, from_desk, NULL);
 	assert_status(&reply, 200);
-	assert_holds(reply.body, "they share an address, so every login to Axis that arrives through that proxy is refused");
+	assert_holds(reply.body, "they share an address. A login to Axis that arrives from an address in both is refused");
 	axis_test_reply_clear(&reply);
 }
 
