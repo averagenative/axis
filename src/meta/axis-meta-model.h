@@ -154,6 +154,14 @@ typedef struct
  *   title out unless the administrator asked for them; a title stored another
  *   way keeps the mark, and a person who is not an administrator cannot ask
  *   for it (requests/axis-requests.h)
+ * @adult_known: whether @adult says anything.  Every provider answer that is
+ *   read sets it (TMDb's from its own member, %FALSE without one; TheTVDB's
+ *   %FALSE, as its answers have no such member); a title made from something
+ *   else (an import, a list brought over) leaves it unset, and so does a
+ *   stored title whose record no answer has touched since migration 0084.
+ *   For anyone who is not an administrator, a title whose mark is not known
+ *   is treated as marked.  Storing a title with it unset leaves the stored
+ *   mark as it is
  *
  * Text fields are cleaned (valid UTF-8, no control characters, cut to
  * their limits) or %NULL; numbers are 0 for unknown.
@@ -187,6 +195,7 @@ typedef struct
 	gint64          viewed_us;
 	GPtrArray      *sources;
 	gboolean        adult;
+	gboolean        adult_known;
 } AxisMetaTitle;
 
 AxisMetaTitle *

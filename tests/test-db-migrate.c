@@ -729,10 +729,11 @@ test_requests_on_accounts(Fixture *fx, gconstpointer data)
 	g_assert_true(axis_db_migrate(fx->pool, &error));
 	g_assert_no_error(error);
 	/* Slice P2 (task 2.2), 0084_title_adult.sql and 0085_portal_api.sql on that
-	 * database: a stored title has no adult mark, a session that existed is
-	 * one of the engine's interface, an account can be a requester, and only
-	 * the three roles and the two kinds are taken. */
-	assert_query(fx, "SELECT bool_or(adult)::text || ' ' || count(*) FROM meta_title", "false 2");
+	 * database: a stored title's adult mark is not known (NULL: no provider's
+	 * answer has said yet), a session that existed is one of the engine's
+	 * interface, an account can be a requester, and only the three roles and
+	 * the two kinds are taken. */
+	assert_query(fx, "SELECT count(*) FILTER (WHERE adult IS NULL) || ' ' || count(*) FROM meta_title", "2 2");
 	assert_query(fx, "SELECT kind FROM web_session", "web");
 	axis_test_db_exec(fx->db, "INSERT INTO app_user (username, password_hash, role) VALUES"
 		" ('quill', '$argon2id$not-a-password', 'requester')");

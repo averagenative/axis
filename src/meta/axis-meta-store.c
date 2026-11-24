@@ -513,9 +513,12 @@ store_title_in_transaction(
 		g_ptr_array_add(params, title->provider_id);
 		g_ptr_array_add(params, (gpointer)(title->detail ? "true" : "false"));
 		g_ptr_array_add(params, regional);
-		g_ptr_array_add(params, (gpointer)(title->adult ? "true" : "false"));
-		/* The adult mark is set by any answer that carries it and cleared by
-		 * none: a brief record need not say.  A search's answer never takes a full record's year and dates: the
+		g_ptr_array_add(params, (gpointer)(!title->adult_known ? NULL : title->adult ? "true" : "false"));
+		/* The adult mark: a title that is not from a provider's answer says
+		 * nothing of it and leaves it as it is; an answer makes a mark that
+		 * was not known known, and a mark once set is cleared by none (a
+		 * brief record need not say).  A search's answer never takes a full
+		 * record's year and dates: the
 		 * full record's own release date (its first release) and its date in
 		 * the region stand, whatever date a search gives; the year of its
 		 * theatrical release in the region is a full record's alone. */
@@ -538,7 +541,7 @@ store_title_in_transaction(
 		        " provider = $15, provider_id = $16, fetched_at = now(),"
 		        " detail_fetched_at = CASE WHEN $17::boolean THEN now() ELSE detail_fetched_at END,"
 		        " regional_year = CASE WHEN $17::boolean THEN $18::integer ELSE regional_year END,"
-		        " adult = adult OR $19::boolean"
+		        " adult = CASE WHEN $19::boolean IS NULL THEN adult ELSE coalesce(adult, false) OR $19::boolean END"
 		        " WHERE id = $1::bigint", params, NULL, error))
 			return FALSE;
 	}
@@ -770,7 +773,10 @@ title_from_row(
 	title->detail_fetched_us = result_int(result, row, 19);
 	title->viewed_us = result_int(result, row, 20);
 	title->regional_year = (gint)result_int(result, row, 21);
-	axis_db_result_get_boolean(result, row, 22, &title->adult);
+	/* NULL: no provider's answer has said yet (since migration 0084). */
+	title->adult_known = !axis_db_result_is_null(result, row, 22);
+	if (title->adult_known)
+		axis_db_result_get_boolean(result, row, 22, &title->adult);
 	title->detail = title->detail_fetched_us > 0;
 	return title;
 }

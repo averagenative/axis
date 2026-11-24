@@ -265,6 +265,13 @@ series_new(
 	title->provider = g_strdup(AXIS_META_TVDB_NAME);
 	title->provider_id = g_strdup(id);
 	title->detail = detail;
+	/* TheTVDB's records have no member that marks a title as adult (nothing
+	 * in axis-meta-tvdb-assumed.h is one), so an answer of its says not
+	 * adult.  It never clears a mark another provider's answer set, and its
+	 * answer about a title TMDb's record made changes no field of the title
+	 * (axis-meta-store.c). */
+	title->adult = FALSE;
+	title->adult_known = TRUE;
 	axis_meta_title_add_id(title, AXIS_META_TVDB_NAME, id);
 	return title;
 }

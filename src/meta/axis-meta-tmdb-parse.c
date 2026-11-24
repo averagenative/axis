@@ -321,8 +321,10 @@ title_from(
 	if (id == NULL)
 		return NULL;
 	title = axis_meta_title_new(kind);
-	/* Kept with the record however the title came to be stored. */
+	/* Kept with the record however the title came to be stored.  Every
+	 * answer read says it: one without the member says not adult. */
 	title->adult = adult_flag;
+	title->adult_known = TRUE;
 	title->provider = g_strdup(AXIS_META_TMDB_NAME);
 	title->provider_id = g_strdup(id);
 	title->detail = detail;
