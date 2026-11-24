@@ -49,6 +49,7 @@ does not repeat them.
 | --- | --- |
 | Find out from any page that something waits for me, and dismiss what I have seen | [See what needs your attention](19-see-what-needs-your-attention.md) |
 | Pick a theme and manage accounts | [Themes and accounts](12-themes-and-accounts.md) |
+| Let people who are not administrators ask for a movie or a series, and approve or decline what they ask for | [Let other people ask for titles](20-let-other-people-ask-for-titles.md) |
 | Put Axis behind a reverse proxy | [Run behind a reverse proxy](13-run-behind-a-reverse-proxy.md) |
 | Back up and restore the database, check data checksums, and find out what is wrong when the database is the problem | [Back up, restore, and repair the database](14-back-up-restore-and-repair-the-database.md) |
 | Choose how long Axis keeps the history of movies, series, downloads, and imports | [Choose how long Axis keeps history](14-back-up-restore-and-repair-the-database.md#choose-how-long-axis-keeps-history) |

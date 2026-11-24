@@ -232,6 +232,27 @@ As built in P1, the rows also hold: the name of the account that asked (kept so 
 
 **Placement.** The library folder and the quality profile come from `requests.movies_root`, `requests.movies_profile`, `requests.series_root` and `requests.series_profile`, or from the approving administrator. The requester never chooses, and a request that carries such a member is refused.
 
+### As built in P1
+
+Slice P1 is built (`src/requests/`, `src/web/axis-web-requests.c`, migration `0083_requests.sql`). Where it differs from the text above, and what it had to settle:
+
+- **Approval is two steps, not one transaction.** The decision is one transaction: the title's lock, the request's row locked, the check that it still waits, the record. The title is placed after that commit, because `axis_movies_add()` and `axis_tv_add()` take connections of their own and are called unchanged, and no connection is held while another module works (a pool of N connections would otherwise stop at N approvals at once). Placing can be run again: it finds what an earlier attempt did. A daemon that stops between the two steps leaves an approved request with no title and no reason; it reads as "could not be added" once two minutes have passed, is counted by the notice, and "Try again" completes it. A series that an attempt added and could not finish (a season that could not be monitored) is removed again, so nothing is added in part.
+- **How races are prevented.** Every change to a title's requests takes a transaction advisory lock of the title first, then, where a quota is counted, one of the person. The quota's count and the insert it guards are in that transaction, so two requests at the same moment cannot both pass a limit with room for one. The partial unique indexes hold "one open request" besides: with the title's lock switched off, the test saw the index refuse the second request.
+- **The state is read in a bounded number of statements, not one.** The movies' facts and the movies on disk come from the movies module's own statements, so that "in the library" and "downloading" are judged by the engine's own rules; a third statement reads each movie's last grab, a fourth the seasons of the managed series with their episodes counted by the database. Measured by the test on 5,000 movies and 1,500 series: 8 statements for 20 titles, 5 for 50 requests.
+- **A series Axis does not manage has no state from files.** A movie on disk that Axis does not manage reads as available (the movies module says so). A series on disk that Axis does not manage does not: its seasons' states come from requests alone until it is managed.
+- **"Aired"** is an air date up to today (UTC). The TV module's own delay after airing (`tv.air_delay`) is not applied, so a request can read "partly available" for the hours in which the engine does not yet look for an episode.
+- **A declined request is "replaced" when it is asked for again**: a movie's always; a series' when the new request lists every season the declined one listed. A declined request for seasons 1 and 2, asked again for season 2 only, stays declined for season 1.
+- **Withdrawing with followers** tries the earliest follower only, as the specification says. If that person has no quota left (or is disabled), the request is withdrawn for all, though a later follower might have had room.
+- **A title Axis already looks for**: a movie that is managed and has no file gives a request that is approved at once ("existing"). For a series this holds only when every season asked for is monitored already; otherwise the request waits, because approving it would widen what is fetched.
+- **The people's switches and limits** are on `/requests/people`, a page of the Requests module that the Users page links to. The Users page belongs to the accounts' code, which knows nothing of requests but the module's id.
+- **An account that is deleted** leaves its requests with the name it had and no account. Its waiting requests are withdrawn (or handed over) by a call the Users page makes after the deletion is committed; every later such call also deals with any waiting request that names no one.
+- **An administrator can make a request** through the model (not limited, not offered in the interface, where an administrator has Add).
+- **A decline's reason** must be given: 1 to 300 characters, one line.
+- **`via`** is recorded on each request now (always `web` in P1), so that P2's daily ceiling can count the rows made through the portal API without a second change to the table.
+- **Requests is a module** (`requests`) that can be switched off: its pages then answer 404 and no card draws its piece.
+
+Decided for P1 from the open questions: a request shows who asked while `requests.show_who_asked` is on (question 4); a new season of a series that was requested whole is not requested automatically (question 5).
+
 ## 4. Search for requesting
 
 A search goes from the portal to `search`, and from the daemon to the configured details provider, through the engine's existing title search with its adult filter. The portal never talks to a provider and has no key.

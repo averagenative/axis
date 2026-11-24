@@ -8,93 +8,99 @@ Test programs: `tests/test-requests.c` (the model, with a database), `tests/test
 
 Build:
 
-- [ ] 1.1 Migration `0080_requests.sql`: `request`, `request_season`, `request_follower`, `request_closed_title`, the partial unique indexes for one open request, the two switches and two limits on `app_user`. Test it in `tests/test-db-migrate.c` on a database with accounts.
-- [ ] 1.2 `src/requests/`: the model, the season expansion, the duplicate and follower rules, the quota count from rows, the decision transaction, the derived state in one query for a page.
-- [ ] 1.3 The approval path: add or find the title, monitor the request's seasons, record, queue the search; "Try again" for an approval that could not add.
-- [ ] 1.4 Settings: `requests.window`, `requests.movies_per_window`, `requests.seasons_per_window`, `requests.auto_max_seasons`, `requests.show_who_asked`, and the four defaults for placement.
-- [ ] 1.5 Pages: `/requests` for administrators and as "My requests", Request on search results, Discover cards and title pages, the state on every card, the Users page's switches and limits.
-- [ ] 1.6 The two notices of requests in the attention sources.
-- [ ] 1.7 A user guide page, "Let other people ask for titles", and the known limits of this slice in `openspec/project.md`.
+- [x] 1.1 Migration `0083_requests.sql` (0080 to 0082 were taken by then): `request`, `request_season`, `request_follower`, `request_closed_title`, the partial unique indexes for one open request, the two switches and two limits on `app_user`. Tested in `tests/test-db-migrate.c` on a database with accounts (`/db/migrate/requests-on-accounts`).
+- [x] 1.2 `src/requests/`: the model, the season expansion, the duplicate and follower rules, the quota count from rows, the decision transaction, the derived state in a bounded number of statements for a page (8 for 20 titles, 5 for 50 requests, measured by the test; not one statement: the movies' and the series' facts are read by their own modules' statements).
+- [x] 1.3 The approval path: add or find the title, monitor the request's seasons, record, queue the search; "Try again" for an approval that could not add. The decision is one transaction; the placing of the title comes after its commit, because `axis_movies_add()` and `axis_tv_add()` use connections of their own (see `design.md`, "As built in P1").
+- [x] 1.4 Settings: `requests.window`, `requests.movies_per_window`, `requests.seasons_per_window`, `requests.auto_max_seasons`, `requests.show_who_asked`, and the four defaults for placement (set on the Requests page, where the folders and profiles are listed by name).
+- [x] 1.5 Pages: `/requests` for administrators and as "My requests", `/requests/<identifier>`, Request on search results, Discover cards and title pages, the state on every card. Two things differ from this line. The people's switches and limits are on a page of the Requests module, `/requests/people`, which the Users page links to; they are not on the Users page itself. And the Request piece on a Discover card is drawn by the same code as on a search result's card, but no test opens a Discover page as a user (see 1.15).
+- [x] 1.6 The two notices of requests in the attention sources.
+- [x] 1.7 A user guide page, "Let other people ask for titles" (`docs/20-let-other-people-ask-for-titles.md`), and the known limits of this slice in `openspec/project.md`.
+
+The test paths below are the plan's. Where a scenario's test has another path in the tree, the task names it. `tests/test-requests.c` has 35 cases and `tests/test-web-requests.c` has 12; one case often covers several scenarios.
 
 Tests, `requests` specification:
 
-- [ ] 1.10 `/requests/model/movie`: A movie.
-- [ ] 1.11 `/requests/model/whole-series-is-a-list`: The whole series becomes a season list.
-- [ ] 1.12 `/requests/model/first-and-latest`: The first and the latest season.
-- [ ] 1.13 `/requests/model/no-episodes-no-text`: No episodes and nothing typed.
-- [ ] 1.14 `/requests/model/module-off`: A module that is off.
-- [ ] 1.15 `/web/requests/user-asks-from-discover`: An ordinary user asks from Discover.
-- [ ] 1.16 `/web/requests/user-cannot-add`: An ordinary user still cannot add.
-- [ ] 1.17 `/web/requests/forged-post`: A forged request post.
-- [ ] 1.18 `/requests/decide/waiting-fetches-nothing`: Waiting fetches nothing.
-- [ ] 1.19 `/requests/decide/approval-adds-and-searches`: Approval adds and searches.
-- [ ] 1.20 `/requests/decide/approval-of-seasons`: Approval of seasons.
-- [ ] 1.21 `/requests/decide/widens-never-narrows`: Approval widens and never narrows.
-- [ ] 1.22 `/requests/decide/decline-has-reason`: A decline has a reason.
-- [ ] 1.23 `/requests/decide/two-at-once`: Two decisions at once.
-- [ ] 1.24 `/web/requests/decide-not-admin`: Not an administrator.
-- [ ] 1.25 `/requests/place/defaults-used`: Defaults are used.
-- [ ] 1.26 `/requests/place/request-cannot-choose`: A request cannot choose.
-- [ ] 1.27 `/web/requests/no-defaults-yet`: No defaults yet.
-- [ ] 1.28 `/requests/auto/off-by-default`: Off by default.
-- [ ] 1.29 `/requests/auto/movie`: A movie approved automatically.
-- [ ] 1.30 `/requests/auto/one-switch-not-the-other`: One switch does not open the other.
-- [ ] 1.31 `/requests/auto/too-many-seasons`: Too many seasons for automatic approval.
-- [ ] 1.32 `/requests/auto/defaults-gone`: The defaults are gone.
-- [ ] 1.33 `/requests/quota/limit-reached`: The limit is reached.
-- [ ] 1.34 `/requests/quota/seasons-count-each`: Seasons count one each.
-- [ ] 1.35 `/web/requests/quota-shown`: What is left is shown.
-- [ ] 1.36 `/requests/quota/new-window`: A new window (day, week and month, and the two days a year of 23 and 25 hours).
-- [ ] 1.37 `/requests/quota/withdraw-gives-back`: Withdrawing gives the count back.
-- [ ] 1.38 `/requests/quota/decline-keeps`: A decline keeps the count.
-- [ ] 1.39 `/requests/quota/limit-of-none`: A limit of none.
-- [ ] 1.40 `/web/requests/states-of-a-search`: The states of a search.
-- [ ] 1.41 `/requests/state/seasons-of-a-series`: Seasons of a series.
-- [ ] 1.42 `/web/requests/who-asked-shown`: Who asked, shown.
-- [ ] 1.43 `/web/requests/who-asked-hidden`: Who asked, hidden.
-- [ ] 1.44 `/web/requests/reason-not-for-everyone`: A reason is not for everyone.
-- [ ] 1.45 `/requests/follow/movie`: Following a movie request.
-- [ ] 1.46 `/requests/follow/seasons-left-out`: Seasons are left out, not refused.
-- [ ] 1.47 `/requests/follow/nothing-remains`: Nothing remains.
-- [ ] 1.48 `/requests/follow/already-in-library`: Already in the library.
-- [ ] 1.49 `/requests/follow/asked-twice`: Asked twice (also two posts at the same moment).
-- [ ] 1.50 `/requests/follow/already-looking`: A title Axis is already looking for.
-- [ ] 1.51 `/requests/declined/asked-again`: Asked again.
-- [ ] 1.52 `/requests/declined/closed`: Closed to requests.
-- [ ] 1.53 `/requests/declined/opened-again`: Opened again.
-- [ ] 1.54 `/requests/withdraw/while-waiting`: Withdrawn while waiting.
-- [ ] 1.55 `/requests/withdraw/not-after-approval`: Not after approval (also a withdrawal that races an approval).
-- [ ] 1.56 `/requests/withdraw/not-anothers`: Not another person's.
-- [ ] 1.57 `/requests/withdraw/follower-takes-over`: A follower takes it over.
-- [ ] 1.58 `/requests/state/downloading`: Downloading.
-- [ ] 1.59 `/requests/state/movie-available`: A movie is available.
-- [ ] 1.60 `/requests/state/series-partly`: A series is partly available.
-- [ ] 1.61 `/requests/state/failure-plain-words`: A failure in plain words.
-- [ ] 1.62 `/requests/state/import-needs-person`: An import that needs a person.
-- [ ] 1.63 `/requests/state/removed`: Removed.
-- [ ] 1.64 `/requests/decide/folder-gone`: The folder is gone.
-- [ ] 1.65 `/requests/decide/tried-again`: Tried again.
-- [ ] 1.66 `/web/requests/mine`: My requests.
-- [ ] 1.67 `/web/requests/anothers-by-identifier`: Another person's request by its identifier.
-- [ ] 1.68 `/web/requests/nothing-of-inner-workings`: Nothing of the engine's inner workings.
-- [ ] 1.69 `/web/requests/waiting-list`: The waiting list.
-- [ ] 1.70 `/web/requests/ordinary-user-page`: An ordinary user.
-- [ ] 1.71 `/web/requests/switches-and-limits`: The switches and limits of a person.
-- [ ] 1.72 `/requests/account/disabled`: A disabled requester (run with a disabled ordinary user in P1, and again with a requester in P2).
-- [ ] 1.73 `/requests/state/one-query-a-page`: the state of 20 titles and of 50 requests is read in a bounded number of queries, on a library of 5,000 movies and 1,500 series.
+- [x] 1.10 `/requests/model/movie`: A movie.
+- [x] 1.11 `/requests/model/whole-series-is-a-list`: The whole series becomes a season list.
+- [x] 1.12 `/requests/model/first-and-latest`: The first and the latest season (the first and the latest in the case of 1.11, on a series of two seasons; the latest of the series with seasons 0 to 3, and the specials only when picked, in this one).
+- [x] 1.13 `/requests/model/no-episodes-no-text`: No episodes and nothing typed. The model's part is this case (a season the record does not have, a season picked twice, nothing picked, a title of another kind). A post with an episode number or a note is refused by the form's rule, tested in `/web/requests/user-asks`.
+- [x] 1.14 `/requests/model/module-off`: A module that is off (a layer without the TV module), and `/web/requests/module-off` (the TV module registered and switched off).
+- [ ] 1.15 `/web/requests/user-asks-from-discover`: An ordinary user asks from Discover. Not tested as named: `/web/requests/user-asks` asks from a title's page and reads the Request form on a search result's card. The Discover card's piece is the same branch of the same function, but the Discover page's lists come from the TMDb fake, which the requests' test fixture does not set up, so no test opens a Discover page as a user.
+- [x] 1.16 `/web/requests/user-cannot-add`: An ordinary user still cannot add (in `/web/requests/user-asks`).
+- [x] 1.17 `/web/requests/forged-post`: A forged request post (in `/web/requests/user-asks`; also without a session).
+- [x] 1.18 `/requests/decide/waiting-fetches-nothing`: Waiting fetches nothing.
+- [x] 1.19 `/requests/decide/approval-adds-and-searches`: Approval adds and searches.
+- [x] 1.20 `/requests/decide/approval-of-seasons`: Approval of seasons.
+- [x] 1.21 `/requests/decide/widens-never-narrows`: Approval widens and never narrows.
+- [x] 1.22 `/requests/decide/decline-has-reason`: A decline has a reason.
+- [x] 1.23 `/requests/decide/two-at-once`: Two decisions at once (forced to meet; see the header of `race()` in the test).
+- [x] 1.24 `/web/requests/decide-not-admin`: Not an administrator (in `/web/requests/decide`).
+- [x] 1.25 `/requests/place/defaults-used`: Defaults are used (in `/requests/decide/approval-adds-and-searches`).
+- [x] 1.26 `/requests/place/request-cannot-choose`: A request cannot choose (in `/web/requests/user-asks`: twelve fields, each refused with 400 and no request made; the model's own call has no such member).
+- [x] 1.27 `/web/requests/no-defaults-yet`: No defaults yet (in `/web/requests/decide`).
+- [x] 1.28 `/requests/auto/off-by-default`: Off by default (in `/requests/decide/waiting-fetches-nothing`, with the defaults set).
+- [x] 1.29 `/requests/auto/movie`: A movie approved automatically.
+- [x] 1.30 `/requests/auto/one-switch-not-the-other`: One switch does not open the other (in `/requests/auto/movie`).
+- [x] 1.31 `/requests/auto/too-many-seasons`: Too many seasons for automatic approval (the reason is stored and read; the sentence on the Requests page is not asserted by a test).
+- [x] 1.32 `/requests/auto/defaults-gone`: The defaults are gone (the stored reason; the page's sentence for "no defaults" is asserted in `/web/requests/switches-and-limits`, the one for "missing" is not).
+- [x] 1.33 `/requests/quota/limit-reached`: The limit is reached.
+- [x] 1.34 `/requests/quota/seasons-count-each`: Seasons count one each.
+- [x] 1.35 `/web/requests/quota-shown`: What is left is shown (in `/web/requests/mine`; the words themselves in `/requests/quota/limit-reached`).
+- [x] 1.36 `/requests/quota/new-window`: A new window (day and month in this case, week in `/requests/quota/limit-reached`; the two days a year of 23 and 25 hours in `/requests/quota/window-bounds`, a pure test that skips them where the system has no data for the time zone it uses).
+- [x] 1.37 `/requests/quota/withdraw-gives-back`: Withdrawing gives the count back (in `/requests/quota/limit-reached`).
+- [x] 1.38 `/requests/quota/decline-keeps`: A decline keeps the count (in `/requests/quota/limit-reached`).
+- [x] 1.39 `/requests/quota/limit-of-none`: A limit of none (refused: in `/requests/quota/seasons-count-each`; not offered: in `/web/requests/series-page`).
+- [x] 1.40 `/web/requests/states-of-a-search`: The states of a search (an administrator and two ordinary users; a requester in P2).
+- [x] 1.41 `/requests/state/seasons-of-a-series`: Seasons of a series (in `/requests/follow/seasons-left-out` and `/web/requests/series-page`).
+- [x] 1.42 `/web/requests/who-asked-shown`: Who asked, shown (in `/web/requests/who-asked`).
+- [x] 1.43 `/web/requests/who-asked-hidden`: Who asked, hidden (in `/web/requests/who-asked`).
+- [x] 1.44 `/web/requests/reason-not-for-everyone`: A reason is not for everyone (in `/web/requests/who-asked` and `/requests/read/lists`).
+- [x] 1.45 `/requests/follow/movie`: Following a movie request.
+- [x] 1.46 `/requests/follow/seasons-left-out`: Seasons are left out, not refused.
+- [x] 1.47 `/requests/follow/nothing-remains`: Nothing remains (in `/requests/follow/seasons-left-out`).
+- [x] 1.48 `/requests/follow/already-in-library`: Already in the library.
+- [x] 1.49 `/requests/follow/asked-twice`: Asked twice (in `/requests/follow/movie`; two posts at the same moment, and two people at the same moment, in this case, forced to meet).
+- [x] 1.50 `/requests/follow/already-looking`: A title Axis is already looking for (in `/requests/follow/already-in-library`).
+- [x] 1.51 `/requests/declined/asked-again`: Asked again.
+- [x] 1.52 `/requests/declined/closed`: Closed to requests (in `/requests/declined/asked-again` and `/web/requests/decide`).
+- [x] 1.53 `/requests/declined/opened-again`: Opened again (the same two).
+- [x] 1.54 `/requests/withdraw/while-waiting`: Withdrawn while waiting.
+- [x] 1.55 `/requests/withdraw/not-after-approval`: Not after approval (in `/requests/withdraw/while-waiting`; a withdrawal that races an approval in this case, forced to meet).
+- [x] 1.56 `/requests/withdraw/not-anothers`: Not another person's (in `/requests/withdraw/while-waiting` and `/web/requests/mine`).
+- [x] 1.57 `/requests/withdraw/follower-takes-over`: A follower takes it over, and one without quota left does not.
+- [x] 1.58 `/requests/state/downloading`: Downloading (in `/requests/state/movie`).
+- [x] 1.59 `/requests/state/movie-available`: A movie is available (in `/requests/state/movie`).
+- [x] 1.60 `/requests/state/series-partly`: A series is partly available.
+- [x] 1.61 `/requests/state/failure-plain-words`: A failure in plain words (in `/requests/state/movie` and `/web/requests/mine`).
+- [x] 1.62 `/requests/state/import-needs-person`: An import that needs a person (in `/requests/state/movie`).
+- [x] 1.63 `/requests/state/removed`: Removed (in `/requests/state/movie`).
+- [x] 1.64 `/requests/decide/folder-gone`: The folder is gone (and `/web/requests/try-again`).
+- [x] 1.65 `/requests/decide/tried-again`: Tried again (in `/requests/decide/folder-gone` and `/web/requests/try-again`).
+- [x] 1.66 `/web/requests/mine`: My requests.
+- [x] 1.67 `/web/requests/anothers-by-identifier`: Another person's request by its identifier (in `/web/requests/mine`: the same status and the same body as for an identifier never issued, to read, to withdraw and to stop following).
+- [x] 1.68 `/web/requests/nothing-of-inner-workings`: Nothing of the engine's inner workings (in `/web/requests/mine`: a marked folder name, the profile's name, a release name, a file name and a protocol; no indexer or download client is set up in the fixture, so none could appear).
+- [x] 1.69 `/web/requests/waiting-list`: The waiting list (in `/web/requests/decide`, with three waiting and one decided, not ten).
+- [x] 1.70 `/web/requests/ordinary-user-page`: An ordinary user (in `/web/requests/mine`).
+- [x] 1.71 `/web/requests/switches-and-limits`: The switches and limits of a person (on `/requests/people`; see 1.5).
+- [x] 1.72 `/requests/account/disabled`: A disabled requester, run with a disabled and with a deleted ordinary user; and `/web/requests/account-goes`, through the Users page with accounts in the database and a real login. Again with a requester in P2.
+- [x] 1.73 `/requests/state/one-query-a-page`: the state of 20 titles and of 50 requests is read in a bounded number of queries, on a library of 5,000 movies and 1,500 series.
+
+Tests beyond the plan: `/requests/quota/race` (with room for one, of six requests at the same moment exactly one is made), `/requests/model/title-merge` (two records of a title merge), `/requests/decide/stopped-before-placing` (a daemon that stopped between a decision and the placing), `/web/requests/nothing-typed-is-logged`.
 
 Tests, `attention` specification:
 
-- [ ] 1.80 `/web/attention/requests-wait`: Requests wait.
-- [ ] 1.81 `/web/attention/one-request`: One request.
-- [ ] 1.82 `/web/attention/requests-decided`: Decided.
-- [ ] 1.83 `/web/attention/request-approved-automatically`: Approved automatically.
-- [ ] 1.84 `/web/attention/request-could-not-be-added`: Could not be added.
-- [ ] 1.85 `/web/attention/requests-not-admin`: Not an administrator.
+All six are one case, `/web/attention/requests` in `tests/test-web-requests.c`.
+
+- [x] 1.80 `/web/attention/requests-wait`: Requests wait.
+- [x] 1.81 `/web/attention/one-request`: One request.
+- [x] 1.82 `/web/attention/requests-decided`: Decided.
+- [x] 1.83 `/web/attention/request-approved-automatically`: Approved automatically.
+- [x] 1.84 `/web/attention/request-could-not-be-added`: Could not be added.
+- [x] 1.85 `/web/attention/requests-not-admin`: Not an administrator.
 
 Gate:
 
-- [ ] 1.90 Independent review of P1: who may read and change a request, the decision transaction, the quota count. Record the reviewer and the findings in `design.md`; fix each finding with a test.
+- [ ] 1.90 Independent review of P1: who may read and change a request, the decision transaction, the quota count. Record the reviewer and the findings in `design.md`; fix each finding with a test. Not done: the slice is built and waits for it. The four gates (`make check`, `make fuzz`, `make check-container`, `make check-examples`) were not run by the author either; only the test programs the slice touches were, under both sanitizers.
 
 ## 2. P2: the scoped token and the narrow API
 

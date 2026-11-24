@@ -832,6 +832,10 @@ test_decide(Fixture *fx, gconstpointer data)
 		reply = post_as(fx, fx->robin, page_path, "/requests", form);
 		g_assert_cmpuint(reply.status, ==, 303);
 		axis_test_reply_clear(&reply);
+		/* Asked again: the Requests page says it was declined before. */
+		reply = get_as(fx, fx->admin, "/requests");
+		assert_contains(reply.body, "It was declined once before.");
+		axis_test_reply_clear(&reply);
 	}
 }
 
@@ -1166,6 +1170,22 @@ test_people(Fixture *fx, gconstpointer data)
 	reply = get_as(fx, fx->robin, "/requests");
 	assert_contains(reply.body, "Seasons of series: 2 of 2 left this week.");
 	axis_test_reply_clear(&reply);
+
+	/* The switch is on and no default is set: the request waits, and the
+	 * Requests page says why. */
+	{
+		g_autofree gchar *waits = ask_movie(fx, fx->r->robin, film(fx, AXIS_TEST_REQUESTS_LEDGER));
+
+		g_assert_cmpint(N("SELECT count(*) FROM request WHERE public_id = '%s' AND decision = 'waiting'"
+			" AND wait_reason = 'no_defaults'", waits), ==, 1);
+		reply = get_as(fx, fx->admin, "/requests");
+		assert_contains(reply.body, "no default folder and profile are set for the kind");
+		axis_test_reply_clear(&reply);
+		/* The person who asked is not told the administrator's arrangements. */
+		reply = get_as(fx, fx->robin, "/requests");
+		assert_lacks(reply.body, "default folder");
+		axis_test_reply_clear(&reply);
+	}
 
 	/* The defaults: a folder of the other kind is no folder for movies. */
 	reply = post_as(fx, fx->admin, "/requests", "/requests/defaults", wrong);
