@@ -15,6 +15,7 @@
 #include "web/axis-web-auth-input.h"
 #include "web/axis-web-notice.h"
 #include "web/axis-web-place.h"
+#include "web/axis-web-private.h"
 #include "web/axis-web-theme.h"
 
 #include <string.h>
@@ -792,7 +793,8 @@ users_page(
 	htmx_node_set_text_content(HTMX_NODE(title), "User accounts");
 	htmx_node_add_child(HTMX_NODE(content), HTMX_NODE(title));
 	axis_web_auth_add(content, axis_web_page_intro("The people who can log in to Axis. Administrators can change "
-		"settings and start searches, downloads, imports and conversions; users can look but change nothing."));
+		"settings and start searches, downloads, imports and conversions; users can look, and "
+		"can ask for a movie or a series while the Requests module is on, but change nothing else."));
 	axis_web_notice_begin(&place, request, error, g_strdup(message), HTMX_NODE(content));
 	htmx_element_set_id(HTMX_ELEMENT(accounts), "accounts");
 	axis_web_notice_put(&place, accounts, "accounts");
@@ -820,6 +822,14 @@ users_page(
 	}
 	axis_web_auth_add(table, body);
 	axis_web_auth_add(accounts, table);
+	/* What each person may ask for is the Requests module's to say (by its
+	 * id: this file knows nothing else of it). */
+	if (auth->web != NULL && axis_module_registry_is_enabled(axis_web_get_registry(auth->web), "requests")) {
+		HtmxA *requests = htmx_a_new_with_href("/requests/people");
+
+		htmx_node_set_text_content(HTMX_NODE(requests), "Requests: each person's automatic approval and limits");
+		axis_web_auth_add(accounts, requests);
+	}
 	axis_web_auth_add(content, accounts);
 
 	htmx_element_add_class(HTMX_ELEMENT(form), "form");
@@ -1018,6 +1028,19 @@ user_work(
 		axis_user_store_delete(auth->pool, work->id, &work->error);
 		break;
 	}
+	/* What other parts keep for an account that went follows it. */
+	if (work->error == NULL && auth->account_gone != NULL && (work->op == USER_DISABLE || work->op == USER_DELETE))
+		auth->account_gone(work->id, auth->account_gone_data);
+}
+
+void
+axis_web_auth_set_account_gone(
+	AxisWebAuth             *self,
+	AxisAuthAccountGoneFunc  func,
+	gpointer                 user_data
+){
+	self->account_gone = func;
+	self->account_gone_data = user_data;
 }
 
 static HtmxResponse *

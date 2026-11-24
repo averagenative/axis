@@ -5,8 +5,10 @@ sessions, and (as an administrator) add people and set the default theme.
 Allow about 10 minutes.
 
 Axis has two roles. An **Administrator** can change settings and start
-searches, downloads, imports and conversions. A **User** can look but
-change nothing.
+searches, downloads, imports and conversions. A **User** can look, and can
+ask for a movie or a series
+([Let other people ask for titles](20-let-other-people-ask-for-titles.md)),
+but changes nothing else.
 
 ## Before you begin
 

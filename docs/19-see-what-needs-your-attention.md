@@ -97,6 +97,8 @@ table gives the words of that link.
 | Downloads of YouTube videos failed | Worth a look | At once | **Open YouTube** |
 | Movies or episodes have more than one file | Worth a look | After the hourly count finds them | **Open Duplicates** |
 | Series have episodes that only a person can take | Waiting for you | When the series are counted | **Open TV, Wanted** |
+| Requests wait for approval | Waiting for you | At once. The notice gives their number and how long the oldest has waited, and names no person and no title. It goes when none waits. A request that was approved automatically never appears. See [Let other people ask for titles](20-let-other-people-ask-for-titles.md). | **Open Requests** |
+| Approved requests could not be added | Waiting for you | At once, until you try again on the **Requests** page | **Open Requests** |
 
 ### Releases that only you can take
 

@@ -66,6 +66,7 @@ src/download/   download clients (SABnzbd, Deluge, qBittorrent, the built-in kin
 src/acquire/    search, grab, follow-up and blocklist code shared by Movies and TV
 src/import/     the import pipeline, leftovers, duplicates
 src/modules/    movies/ and tv/
+src/requests/   requests by people who are not administrators: quotas, followers, decisions
 src/discover/   Discover lists and recommendations
 src/arr/        migration from Radarr and Sonarr
 src/youtube/    the YouTube downloader
@@ -253,7 +254,7 @@ Replication, high availability and point-in-time recovery are not goals.
 - **Music.** Low priority. Albums first, and single songs. MusicBrainz and the Cover Art Archive for details (no key; one request a second and a contact string from a setting). Quality profiles for music that say which formats are accepted and preferred. Sources in an order you set: Usenet, torrents, Soulseek through slskd, then YouTube. Axis may rename, retag and move an existing music library; that is for music only. Playlists may come later as a module of their own. Lidarr's model of artists, albums, releases and tracks is the reference to survey first.
 - **Books and audiobooks.** Books are identified mostly from embedded metadata and identifiers, less from file names; one work has many editions and formats. Audiobooks come as one file or dozens, carry chapters, and are matched by author, title and narrator; many come from trackers that require seeding indefinitely, so their imports must never disturb the seeded files. Axis finds, downloads and files the book, and hands it to the library application you already run through a connector for each (an ingest folder, or a library folder and a scan request). First connectors: Calibre-Web-Automated and Audiobookshelf. Providers are chosen when the work starts; each needs its terms and rate limits checked first.
 - **Games.** A module that supplies games and never runs them. One track places console ROMs, identified by checksum against catalogues that the administrator installs (No-Intro and Redump publish them; Axis ships none), into the folders that RomM reads, and asks RomM to scan through its API. The other keeps PC releases as downloaded file sets, with IGDB for details. The principles: nothing is installed, run, patched or emulated; no archive is extracted to disk; imported files carry no execute permission; no game site is switched on or given an address by Axis, because imitations of such sites serve malware; and RomM's database is never written.
-- **Requests.** A request portal with roles, where a person finds a title in Discover and asks for it. This is the piece most likely to face the internet, so it comes after the account system has had time to harden.
+- **Requests.** A request portal with roles, where a person finds a title in Discover and asks for it. This is the piece most likely to face the internet, so it comes after the account system has had time to harden. The change `add-request-portal` plans it in five slices. The first is built: requests inside Axis's own pages, for ordinary users (see "Requests" under "Known limits"). The requester role, the portal's API and the `axis-portal` program are not built, and nothing of requests faces the internet.
 
 ### Smaller items
 
@@ -727,6 +728,27 @@ Anime support is for a well-known series that is found, downloaded and numbered 
 - A pause after YouTube refuses the server, and a block by the outbound binding, are shown only on the YouTube pages, not under "Needs attention".
 - With a `socks5://` proxy, YouTube's host names are looked up locally. Use `socks5h://` to keep lookups at the proxy.
 - Whether fetching a video is allowed by the service's terms and by law where you live is the administrator's to answer.
+
+### Requests
+
+- Only the first slice of `add-request-portal` is built: requests inside Axis's own pages. A person who asks is an ordinary user, who still sees the other pages of Axis (file names, release names, downloads). The requester role, the portal API and the portal program are not built.
+- Not reviewed by someone who did not write it. No request has been made in a real browser or against a real indexer, download client or library.
+- An approval records the decision first and adds the title after. A daemon that stops in between leaves an approved request with no title; it reads as "could not be added" two minutes later, and an administrator selects "Try again". Nothing retries it by itself.
+- A title's state costs up to 8 statements for a page of cards, and one of them lists the accounts whose limit is 0. It runs on the page's worker thread, not on the main loop.
+- A placing of an approved title holds one connection of the pool for its lock while the movies or TV module adds the title on others, so several placings at once take one connection each beyond the modules' own.
+- A series approval that fails part of the way leaves the series added with the seasons monitored so far (Axis never removes what an approval added); the request reads "could not be added", and "Try again" monitors the rest.
+- A request whose title was added and then removed from Axis is closed as "Removed from Axis", and the title can be asked for again. A movie that an administrator stops monitoring and whose file is deleted is not handled: its request stays approved and reads "Approved: Axis is looking for it", and nobody can ask for the movie again until an administrator removes it or monitors it.
+- A movie that Axis manages but does not monitor, and that has no file, gives a request that is approved at once ("existing") and reads "Axis is looking for it", while nothing looks.
+- The search's adult filter drops adult titles from the provider's answers; Axis stores no mark of it. A title stored by another way (an administrator's lookup by identifier, an import from Radarr or Sonarr, an identification) can be opened and asked for by its number, adult or not. P2's portal must store the mark before its `title` operation can refuse such a title.
+- A request joined to another when two records of its title merge still counts against the quota of the person who made it.
+- The Request button on a Discover card is drawn by the same code as on a search result's card, but no test opens a Discover page as a user.
+- A series on disk that Axis does not manage does not read as available; a movie does.
+- "Aired" is by the UTC date, without the TV module's delay after airing.
+- A declined request for several seasons stays declined for the seasons that a later request does not list.
+- When a request with followers is withdrawn, only the earliest follower is offered it.
+- The limits count over a calendar window in the server's local time. The days of 23 and 25 hours are tested for one time zone, and only where the system has its data.
+- Changing the four placement defaults is four separate writes of settings, not one.
+- The people's switches and limits are on a page of the Requests module, not on the Users page, which links to it.
 
 ### User guide
 

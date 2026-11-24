@@ -63,6 +63,7 @@
 #include "web/axis-web-auth.h"
 #include "web/axis-web-browser.h"
 #include "web/axis-web-compat.h"
+#include "requests/axis-requests.h"
 #include "web/axis-web-discover.h"
 #include "web/axis-web-downloads.h"
 #include "web/axis-web-health.h"
@@ -942,6 +943,7 @@ serve(
 	g_autoptr(AxisYoutube) youtube = NULL;	/* before @downloads, whose built-in kind it is */
 	g_autoptr(AxisWebYoutube) youtube_ui = NULL;	/* after @web; declared after @youtube, which its
 							 * stop calls, so that it is freed first */
+	g_autoptr(AxisRequests) requests = NULL;	/* after @web; it keeps its own references */
 	g_autoptr(AxisMovies) movies = NULL;	/* after @web */
 	g_autoptr(AxisTv) tv = NULL;	/* after @web */
 	g_autoptr(AxisWebReady) ready_ui = NULL;	/* after @web */
@@ -1153,6 +1155,12 @@ serve(
 	axis_web_browser_set_folder_titles(browser_ui, AXIS_MEDIA_MOVIES, AXIS_IDENTIFY_MODULE_ID,
 		axis_web_identify_folder_titles, identify);
 	axis_web_browser_set_folder_titles(browser_ui, AXIS_MEDIA_TV, AXIS_TV_MODULE_ID, axis_tv_folder_titles, tv);
+	/* Requests: a person who is not an administrator asks for a movie or for
+	 * seasons of a series, and an administrator decides.  An approval adds
+	 * the title through the two modules above, unchanged. */
+	requests = axis_requests_new(pool, settings, meta, movies, tv, storage, quality);
+	if (!axis_module_registry_register(registry, axis_requests_get_module(), requests, error))
+		return 1;
 	/* Discover: TMDb's lists of movies and series, kept and refreshed by a
 	 * job, and recommendations for what the modules above refer to; its cards
 	 * show the films' and the series' own state or one-step add. */
@@ -1440,6 +1448,8 @@ serve(
 	axis_web_youtube_stop(youtube_ui);
 	/* A request to a Radarr in flight is cancelled. */
 	axis_arr_stop(arr);
+	/* A decision in flight is awaited: it ends with the database's answer. */
+	axis_requests_stop(requests);
 	axis_movies_stop(movies);
 	axis_tv_stop(tv);
 	*pool_in_use =!axis_job_queue_stop(jobs, axis_config_get_jobs_grace_period(config) * 1000);
