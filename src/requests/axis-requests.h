@@ -82,6 +82,11 @@ G_BEGIN_DECLS
 /* The largest limit a person may be given. */
 #define AXIS_REQUESTS_MAX_LIMIT   1000
 
+/* The most requests a person who is not an administrator may make in any 24
+ * hours, whatever became of them (withdrawn ones too): a ceiling beside the
+ * quota, which a withdrawal gives back.  Not a setting. */
+#define AXIS_REQUESTS_MAX_A_DAY   100
+
 #define AXIS_REQUESTS_ERROR (axis_requests_error_quark())
 
 /**
@@ -100,6 +105,8 @@ G_BEGIN_DECLS
  *   declined or withdrawn already)
  * @AXIS_REQUESTS_ERROR_PLACEMENT: an approval needs a library folder and a
  *   quality profile, and neither the form nor the defaults gave both
+ * @AXIS_REQUESTS_ERROR_TOO_MANY: the person made %AXIS_REQUESTS_MAX_A_DAY
+ *   requests in the last 24 hours, whatever became of them
  */
 typedef enum
 {
@@ -109,7 +116,8 @@ typedef enum
 	AXIS_REQUESTS_ERROR_CLOSED,
 	AXIS_REQUESTS_ERROR_QUOTA,
 	AXIS_REQUESTS_ERROR_DECIDED,
-	AXIS_REQUESTS_ERROR_PLACEMENT
+	AXIS_REQUESTS_ERROR_PLACEMENT,
+	AXIS_REQUESTS_ERROR_TOO_MANY
 } AxisRequestsError;
 
 GQuark
@@ -138,7 +146,11 @@ axis_request_kind_from_name(
  *
  * What people decided about a request: the only thing stored of its state.
  * @AXIS_REQUEST_REPLACED: declined, and asked for again since (the newer
- * request stands in its place).
+ * request stands in its place); or, with no decline reason, joined to another
+ * request for the same thing when two records of its title merged.
+ * @AXIS_REQUEST_REMOVED: approved, its title added, and the title removed
+ * from Axis since (set by the database): closed, so the title can be asked
+ * for again, and still counted against the quota.
  */
 typedef enum
 {
@@ -146,10 +158,12 @@ typedef enum
 	AXIS_REQUEST_APPROVED,
 	AXIS_REQUEST_DECLINED,
 	AXIS_REQUEST_WITHDRAWN,
-	AXIS_REQUEST_REPLACED
+	AXIS_REQUEST_REPLACED,
+	AXIS_REQUEST_REMOVED
 } AxisRequestDecision;
 
-/* "waiting", "approved", "declined", "withdrawn", "replaced" (stored). */
+/* "waiting", "approved", "declined", "withdrawn", "replaced", "removed"
+ * (stored). */
 const gchar *
 axis_request_decision_name(AxisRequestDecision decision);
 
@@ -186,6 +200,7 @@ typedef enum
 	AXIS_REQUEST_STATE_CAN,		/* can be requested */
 	AXIS_REQUEST_STATE_CLOSED,	/* closed to requests */
 	AXIS_REQUEST_STATE_WITHDRAWN,	/* (a request only) */
+	AXIS_REQUEST_STATE_REMOVED,	/* (a request only) its title was removed from Axis */
 	AXIS_REQUEST_STATE_DECLINED,
 	AXIS_REQUEST_STATE_REQUESTED,	/* waits for an administrator */
 	AXIS_REQUEST_STATE_APPROVED,
@@ -195,14 +210,15 @@ typedef enum
 	AXIS_REQUEST_STATE_AVAILABLE
 } AxisRequestState;
 
-/* "can", "closed", "withdrawn", "declined", "requested", "approved", "failed",
- * "downloading", "partly", "available": stable (classes). */
+/* "can", "closed", "withdrawn", "removed", "declined", "requested",
+ * "approved", "failed", "downloading", "partly", "available": stable
+ * (classes). */
 const gchar *
 axis_request_state_name(AxisRequestState state);
 
-/* "Can be requested", "Closed to requests", "Withdrawn", "Declined",
- * "Requested", "Approved", "Failed", "Downloading", "Partly available",
- * "Available". */
+/* "Can be requested", "Closed to requests", "Withdrawn", "Removed from Axis",
+ * "Declined", "Requested", "Approved", "Failed", "Downloading", "Partly
+ * available", "Available". */
 const gchar *
 axis_request_state_label(AxisRequestState state);
 
@@ -217,13 +233,13 @@ typedef enum
 	AXIS_REQUEST_CAUSE_NONE,
 	AXIS_REQUEST_CAUSE_NOT_ADDED,
 	AXIS_REQUEST_CAUSE_DOWNLOAD_FAILED,
-	AXIS_REQUEST_CAUSE_NEEDS_ADMIN,
-	AXIS_REQUEST_CAUSE_REMOVED
+	AXIS_REQUEST_CAUSE_NEEDS_ADMIN
 } AxisRequestCause;
 
 /* "The title could not be added.", "A download failed. Axis is looking
- * again.", "A download finished and needs the administrator.", "The title was
- * removed."; "" for none. */
+ * again.", "A download finished and needs the administrator."; "" for none.
+ * (A title removed from Axis after it was added is not a failure: the request
+ * is closed, AXIS_REQUEST_REMOVED.) */
 const gchar *
 axis_request_cause_words(AxisRequestCause cause);
 
@@ -463,9 +479,10 @@ axis_request_made_clear(AxisRequestMade *made);
  * @made: (out caller-allocates): what came of it; clear it
  *
  * A person asks for a title.  Refused whole, changing nothing, with
- * KIND_OFF, CLOSED, QUOTA, INVALID or NOT_FOUND (no such title, or no such
- * enabled account).  A second person is never refused for asking for what is
- * requested already: they follow it.
+ * KIND_OFF, CLOSED, QUOTA, TOO_MANY, INVALID or NOT_FOUND (no such title, or
+ * no such enabled account).  A second person is never refused for asking for
+ * what is requested already: they follow it, unless their limit for the kind
+ * is 0 (QUOTA: they follow nothing either).
  */
 gboolean
 axis_requests_ask(
@@ -556,10 +573,11 @@ axis_requests_approve(
 	GError       **error
 );
 
-/* Places the title of an approved request that could not be added (or whose
- * title was removed) again, with another folder or profile when given (0: as
- * the approval had them, else the defaults).  DECIDED for a request that is
- * not approved. */
+/* Places the title of an approved request that could not be added again, with
+ * another folder or profile when given (0: as the approval had them, else the
+ * defaults).  DECIDED for a request that is not approved, and for one whose
+ * title was added and is still there: an administrator who stopped
+ * monitoring its seasons since did so on purpose. */
 gboolean
 axis_requests_try_again(
 	AxisRequests  *self,
@@ -760,6 +778,7 @@ typedef struct
  * @request_public_id: (nullable): the request the state is of (the open one,
  *   else the last declined)
  * @asked_by: (nullable): who asked for it
+ * @asked_by_id: the account that made that request (0: none, or gone)
  * @decline_reason: (nullable): of a declined one
  * @makers: (element-type gint64): who made a request of the title that still
  *   counts (an open one, or the last declined)
@@ -780,6 +799,7 @@ typedef struct
 	GArray           *seasons;
 	gchar            *request_public_id;
 	gchar            *asked_by;
+	gint64            asked_by_id;
 	gchar            *decline_reason;
 	GArray           *makers;
 	GArray           *followers;
@@ -810,8 +830,10 @@ typedef struct
  * @show_who: requests.show_who_asked
  *
  * What @viewer_id is shown of a title's state: the name of who asked only to
- * an administrator, to that person, or while @show_who is on; a decline's
- * reason only to an administrator, to who asked and to followers.  Pure.
+ * an administrator, to the person who made the very request it names, or
+ * while @show_who is on (a person with a request for another season of the
+ * same series is not that person); a decline's reason only to an
+ * administrator, to who asked and to followers.  Pure.
  */
 void
 axis_request_title_view(

@@ -184,6 +184,9 @@ refusal(
 	case AXIS_REQUESTS_ERROR_PLACEMENT:
 		status = 400;
 		break;
+	case AXIS_REQUESTS_ERROR_TOO_MANY:
+		status = 429;
+		break;
 	default:
 		status = 409;
 		break;
@@ -278,10 +281,9 @@ actions_collect(
 	AxisRequests *self = user_data;
 	Figures *figures = g_new0(Figures, 1);
 	g_autoptr(GArray) ids = g_array_new(FALSE, FALSE, sizeof(gint64));
-	g_autoptr(GPtrArray) people = NULL;
+	g_autoptr(GArray) no_movies = NULL;
+	g_autoptr(GArray) no_series = NULL;
 	g_autoptr(GError) error = NULL;
-	gint64 movies_limit = axis_requests_setting_int(self, AXIS_REQUESTS_SETTING_MOVIES, 5);
-	gint64 seasons_limit = axis_requests_setting_int(self, AXIS_REQUESTS_SETTING_SEASONS, 5);
 	guint i;
 
 	figures->show_who = axis_requests_show_who(self);
@@ -300,28 +302,23 @@ actions_collect(
 		figures_free(figures);
 		return NULL;
 	}
-	/* Who is offered no request of a kind: the few whose limit is none (an
-	 * administrator made every account; they are a household's). */
-	if (!axis_requests_list_people(self, &people, &error)) {
+	/* Who is offered no request of a kind: the few whose limit is none.  (On
+	 * the page's worker thread, as every part's collecting is.) */
+	if (!axis_requests_people_without(self, &no_movies, &no_series, &error)) {
 		g_message("requests: the people's limits could not be read: %s", error->message);
 		return figures;
 	}
-	for (i = 0; i < people->len; i++) {
-		const AxisRequestPerson *person = g_ptr_array_index(people, i);
-		gint64 *key;
+	for (i = 0; i < no_movies->len; i++) {
+		gint64 *key = g_new(gint64, 1);
 
-		if (person->admin)
-			continue;
-		if ((person->movies_limit >= 0 ? person->movies_limit : movies_limit) == 0) {
-			key = g_new(gint64, 1);
-			*key = person->id;
-			g_hash_table_add(figures->no_movies, key);
-		}
-		if ((person->seasons_limit >= 0 ? person->seasons_limit : seasons_limit) == 0) {
-			key = g_new(gint64, 1);
-			*key = person->id;
-			g_hash_table_add(figures->no_series, key);
-		}
+		*key = g_array_index(no_movies, gint64, i);
+		g_hash_table_add(figures->no_movies, key);
+	}
+	for (i = 0; i < no_series->len; i++) {
+		gint64 *key = g_new(gint64, 1);
+
+		*key = g_array_index(no_series, gint64, i);
+		g_hash_table_add(figures->no_series, key);
 	}
 	return figures;
 }
@@ -608,10 +605,13 @@ ask_done(
 static gint
 season_field(const gchar *name)
 {
-	const gchar *digits = name + strlen("season-");
+	const gchar *digits;
 	guint i;
 
-	if (!g_str_has_prefix(name, "season-") || digits[0] == '\0' || strlen(digits) > 5)
+	if (!g_str_has_prefix(name, "season-"))
+		return -1;
+	digits = name + strlen("season-");
+	if (digits[0] == '\0' || strlen(digits) > 5)
 		return -1;
 	for (i = 0; digits[i] != '\0'; i++) {
 		if (!g_ascii_isdigit(digits[i]))
@@ -1106,7 +1106,7 @@ admin_controls(
 		ADD(decline_form, axis_web_auth_button("Decline", "button-small"));
 		ADD(box, decline_form);
 	} else if (info->decision == AXIS_REQUEST_APPROVED && info->state == AXIS_REQUEST_STATE_FAILED &&
-	           (info->cause == AXIS_REQUEST_CAUSE_NOT_ADDED || info->cause == AXIS_REQUEST_CAUSE_REMOVED)) {
+	           info->cause == AXIS_REQUEST_CAUSE_NOT_ADDED) {
 		g_autofree gchar *retry = g_strconcat(base, "/retry", NULL);
 		HtmxNode *retry_form = axis_web_auth_post_form(request, retry);
 
@@ -1461,6 +1461,12 @@ own_page(
 		ADD(left, text(NULL, movies_line));
 		ADD(left, text(NULL, seasons_line));
 		ADD(left, text("help", "A request you withdraw gives its count back. One that was declined keeps it."));
+		if (!work->quota.movies.unlimited) {
+			g_autofree gchar *ceiling = g_strdup_printf("Whatever becomes of them, you can make at most %d requests "
+				"in 24 hours, the ones you withdraw included.", AXIS_REQUESTS_MAX_A_DAY);
+
+			ADD(left, text("help", ceiling));
+		}
 		ADD(content, left);
 	}
 	htmx_element_set_id(HTMX_ELEMENT(card), "mine");

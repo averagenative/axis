@@ -309,6 +309,9 @@ derive_info(
 	case AXIS_REQUEST_WITHDRAWN:
 		info->state = AXIS_REQUEST_STATE_WITHDRAWN;
 		return;
+	case AXIS_REQUEST_REMOVED:
+		info->state = AXIS_REQUEST_STATE_REMOVED;
+		return;
 	default:
 		info->state = AXIS_REQUEST_STATE_APPROVED;
 		break;
@@ -331,8 +334,9 @@ derive_info(
 				info->cause = AXIS_REQUEST_CAUSE_NOT_ADDED;
 			}
 		} else if (fact == NULL || fact->movie_id == 0) {
-			info->state = AXIS_REQUEST_STATE_FAILED;
-			info->cause = AXIS_REQUEST_CAUSE_REMOVED;
+			/* Removed between the request's read and the facts' (the
+			 * database closes the request itself a moment later). */
+			info->state = AXIS_REQUEST_STATE_REMOVED;
 		} else if (fact->blocked) {
 			info->state = AXIS_REQUEST_STATE_FAILED;
 			info->cause = AXIS_REQUEST_CAUSE_NEEDS_ADMIN;
@@ -382,8 +386,7 @@ derive_info(
 				info->cause = AXIS_REQUEST_CAUSE_NOT_ADDED;
 			}
 		} else if (series == NULL) {
-			info->state = AXIS_REQUEST_STATE_FAILED;
-			info->cause = AXIS_REQUEST_CAUSE_REMOVED;
+			info->state = AXIS_REQUEST_STATE_REMOVED;
 		} else if (blocked) {
 			info->state = AXIS_REQUEST_STATE_FAILED;
 			info->cause = AXIS_REQUEST_CAUSE_NEEDS_ADMIN;
@@ -420,7 +423,7 @@ decision_from(const gchar *name)
 {
 	guint i;
 
-	for (i = 0; i <= AXIS_REQUEST_REPLACED; i++) {
+	for (i = 0; i <= AXIS_REQUEST_REMOVED; i++) {
 		if (g_strcmp0(name, axis_request_decision_name((AxisRequestDecision)i)) == 0)
 			return (AxisRequestDecision)i;
 	}
@@ -700,7 +703,9 @@ axis_request_title_view(
 	memset(view, 0, sizeof(*view));
 	view->mine = viewer_id != 0 && holds(state->makers, viewer_id);
 	view->follows = viewer_id != 0 && holds(state->followers, viewer_id);
-	if (state->asked_by != NULL && (viewer_admin || show_who || view->mine))
+	/* The name is of one request (of a series, the first open one): only its
+	 * own maker is told it besides, not whoever asked for another season. */
+	if (state->asked_by != NULL && (viewer_admin || show_who || (viewer_id != 0 && state->asked_by_id == viewer_id)))
 		view->asked_by = state->asked_by;
 	if (state->decline_reason != NULL && (viewer_admin || (viewer_id != 0 && holds(state->reason_people, viewer_id))))
 		view->decline_reason = state->decline_reason;
@@ -793,6 +798,7 @@ name_request(
 	g_free(state->asked_by);
 	state->request_public_id = g_strdup(row->public_id);
 	state->asked_by = g_strdup(row->name);
+	state->asked_by_id = row->by;
 }
 
 static void
@@ -1276,6 +1282,45 @@ axis_requests_list_people(
 		g_ptr_array_add(list, person);
 	}
 	*people = g_steal_pointer(&list);
+	return TRUE;
+}
+
+gboolean
+axis_requests_people_without(
+	AxisRequests  *self,
+	GArray       **no_movies,
+	GArray       **no_series,
+	GError       **error
+){
+	g_autofree gchar *movies = axis_requests_int_text(axis_requests_setting_int(self, AXIS_REQUESTS_SETTING_MOVIES, 5));
+	g_autofree gchar *seasons = axis_requests_int_text(axis_requests_setting_int(self, AXIS_REQUESTS_SETTING_SEASONS,
+		5));
+	g_autoptr(GArray) without_movies = g_array_new(FALSE, FALSE, sizeof(gint64));
+	g_autoptr(GArray) without_series = g_array_new(FALSE, FALSE, sizeof(gint64));
+	g_autoptr(AxisDbResult) result = NULL;
+	const gchar *params[] = { movies, seasons };
+	guint i;
+
+	if (!axis_db_pool_exec(self->pool, "SELECT id, coalesce(request_movies_limit, $1::integer) = 0,"
+	        " coalesce(request_seasons_limit, $2::integer) = 0 FROM app_user WHERE role <> 'admin'"
+	        " AND (coalesce(request_movies_limit, $1::integer) = 0 OR coalesce(request_seasons_limit, $2::integer) = 0)"
+	        " ORDER BY id LIMIT 1000", 2, params, &result, error))
+		return FALSE;
+	for (i = 0; i < axis_db_result_get_n_rows(result); i++) {
+		gint64 id = 0;
+		gboolean none_movies = FALSE;
+		gboolean none_series = FALSE;
+
+		axis_db_result_get_int64(result, i, 0, &id);
+		axis_db_result_get_boolean(result, i, 1, &none_movies);
+		axis_db_result_get_boolean(result, i, 2, &none_series);
+		if (none_movies)
+			g_array_append_val(without_movies, id);
+		if (none_series)
+			g_array_append_val(without_series, id);
+	}
+	*no_movies = g_steal_pointer(&without_movies);
+	*no_series = g_steal_pointer(&without_series);
 	return TRUE;
 }
 

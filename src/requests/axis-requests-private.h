@@ -95,6 +95,30 @@ axis_requests_lock_person(
 	GError     **error
 );
 
+/*
+ * The lock on placing a title (axis_requests_place()): a session advisory
+ * lock, of a class of its own, held on a connection of the pool that does
+ * nothing else until axis_requests_unlock_placing() lets go of it and gives
+ * it back.  Two placings of one title wait for each other; nothing else does.
+ * It is not the title's lock: placing calls the movies and TV modules, which
+ * may store the title's record, and a merge of the title's records takes the
+ * title's lock (0083_requests.sql) on a connection the placing waits for.
+ * Returns: (transfer full) (nullable): the connection, %NULL with @error.
+ */
+AxisDbConn *
+axis_requests_lock_placing(
+	AxisRequests  *self,
+	gint64         title_id,
+	GError       **error
+);
+
+void
+axis_requests_unlock_placing(
+	AxisRequests *self,
+	AxisDbConn   *conn,
+	gint64        title_id
+);
+
 /* ── What the engine's records say (axis-requests-read.c) ───────── */
 
 typedef struct
@@ -206,6 +230,17 @@ axis_requests_defaults_read(
 	AxisDbConn           *conn,
 	AxisRequestDefaults  *defaults,
 	GError              **error
+);
+
+/* The accounts that are not administrators and whose limit for movies
+ * (@no_movies) or for seasons (@no_series) is 0, by their own limit or the
+ * installation's: gint64 ids.  One statement over the accounts that are. */
+gboolean
+axis_requests_people_without(
+	AxisRequests  *self,
+	GArray       **no_movies,
+	GArray       **no_series,
+	GError       **error
 );
 
 /* The pages (web/axis-web-requests.c). */

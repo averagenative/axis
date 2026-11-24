@@ -5,11 +5,11 @@
  * One transaction decides everything a request depends on, under the title's
  * lock and then the person's: whether the title is closed, which seasons the
  * title's record has, what is requested already (followed, never refused),
- * what is left of the person's quota, and whether the request is approved at
- * once.  The count of the quota and the insert it guards are in that one
- * transaction with the person locked, so two requests posted at the same
- * moment cannot both take the last place; the database's unique indexes hold
- * the rule of one open request besides.
+ * what is left of the person's quota and under the daily ceiling, and whether
+ * the request is approved at once.  The counts and the insert they guard are
+ * in that one transaction with the person locked, so two requests posted at
+ * the same moment cannot both take the last place; the database's unique
+ * indexes hold the rule of one open request besides.
  *
  * What the engine's records say of the title (in the library, managed
  * already) is read before the transaction, on connections of the modules'
@@ -227,14 +227,53 @@ ask_locked(
 	{
 		g_autoptr(AxisDbResult) result = NULL;
 		const gchar *params[] = { user };
+		guint column = ask->kind == AXIS_REQUEST_SERIES ? 4 : 3;
+		gboolean admin = FALSE;
+		gint64 limit;
 
-		if (!axis_db_conn_exec(conn, "SELECT username, request_auto_movies, request_auto_series FROM app_user"
-		        " WHERE id = $1::bigint AND NOT disabled", 1, params, &result, error))
+		/* FOR SHARE: a disable of the account waits until this request is
+		 * made, so that what follows the disable (its waiting requests
+		 * withdrawn) finds it. */
+		if (!axis_db_conn_exec(conn, "SELECT username, request_auto_movies, request_auto_series, request_movies_limit,"
+		        " request_seasons_limit, role = 'admin' FROM app_user WHERE id = $1::bigint AND NOT disabled FOR SHARE",
+		        1, params, &result, error))
 			return FALSE;
 		if (axis_db_result_get_n_rows(result) == 0)
 			return refuse(error, AXIS_REQUESTS_ERROR_NOT_FOUND, "there is no such account");
 		username = g_strdup(axis_db_result_get_text(result, 0, 0));
 		axis_db_result_get_boolean(result, 0, ask->kind == AXIS_REQUEST_SERIES ? 2 : 1, &auto_on);
+		axis_db_result_get_boolean(result, 0, 5, &admin);
+		limit = axis_requests_setting_int(self, ask->kind == AXIS_REQUEST_SERIES ? AXIS_REQUESTS_SETTING_SEASONS :
+			AXIS_REQUESTS_SETTING_MOVIES, 5);
+		if (!axis_db_result_is_null(result, 0, column))
+			axis_db_result_get_int64(result, 0, column, &limit);
+		/* A limit of none: the person asks for nothing of the kind, and
+		 * follows nothing either. */
+		if (!admin && limit == 0) {
+			g_set_error(error, AXIS_REQUESTS_ERROR, AXIS_REQUESTS_ERROR_QUOTA, "you cannot ask for %s",
+				ask->kind == AXIS_REQUEST_SERIES ? "series" : "movies");
+			return FALSE;
+		}
+	}
+	/* What the engine's records said before the transaction is managed still
+	 * is, and stays so until this commits (a removal waits): a title removed
+	 * in between is refused as it is, not with a broken reference. */
+	{
+		gint64 known = ask->kind == AXIS_REQUEST_MOVIE ? (movie != NULL ? movie->movie_id : 0) :
+			(series != NULL ? series->series_id : 0);
+
+		if (known != 0) {
+			g_autofree gchar *managed = axis_requests_int_text(known);
+			g_autoptr(AxisDbResult) result = NULL;
+			const gchar *params[] = { managed };
+
+			if (!axis_db_conn_exec(conn, ask->kind == AXIS_REQUEST_MOVIE ?
+			        "SELECT 1 FROM movie WHERE id = $1::bigint FOR KEY SHARE" :
+			        "SELECT 1 FROM series WHERE id = $1::bigint FOR KEY SHARE", 1, params, &result, error))
+				return FALSE;
+			if (axis_db_result_get_n_rows(result) == 0)
+				return refuse(error, AXIS_REQUESTS_ERROR_INVALID, "the title changed at this moment; ask again");
+		}
 	}
 
 	if (ask->kind == AXIS_REQUEST_MOVIE) {
@@ -384,6 +423,25 @@ ask_locked(
 			return FALSE;
 		}
 	}
+	/* The ceiling a withdrawal does not give back: what the person made in
+	 * the last 24 hours, whatever became of it. */
+	if (!allowance->unlimited) {
+		g_autofree gchar *since = axis_requests_int_text(axis_requests_now(self) - G_TIME_SPAN_DAY);
+		g_autoptr(AxisDbResult) result = NULL;
+		const gchar *params[] = { user, since };
+		gint64 lately = 0;
+
+		if (!axis_db_conn_exec(conn, "SELECT count(*) FROM request WHERE made_by = $1::bigint AND created_at > "
+		        AXIS_REQUESTS_TS(2), 2, params, &result, error))
+			return FALSE;
+		axis_db_result_get_int64(result, 0, 0, &lately);
+		if (lately >= AXIS_REQUESTS_MAX_A_DAY) {
+			g_set_error(error, AXIS_REQUESTS_ERROR, AXIS_REQUESTS_ERROR_TOO_MANY, "you made %d requests in the last 24 "
+				"hours, withdrawn ones included, and that is the most anyone may; ask again later",
+				AXIS_REQUESTS_MAX_A_DAY);
+			return FALSE;
+		}
+	}
 
 	/* Approved at once: Axis looks for it already, or the person's switch. */
 	if (approved_how == NULL && auto_on) {
@@ -427,9 +485,10 @@ ask_locked(
 			existing ? "t" : "f"
 		};
 
-		if (!axis_db_conn_exec(conn, "INSERT INTO request (public_id, title_id, kind, requested_by, requested_name, via,"
-		        " created_at, counted_at, decision, approved_how, wait_reason, decided_at, root_id, quality_profile_id,"
-		        " movie_id, series_id, added_at) VALUES ($1, $2::bigint, $3, $4::bigint, $5, $6, " AXIS_REQUESTS_TS(7) ", "
+		if (!axis_db_conn_exec(conn, "INSERT INTO request (public_id, title_id, kind, requested_by, requested_name,"
+		        " made_by, via, created_at, counted_at, decision, approved_how, wait_reason, decided_at, root_id,"
+		        " quality_profile_id, movie_id, series_id, added_at)"
+		        " VALUES ($1, $2::bigint, $3, $4::bigint, $5, $4::bigint, $6, " AXIS_REQUESTS_TS(7) ", "
 		        AXIS_REQUESTS_TS(7) ", $8, $9, $10, CASE WHEN $8 = 'approved' THEN " AXIS_REQUESTS_TS(7) " END,"
 		        " $11::bigint, $12::bigint, $13::bigint, $14::bigint, CASE WHEN $15::boolean THEN " AXIS_REQUESTS_TS(7)
 		        " END) RETURNING id", G_N_ELEMENTS(params), params, &inserted, error))

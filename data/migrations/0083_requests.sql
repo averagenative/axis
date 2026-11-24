@@ -6,6 +6,9 @@
 -- asked for what, and whether it was approved, declined or withdrawn.  What
 -- became of an approved request (downloading, in the library, failed) is never
 -- stored: it is read from the records the engine already keeps of the title.
+-- The one exception is 'removed', set by a trigger below: a request whose title
+-- was added and then removed from Axis is closed, so that it can be asked for
+-- again.
 --
 --   request               one row for each request: a person, a title, a kind
 --                         ('movie' or 'series') and a decision.  public_id is
@@ -15,9 +18,11 @@
 --                         request still says who asked when the account is gone.
 --                         counted_at is when it was counted against the quota of
 --                         requested_by: when it was made, or when a follower took
---                         it over.  A request carries no text a person typed:
---                         decline_reason is the administrator's, add_error is
---                         the engine's own reason, shown to administrators only.
+--                         it over.  made_by is the account that made the row and
+--                         never changes: the daily ceiling counts it.  A request
+--                         carries no text a person typed: decline_reason is the
+--                         administrator's, add_error is the engine's own reason,
+--                         shown to administrators only.
 --
 --   request_season        the seasons a series request lists.  open follows the
 --                         request's decision (a trigger), so that one index can
@@ -47,6 +52,7 @@ CREATE TABLE request (
 	kind               text        NOT NULL,
 	requested_by       bigint      REFERENCES app_user (id) ON DELETE SET NULL,
 	requested_name     text        NOT NULL,
+	made_by            bigint      REFERENCES app_user (id) ON DELETE SET NULL,
 	-- How it came: the engine's own interface, or (a later slice) the portal API.
 	via                text        NOT NULL DEFAULT 'web',
 	created_at         timestamptz NOT NULL,
@@ -72,7 +78,7 @@ CREATE TABLE request (
 	CONSTRAINT request_public_id_form CHECK (public_id ~ '^[A-Za-z0-9_-]{22}$'),
 	CONSTRAINT request_kind CHECK (kind IN ('movie', 'series')),
 	CONSTRAINT request_via CHECK (via IN ('web', 'portal')),
-	CONSTRAINT request_decision CHECK (decision IN ('waiting', 'approved', 'declined', 'withdrawn', 'replaced')),
+	CONSTRAINT request_decision CHECK (decision IN ('waiting', 'approved', 'declined', 'withdrawn', 'replaced', 'removed')),
 	CONSTRAINT request_approved_how CHECK (approved_how IS NULL OR approved_how IN ('admin', 'auto', 'existing')),
 	CONSTRAINT request_wait_reason CHECK (wait_reason IS NULL
 		OR wait_reason IN ('no_defaults', 'defaults_gone', 'too_many_seasons')),
@@ -92,6 +98,8 @@ CREATE UNIQUE INDEX request_one_open_movie ON request (title_id)
 CREATE INDEX request_title ON request (title_id);
 -- The quota: a person's requests of a window.
 CREATE INDEX request_person ON request (requested_by, counted_at);
+-- The daily ceiling: the requests a person made in the last 24 hours.
+CREATE INDEX request_made ON request (made_by, created_at);
 -- The waiting list and its notice: the few that wait, the oldest first.
 CREATE INDEX request_waiting_list ON request (created_at, id) WHERE decision = 'waiting';
 -- The notice of approved requests whose title was not added: the engine gave
@@ -122,9 +130,27 @@ BEGIN
 	RETURN NULL;
 END $$;
 
-CREATE TRIGGER request_decision_closes_seasons AFTER UPDATE OF decision ON request
+-- (Not "UPDATE OF decision": the trigger below changes the decision of an
+-- update that names other columns.)
+CREATE TRIGGER request_decision_closes_seasons AFTER UPDATE ON request
 	FOR EACH ROW WHEN (NEW.decision IS DISTINCT FROM OLD.decision)
 	EXECUTE FUNCTION request_decided();
+
+-- An approved request whose title was added, and whose movie or series was
+-- removed from Axis since (the row's ON DELETE SET NULL), is closed as
+-- 'removed': it is no longer open, so the title can be asked for again, and it
+-- still counts against the quota of whoever made it.
+CREATE FUNCTION request_title_removed() RETURNS trigger
+	LANGUAGE plpgsql AS $$
+BEGIN
+	NEW.decision := 'removed';
+	RETURN NEW;
+END $$;
+
+CREATE TRIGGER request_closes_when_removed BEFORE UPDATE ON request
+	FOR EACH ROW WHEN (OLD.decision = 'approved' AND NEW.decision = 'approved' AND OLD.added_at IS NOT NULL
+		AND ((OLD.movie_id IS NOT NULL AND NEW.movie_id IS NULL) OR (OLD.series_id IS NOT NULL AND NEW.series_id IS NULL)))
+	EXECUTE FUNCTION request_title_removed();
 
 CREATE TABLE request_follower (
 	request_id  bigint      NOT NULL REFERENCES request (id) ON DELETE CASCADE,
@@ -155,32 +181,100 @@ ALTER TABLE app_user
 		(request_movies_limit IS NULL OR request_movies_limit BETWEEN 0 AND 1000)
 		AND (request_seasons_limit IS NULL OR request_seasons_limit BETWEEN 0 AND 1000));
 
+-- When two open requests of a title meet in a merge, the one that loses gives
+-- its people to the one that stays: who made it and who follows it follow the
+-- one that stays from then on (since they asked), unless they made that one.
+CREATE FUNCTION request_follow_merged(lost bigint, kept bigint) RETURNS void
+	LANGUAGE sql AS $$
+	INSERT INTO request_follower (request_id, user_id, followed_at)
+		SELECT kept, p.user_id, p.since FROM (
+			SELECT r.requested_by AS user_id, r.created_at AS since FROM request r
+				WHERE r.id = lost AND r.requested_by IS NOT NULL
+			UNION ALL
+			SELECT f.user_id, f.followed_at FROM request_follower f WHERE f.request_id = lost) p
+		WHERE p.user_id IS DISTINCT FROM (SELECT k.requested_by FROM request k WHERE k.id = kept)
+		ON CONFLICT DO NOTHING;
+$$;
+
 -- When two records of a title merge (0023_movies.sql says how), the requests
 -- of the record that goes follow its identifiers to the one kept, as its movie
--- or its series does.  An open request of the record that goes, for a thing
--- the record kept has an open request for already, is replaced by that one
--- first, so that the rule of one open request holds; a title closed on either
--- record is closed on the one kept.
+-- or its series does.  Where both records have an open request for the same
+-- thing (the movie, or a season), one of the two stays, so that the rule of
+-- one open request holds: the approved one over one that waits, whichever
+-- record it is on, and else the kept record's.  The other loses that thing:
+-- its people follow the one that stays; a series request keeps its other
+-- seasons and stays open with them, and a request left with nothing is
+-- 'replaced'.  A title closed on either record is closed on the one kept.
+--
+-- The two titles' locks are taken first, the lower id first, with the key the
+-- requests layer takes for a title (axis_requests_lock_title(), in
+-- src/requests/axis-requests.c: the two must stay the same), so that a request
+-- being made or decided for either title is not in the middle of its checks.
 CREATE FUNCTION request_follow_title_merge() RETURNS trigger
 	LANGUAGE plpgsql AS $$
+DECLARE
+	pair  record;
+	stays bigint;
+	loses bigint;
 BEGIN
-	IF OLD.title_id <> NEW.title_id
-	   AND NOT EXISTS (SELECT 1 FROM meta_external_id WHERE title_id = OLD.title_id) THEN
-		UPDATE request r SET decision = 'replaced'
-			WHERE r.title_id = OLD.title_id AND r.kind = 'movie' AND r.decision IN ('waiting', 'approved')
-			  AND EXISTS (SELECT 1 FROM request k WHERE k.title_id = NEW.title_id AND k.kind = 'movie'
-				AND k.decision IN ('waiting', 'approved'));
-		UPDATE request r SET decision = 'replaced'
-			WHERE r.title_id = OLD.title_id AND r.kind = 'series' AND r.decision IN ('waiting', 'approved')
-			  AND EXISTS (SELECT 1 FROM request_season s
-				JOIN request_season k ON k.title_id = NEW.title_id AND k.season = s.season AND k.open
-				WHERE s.request_id = r.id);
-		UPDATE request_season SET title_id = NEW.title_id WHERE title_id = OLD.title_id;
-		UPDATE request SET title_id = NEW.title_id WHERE title_id = OLD.title_id;
-		DELETE FROM request_closed_title c WHERE c.title_id = OLD.title_id
-			AND EXISTS (SELECT 1 FROM request_closed_title k WHERE k.title_id = NEW.title_id);
-		UPDATE request_closed_title SET title_id = NEW.title_id WHERE title_id = OLD.title_id;
+	IF OLD.title_id = NEW.title_id
+	   OR EXISTS (SELECT 1 FROM meta_external_id WHERE title_id = OLD.title_id) THEN
+		RETURN NULL;
 	END IF;
+	PERFORM pg_advisory_xact_lock(hashtext('axis.request.title'),
+		(least(OLD.title_id, NEW.title_id) % 2147483647)::integer);
+	PERFORM pg_advisory_xact_lock(hashtext('axis.request.title'),
+		(greatest(OLD.title_id, NEW.title_id) % 2147483647)::integer);
+
+	-- The movie: at most one open request on each record.
+	FOR pair IN
+		SELECT g.id AS going, g.decision AS going_decision, k.id AS kept, k.decision AS kept_decision
+		FROM request g
+		JOIN request k ON k.title_id = NEW.title_id AND k.kind = 'movie' AND k.decision IN ('waiting', 'approved')
+		WHERE g.title_id = OLD.title_id AND g.kind = 'movie' AND g.decision IN ('waiting', 'approved')
+	LOOP
+		IF pair.going_decision = 'approved' AND pair.kept_decision = 'waiting' THEN
+			stays := pair.going;
+			loses := pair.kept;
+		ELSE
+			stays := pair.kept;
+			loses := pair.going;
+		END IF;
+		PERFORM request_follow_merged(loses, stays);
+		UPDATE request SET decision = 'replaced' WHERE id = loses;
+	END LOOP;
+
+	-- The seasons, one at a time: at most one open request on each record
+	-- lists a season.
+	FOR pair IN
+		SELECT g.id AS going, g.decision AS going_decision, k.id AS kept, k.decision AS kept_decision, s.season
+		FROM request_season s
+		JOIN request g ON g.id = s.request_id
+		JOIN request_season ks ON ks.title_id = NEW.title_id AND ks.season = s.season AND ks.open
+		JOIN request k ON k.id = ks.request_id
+		WHERE s.title_id = OLD.title_id AND s.open
+		ORDER BY s.season
+	LOOP
+		IF pair.going_decision = 'approved' AND pair.kept_decision = 'waiting' THEN
+			stays := pair.going;
+			loses := pair.kept;
+		ELSE
+			stays := pair.kept;
+			loses := pair.going;
+		END IF;
+		PERFORM request_follow_merged(loses, stays);
+		IF (SELECT count(*) FROM request_season WHERE request_id = loses) > 1 THEN
+			DELETE FROM request_season WHERE request_id = loses AND season = pair.season;
+		ELSE
+			UPDATE request SET decision = 'replaced' WHERE id = loses;
+		END IF;
+	END LOOP;
+
+	UPDATE request_season SET title_id = NEW.title_id WHERE title_id = OLD.title_id;
+	UPDATE request SET title_id = NEW.title_id WHERE title_id = OLD.title_id;
+	DELETE FROM request_closed_title c WHERE c.title_id = OLD.title_id
+		AND EXISTS (SELECT 1 FROM request_closed_title k WHERE k.title_id = NEW.title_id);
+	UPDATE request_closed_title SET title_id = NEW.title_id WHERE title_id = OLD.title_id;
 	RETURN NULL;
 END $$;
 

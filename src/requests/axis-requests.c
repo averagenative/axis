@@ -32,7 +32,7 @@ axis_request_kind_from_name(
 	return TRUE;
 }
 
-static const gchar *const decision_names[] = { "waiting", "approved", "declined", "withdrawn", "replaced" };
+static const gchar *const decision_names[] = { "waiting", "approved", "declined", "withdrawn", "replaced", "removed" };
 
 const gchar *
 axis_request_decision_name(AxisRequestDecision decision)
@@ -61,8 +61,8 @@ const gchar *
 axis_request_state_name(AxisRequestState state)
 {
 	static const gchar *const names[] = {
-		"can", "closed", "withdrawn", "declined", "requested", "approved", "failed", "downloading", "partly",
-		"available"
+		"can", "closed", "withdrawn", "removed", "declined", "requested", "approved", "failed", "downloading",
+		"partly", "available"
 	};
 
 	return (guint)state < G_N_ELEMENTS(names) ? names[state] : "can";
@@ -72,8 +72,8 @@ const gchar *
 axis_request_state_label(AxisRequestState state)
 {
 	static const gchar *const labels[] = {
-		"Can be requested", "Closed to requests", "Withdrawn", "Declined", "Requested", "Approved", "Failed",
-		"Downloading", "Partly available", "Available"
+		"Can be requested", "Closed to requests", "Withdrawn", "Removed from Axis", "Declined", "Requested",
+		"Approved", "Failed", "Downloading", "Partly available", "Available"
 	};
 
 	return (guint)state < G_N_ELEMENTS(labels) ? labels[state] : "Can be requested";
@@ -89,8 +89,6 @@ axis_request_cause_words(AxisRequestCause cause)
 		return "A download failed. Axis is looking again.";
 	case AXIS_REQUEST_CAUSE_NEEDS_ADMIN:
 		return "A download finished and needs the administrator.";
-	case AXIS_REQUEST_CAUSE_REMOVED:
-		return "The title was removed.";
 	default:
 		return "";
 	}
@@ -140,6 +138,12 @@ axis_request_info_words(const AxisRequestInfo *info)
 	case AXIS_REQUEST_STATE_APPROVED:
 		return g_strdup(g_strcmp0(info->approved_how, "auto") == 0 ? "Approved automatically: Axis is looking for it" :
 			"Approved: Axis is looking for it");
+	case AXIS_REQUEST_STATE_DECLINED:
+		/* Replaced with no reason of a decline: two records of its title
+		 * merged, and another request for the same thing stayed. */
+		if (info->decision == AXIS_REQUEST_REPLACED && info->decline_reason == NULL)
+			return g_strdup("Joined to another request for the same title");
+		return g_strdup(axis_request_state_label(info->state));
 	default:
 		return g_strdup(axis_request_state_label(info->state));
 	}
@@ -301,6 +305,15 @@ axis_requests_parse_list(
 	}
 }
 
+/*
+ * The locks are PostgreSQL's advisory locks of two keys: a class for what is
+ * locked (a title, a person, a title's placing) and the id.  Ids of one class
+ * that are equal modulo 2^31 - 1 share a lock, which only makes unrelated work
+ * wait.  The title's key is also taken by the trigger that moves requests when
+ * two records of a title merge (0083_requests.sql): the two must stay alike.
+ */
+#define LOCK_KEY(class) "hashtext('" class "'), ($1::bigint % 2147483647)::integer"
+
 gboolean
 axis_requests_lock_title(
 	AxisDbConn  *conn,
@@ -310,8 +323,8 @@ axis_requests_lock_title(
 	g_autofree gchar *id = axis_requests_int_text(title_id);
 	const gchar *params[] = { id };
 
-	return axis_db_conn_exec(conn, "SELECT pg_advisory_xact_lock(hashtext('axis.request.title:' || $1))", 1, params,
-		NULL, error);
+	return axis_db_conn_exec(conn, "SELECT pg_advisory_xact_lock(" LOCK_KEY("axis.request.title") ")", 1, params, NULL,
+		error);
 }
 
 gboolean
@@ -323,8 +336,50 @@ axis_requests_lock_person(
 	g_autofree gchar *id = axis_requests_int_text(user_id);
 	const gchar *params[] = { id };
 
-	return axis_db_conn_exec(conn, "SELECT pg_advisory_xact_lock(hashtext('axis.request.person:' || $1))", 1, params,
+	return axis_db_conn_exec(conn, "SELECT pg_advisory_xact_lock(" LOCK_KEY("axis.request.person") ")", 1, params,
 		NULL, error);
+}
+
+AxisDbConn *
+axis_requests_lock_placing(
+	AxisRequests  *self,
+	gint64         title_id,
+	GError       **error
+){
+	g_autofree gchar *id = axis_requests_int_text(title_id);
+	const gchar *params[] = { id };
+	AxisDbConn *conn = axis_db_pool_acquire(self->pool, error);
+
+	if (conn == NULL)
+		return NULL;
+	if (!axis_db_conn_exec(conn, "SELECT pg_advisory_lock(" LOCK_KEY("axis.request.placing") ")", 1, params, NULL,
+	        error)) {
+		axis_db_pool_release(self->pool, conn);
+		return NULL;
+	}
+	return conn;
+}
+
+void
+axis_requests_unlock_placing(
+	AxisRequests *self,
+	AxisDbConn   *conn,
+	gint64        title_id
+){
+	g_autofree gchar *id = axis_requests_int_text(title_id);
+	g_autoptr(GError) local = NULL;
+	const gchar *params[] = { id };
+
+	if (conn == NULL)
+		return;
+	/* A session's lock outlives a statement: let go of it before the
+	 * connection goes back to the pool.  (A connection that failed to is a
+	 * bad one, which the pool closes, and the lock goes with it.) */
+	if (!axis_db_conn_exec(conn, "SELECT pg_advisory_unlock(" LOCK_KEY("axis.request.placing") ")", 1, params, NULL,
+	        &local))
+		g_warning("requests: the lock on placing title %" G_GINT64_FORMAT " could not be let go: %s", title_id,
+			local->message);
+	axis_db_pool_release(self->pool, conn);
 }
 
 /* ── The settings ───────────────────────────────────────────────── */

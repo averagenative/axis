@@ -9,12 +9,15 @@
  * the same moment (two administrators, or an approval and a withdrawal)
  * exactly one takes effect and the other is told the request was decided.
  *
- * Placing the title comes after the commit and holds no connection while the
- * movies or the TV module works: it adds the title or finds it, monitors the
- * request's seasons (and changes no other), and queues the search.  It can be
- * run again (axis_requests_try_again()): every step finds what an earlier
- * attempt did.  A series this attempt added and could not finish is removed
- * again, so that nothing is added in part.
+ * Placing the title comes after the commit: it adds the title or finds it,
+ * monitors the request's seasons (and changes no other), and queues the
+ * search.  Two placings of one title wait for each other (a lock of the
+ * placing's own, held on one connection for the whole placing); the movies and
+ * the TV module work on connections of their own.  It can be run again
+ * (axis_requests_try_again()): every step finds what an earlier attempt did.
+ * A placing never removes what it added: a series whose season could not be
+ * monitored stays, with the seasons monitored so far, the request says why,
+ * and "Try again" completes it.
  */
 
 #include "requests/axis-requests-private.h"
@@ -71,20 +74,23 @@ find_ref(
 }
 
 /* The request's row locked, inside a transaction with its title locked:
- * its decision and who asked. */
+ * its decision, who asked, and whether its title was added and is still
+ * there (@placed, optional). */
 static gboolean
 lock_request(
 	AxisDbConn  *conn,
 	const Ref   *ref,
 	gchar      **decision,
 	gint64      *requested_by,
+	gboolean    *placed,
 	GError     **error
 ){
 	g_autofree gchar *id = axis_requests_int_text(ref->id);
 	g_autoptr(AxisDbResult) result = NULL;
 	const gchar *params[] = { id };
 
-	if (!axis_db_conn_exec(conn, "SELECT decision, coalesce(requested_by, 0) FROM request WHERE id = $1::bigint"
+	if (!axis_db_conn_exec(conn, "SELECT decision, coalesce(requested_by, 0),"
+	        " added_at IS NOT NULL AND coalesce(movie_id, series_id) IS NOT NULL FROM request WHERE id = $1::bigint"
 	        " FOR UPDATE", 1, params, &result, error))
 		return FALSE;
 	if (axis_db_result_get_n_rows(result) == 0)
@@ -92,6 +98,8 @@ lock_request(
 	*decision = g_strdup(axis_db_result_get_text(result, 0, 0));
 	if (requested_by != NULL)
 		axis_db_result_get_int64(result, 0, 1, requested_by);
+	if (placed != NULL)
+		axis_db_result_get_boolean(result, 0, 2, placed);
 	return TRUE;
 }
 
@@ -257,7 +265,6 @@ place_series(
 	GError       **error
 ){
 	g_autoptr(GError) local = NULL;
-	gboolean created = FALSE;
 	guint i;
 
 	if (!find_managed(self, AXIS_REQUEST_SERIES, title_id, series_id, error))
@@ -274,7 +281,7 @@ place_series(
 		spec.monitor = AXIS_TV_MONITOR_NONE;
 		spec.user = user;
 		if (axis_tv_add(self->tv, &spec, series_id, &local)) {
-			created = TRUE;
+			/* Added: its seasons next. */
 		} else if (g_error_matches(local, AXIS_TV_ERROR, AXIS_TV_ERROR_EXISTS)) {
 			g_clear_error(&local);
 			if (!find_managed(self, AXIS_REQUEST_SERIES, title_id, series_id, error))
@@ -293,18 +300,12 @@ place_series(
 	}
 	/* Approval widens what is monitored and never narrows it: a season is
 	 * only ever switched on here, and the series' folder and profile are its
-	 * own. */
+	 * own.  What fails part-way is left as it is, never removed: the series
+	 * may hold another request's seasons, or an administrator's, by now, and
+	 * "Try again" completes what is left. */
 	for (i = 0; i < seasons->len; i++) {
 		if (axis_tv_set_season_monitored(self->tv, *series_id, g_array_index(seasons, gint, i), TRUE, user, &local))
 			continue;
-		/* Nothing in part: a series this attempt added goes again. */
-		if (created) {
-			g_autoptr(GError) removal = NULL;
-
-			if (!axis_tv_remove(self->tv, *series_id, user, &removal))
-				g_message("requests: a series added for a request could not be removed again: %s",
-					removal->message);
-		}
 		if (is_database_error(local)) {
 			g_propagate_error(error, g_steal_pointer(&local));
 			return FALSE;
@@ -324,8 +325,9 @@ place_series(
 	return TRUE;
 }
 
-gboolean
-axis_requests_place(
+/* The placing itself, with the placing's lock of the title held. */
+static gboolean
+place_locked(
 	AxisRequests  *self,
 	gint64         request_id,
 	gboolean      *added,
@@ -338,15 +340,12 @@ axis_requests_place(
 	g_autofree gchar *problem = NULL;
 	const gchar *params[] = { id };
 	AxisRequestKind kind = AXIS_REQUEST_MOVIE;
-	gboolean dummy;
 	gint64 title_id = 0;
 	gint64 root_id = 0;
 	gint64 profile_id = 0;
 	gint64 managed_id = 0;
+	gboolean placed;
 
-	if (added == NULL)
-		added = &dummy;
-	*added = FALSE;
 	if (!axis_db_pool_exec(self->pool, "SELECT r.title_id, r.kind, coalesce(r.root_id, 0),"
 	        " coalesce(r.quality_profile_id, 0), coalesce(r.decided_by, r.requested_name),"
 	        " coalesce((SELECT string_agg(s.season::text, ',' ORDER BY s.season) FROM request_season s"
@@ -370,14 +369,21 @@ axis_requests_place(
 		/* A title Axis has already needs no folder: it keeps its own. */
 		if (!find_managed(self, kind, title_id, &managed_id, error))
 			return FALSE;
-		if (managed_id == 0 && root_id == 0)
+		if (managed_id == 0 && root_id == 0) {
 			problem = g_strdup("The library folder chosen for it no longer exists.");
-		else if (managed_id == 0 && profile_id == 0)
+		} else if (managed_id == 0 && profile_id == 0) {
 			problem = g_strdup("The quality profile chosen for it no longer exists.");
-		else if (kind == AXIS_REQUEST_SERIES ?
-		         !place_series(self, title_id, root_id, profile_id, seasons, user, &managed_id, &problem, error) :
-		         !place_movie(self, title_id, root_id, profile_id, user, &managed_id, &problem, error))
-			return FALSE;
+		} else {
+			placed = kind == AXIS_REQUEST_SERIES ?
+				place_series(self, title_id, root_id, profile_id, seasons, user, &managed_id, &problem, error) :
+				place_movie(self, title_id, root_id, profile_id, user, &managed_id, &problem, error);
+			if (!placed) {
+				/* The database failed in the middle: said at once, for "Try
+				 * again", when it can still be written. */
+				record_placed(self, request_id, kind, 0, "The database failed while it was being added.", NULL);
+				return FALSE;
+			}
+		}
 	}
 	if (problem == NULL && managed_id == 0)
 		problem = g_strdup("It could not be added.");
@@ -387,7 +393,66 @@ axis_requests_place(
 	return TRUE;
 }
 
+gboolean
+axis_requests_place(
+	AxisRequests  *self,
+	gint64         request_id,
+	gboolean      *added,
+	GError       **error
+){
+	g_autofree gchar *id = axis_requests_int_text(request_id);
+	g_autoptr(AxisDbResult) result = NULL;
+	const gchar *params[] = { id };
+	AxisDbConn *lock;
+	gboolean dummy;
+	gboolean ok;
+	gint64 title_id = 0;
+
+	if (added == NULL)
+		added = &dummy;
+	*added = FALSE;
+	if (!axis_db_pool_exec(self->pool, "SELECT title_id FROM request WHERE id = $1::bigint AND decision = 'approved'", 1,
+	        params, &result, error))
+		return FALSE;
+	if (axis_db_result_get_n_rows(result) == 0)
+		return TRUE;
+	axis_db_result_get_int64(result, 0, 0, &title_id);
+	/* Held until the placing is over, whichever way it ends; the request is
+	 * read again under it. */
+	lock = axis_requests_lock_placing(self, title_id, error);
+	if (lock == NULL)
+		return FALSE;
+	ok = place_locked(self, request_id, added, error);
+	axis_requests_unlock_placing(self, lock, title_id);
+	return ok;
+}
+
 /* ── Approving ──────────────────────────────────────────────────── */
+
+/* A folder given for an approval must be one of the request's kind.  One that
+ * does not exist (any more) passes: it is recorded as none, and the request
+ * then says that its folder is gone. */
+static gboolean
+folder_of_kind(
+	AxisDbConn       *conn,
+	gint64            root_id,
+	AxisRequestKind   kind,
+	GError          **error
+){
+	g_autofree gchar *given = axis_requests_int_text(root_id);
+	g_autoptr(AxisDbResult) found = NULL;
+	const gchar *params[] = { given };
+
+	if (root_id <= 0)
+		return TRUE;
+	if (!axis_db_conn_exec(conn, "SELECT media_type FROM library_root WHERE id = $1::bigint", 1, params, &found, error))
+		return FALSE;
+	if (axis_db_result_get_n_rows(found) > 0 &&
+	    g_strcmp0(axis_db_result_get_text(found, 0, 0), kind == AXIS_REQUEST_SERIES ? "tv" : "movies") != 0)
+		return refuse(error, AXIS_REQUESTS_ERROR_INVALID, kind == AXIS_REQUEST_SERIES ?
+			"that library folder is not one for series" : "that library folder is not one for movies");
+	return TRUE;
+}
 
 typedef struct
 {
@@ -412,28 +477,36 @@ approve_body(
 	g_autofree gchar *root = NULL;
 	g_autofree gchar *profile = NULL;
 	g_autofree gchar *now = axis_requests_int_text(axis_requests_now(self));
+	const gchar *media = NULL;
 	AxisRequestDefaults defaults;
 	gint64 root_id = approval->root_id;
 	gint64 profile_id = approval->profile_id;
+	gboolean placed = FALSE;
 
 	if (!find_ref(conn, approval->public_id, &approval->ref, error) ||
 	    !axis_requests_lock_title(conn, approval->ref.title_id, error) ||
-	    !lock_request(conn, &approval->ref, &decision, NULL, error))
+	    !lock_request(conn, &approval->ref, &decision, NULL, &placed, error))
 		return FALSE;
 	id = axis_requests_int_text(approval->ref.id);
+	media = approval->ref.kind == AXIS_REQUEST_SERIES ? "tv" : "movies";
 	if (approval->again) {
 		const gchar *params[4];
 
 		if (g_strcmp0(decision, "approved") != 0)
 			return refuse(error, AXIS_REQUESTS_ERROR_DECIDED, "the request is not an approved one");
-		if (!axis_requests_defaults_read(self, conn, &defaults, error))
+		/* Only a title that was never added, or is gone: what an
+		 * administrator changed since was changed on purpose. */
+		if (placed)
+			return refuse(error, AXIS_REQUESTS_ERROR_DECIDED, "its title was added and is still in Axis");
+		if (!folder_of_kind(conn, root_id, approval->ref.kind, error) ||
+		    !axis_requests_defaults_read(self, conn, &defaults, error))
 			return FALSE;
 		/* Another folder or profile when given; what the approval had
 		 * otherwise, and the defaults where that is gone. */
 		params[0] = id;
 		params[1] = root = axis_requests_int_text(root_id);
 		params[2] = profile = axis_requests_int_text(profile_id);
-		params[3] = approval->ref.kind == AXIS_REQUEST_SERIES ? "tv" : "movies";
+		params[3] = media;
 		if (!axis_db_conn_exec(conn, "UPDATE request SET"
 		        " root_id = coalesce((SELECT id FROM library_root WHERE id = $2::bigint AND media_type = $4), root_id),"
 		        " quality_profile_id = coalesce((SELECT id FROM quality_profile WHERE id = $3::bigint),"
@@ -452,6 +525,8 @@ approve_body(
 	}
 	if (g_strcmp0(decision, "waiting") != 0)
 		return refuse(error, AXIS_REQUESTS_ERROR_DECIDED, "the request was already decided");
+	if (!folder_of_kind(conn, root_id, approval->ref.kind, error))
+		return FALSE;
 	if (root_id == 0 || profile_id == 0) {
 		if (!axis_requests_defaults_read(self, conn, &defaults, error))
 			return FALSE;
@@ -466,16 +541,17 @@ approve_body(
 	{
 		const gchar *params[] = {
 			id, approval->admin, now, root = axis_requests_int_text(root_id),
-			profile = axis_requests_int_text(profile_id)
+			profile = axis_requests_int_text(profile_id), media
 		};
 
 		/* A folder or a profile that is gone at this moment is recorded as
-		 * none: the title is then not added, and the page says why. */
+		 * none: the title is then not added, and the page says why.  (A
+		 * default is checked for its kind here, as a folder given above.) */
 		return axis_db_conn_exec(conn, "UPDATE request SET decision = 'approved', approved_how = 'admin',"
 			" decided_by = $2, decided_at = " AXIS_REQUESTS_TS(3) ", wait_reason = NULL,"
-			" root_id = (SELECT id FROM library_root WHERE id = $4::bigint),"
+			" root_id = (SELECT id FROM library_root WHERE id = $4::bigint AND media_type = $6),"
 			" quality_profile_id = (SELECT id FROM quality_profile WHERE id = $5::bigint)"
-			" WHERE id = $1::bigint", 5, params, NULL, error);
+			" WHERE id = $1::bigint", 6, params, NULL, error);
 	}
 }
 
@@ -579,7 +655,7 @@ decline_body(
 	Ref ref;
 
 	if (!find_ref(conn, decline->public_id, &ref, error) || !axis_requests_lock_title(conn, ref.title_id, error) ||
-	    !lock_request(conn, &ref, &decision, NULL, error))
+	    !lock_request(conn, &ref, &decision, NULL, NULL, error))
 		return FALSE;
 	if (g_strcmp0(decision, "waiting") != 0)
 		return refuse(error, AXIS_REQUESTS_ERROR_DECIDED, "the request was already decided");
@@ -734,7 +810,7 @@ withdraw_body(
 	Ref ref;
 
 	if (!find_ref(conn, withdrawal->public_id, &ref, error) || !axis_requests_lock_title(conn, ref.title_id, error) ||
-	    !lock_request(conn, &ref, &decision, &by, error))
+	    !lock_request(conn, &ref, &decision, &by, NULL, error))
 		return FALSE;
 	/* Another person's request: the answer of one that does not exist. */
 	if (by != withdrawal->user_id || withdrawal->user_id == 0)
@@ -800,7 +876,7 @@ gone_body(
 	gint64 by = 0;
 
 	if (!axis_requests_lock_title(conn, gone->ref.title_id, error) ||
-	    !lock_request(conn, &gone->ref, &decision, &by, error))
+	    !lock_request(conn, &gone->ref, &decision, &by, NULL, error))
 		return FALSE;
 	/* Decided, or taken over, since it was listed: nothing to do.  (An
 	 * account that was deleted left its requests with no one.) */
