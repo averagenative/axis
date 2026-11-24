@@ -1,0 +1,288 @@
+# portal.yaml - the request portal (axis-portal), optional
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# NOT REVIEWED FOR THE INTERNET.  The request portal, the portal API and the
+# requester role have not had their independent security review.  Until the
+# documents of Axis say that the review has passed, let the portal be reached
+# only from a network you trust: do not point a public host name at it.
+#
+# Left out of kustomization.yaml until you switch it on (README.md, "The
+# request portal"): this file, and portal-axisd.yaml, which gives the daemon
+# its portal listener.  What is here:
+#
+#   Service axisd-portal    the daemon's portal API (port 7801), a Service of
+#                           its own so that the portal is given no name for
+#                           the daemon's main port
+#   Deployment axis-portal  the portal: the same image with another command,
+#                           no database address, no media, no volume but its
+#                           token, read-only, no capability
+#   Service axis-portal     its pages (port 7802), for the ingress
+#   Ingress axis-portal     a host name of its own, with TLS
+#   NetworkPolicy           the portal is reached by the ingress controller
+#                           only, and reaches the daemon's port 7801 and the
+#                           cluster's DNS only; the daemon's port 7801 is
+#                           reached by the portal only
+#
+# The token, and every requester's password and session, cross the pod
+# network between the portal and the daemon unencrypted (plain http).  The
+# policies below let nothing else speak to either port, but they do not
+# encrypt: a pod network is as private as the cluster's nodes and its network
+# plugin make it.  On a cluster that others share, use a plugin that encrypts
+# pod traffic, or put TLS between the two.
+apiVersion: v1
+kind: Service
+metadata:
+  name: axisd-portal
+  labels:
+    app.kubernetes.io/name: axis
+    app.kubernetes.io/component: daemon
+spec:
+  selector:
+    app.kubernetes.io/name: axis
+    app.kubernetes.io/component: daemon
+  ports:
+    - name: portal-api
+      port: 7801
+      targetPort: portal-api
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: axis-portal
+  labels:
+    app.kubernetes.io/name: axis
+    app.kubernetes.io/component: portal
+spec:
+  selector:
+    app.kubernetes.io/name: axis
+    app.kubernetes.io/component: portal
+  ports:
+    - name: http
+      port: 7802
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: axis-portal
+  labels:
+    app.kubernetes.io/name: axis
+    app.kubernetes.io/component: portal
+spec:
+  # One: the portal keeps nothing, but its cheap refusals (the throttle of an
+  # address, the budget of calls) are counted in each pod by itself.
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: axis
+      app.kubernetes.io/component: portal
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: axis
+        app.kubernetes.io/component: portal
+    spec:
+      automountServiceAccountToken: false
+      # Without this, Kubernetes gives the pod AXIS_PORTAL_* variables for
+      # the Service above, which are not settings of the portal (it leaves
+      # them aside and says so in its log).
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 15
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        # Only so that the token's file can be read by the portal's group.
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: axis-portal
+          # EDIT: the same image as in axisd.yaml.
+          image: ghcr.io/averagenative/axis:0.1.0-rc2
+          command: ["/usr/bin/axis-portal"]
+          ports:
+            - name: http
+              containerPort: 7802
+          env:
+            # The daemon's portal listener, and nothing else of the daemon.
+            - name: AXIS_PORTAL_URL
+              value: http://axisd-portal:7801
+            # Plain http on the pod network: see the head of this file.
+            - name: AXIS_PORTAL_ALLOW_INSECURE_HTTP
+              value: "true"
+            - name: AXIS_PORTAL_TOKEN_FILE
+              value: /run/secrets/axis-portal/token
+            - name: AXIS_PORTAL_WEB_LISTEN_HOST
+              value: 0.0.0.0
+            # EDIT: the addresses your ingress controller's pods have, as
+            # AXIS_TRUSTED_PROXIES in axisd.yaml.  The portal serves a login
+            # only to a request that one of them reports as https, and takes
+            # the client's address from it.  Without it nobody can log in.
+            - name: AXIS_PORTAL_TRUSTED_PROXIES
+              value: 10.42.0.0/16
+            - name: AXIS_PORTAL_LOG_FORMAT
+              value: json
+          # The portal answers its probe to its own machine only, so the
+          # probes ask from inside the container.
+          startupProbe:
+            exec:
+              command: ["/usr/bin/axis-portal", "--healthcheck"]
+            periodSeconds: 3
+            failureThreshold: 20
+          livenessProbe:
+            exec:
+              command: ["/usr/bin/axis-portal", "--healthcheck"]
+            periodSeconds: 15
+            timeoutSeconds: 6
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command: ["/usr/bin/axis-portal", "--healthcheck"]
+            periodSeconds: 15
+            timeoutSeconds: 6
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          # The token, and nothing else: no data volume, no media, no /tmp.
+          volumeMounts:
+            - name: token
+              mountPath: /run/secrets/axis-portal
+              readOnly: true
+      volumes:
+        - name: token
+          secret:
+            secretName: axis-portal-token
+            defaultMode: 0440
+            items:
+              - key: token
+                path: token
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: axis-portal
+  labels:
+    app.kubernetes.io/name: axis
+    app.kubernetes.io/component: portal
+spec:
+  # EDIT: your controller's class (traefik, nginx, ...).  The controller must
+  # terminate TLS, redirect plain http, send X-Forwarded-For,
+  # X-Forwarded-Proto and X-Forwarded-Host, and limit what the portal cannot:
+  # the size of a request, the time for its head and body, and the
+  # connections of one address (../../README.md, "The request portal").
+  ingressClassName: traefik
+  tls:
+    - hosts:
+        # EDIT: the name the portal is reached by; a name of its own, never a
+        # path under the name of Axis.
+        - requests.example.com
+      # EDIT: a TLS secret in this namespace.
+      secretName: axis-portal-tls
+  rules:
+    - host: requests.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: axis-portal
+                port:
+                  name: http
+---
+# The portal's pages: from the ingress controller, and from nobody else.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: portal-from-ingress
+  labels:
+    app.kubernetes.io/name: axis
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: axis
+      app.kubernetes.io/component: portal
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        # EDIT: the namespace your ingress controller runs in, as in
+        # networkpolicy.yaml.
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: TCP
+          port: 7802
+---
+# What the portal may reach: the daemon's portal port, and the cluster's DNS
+# to find it.  Nothing else of the cluster and nothing outside it: not the
+# daemon's main port, not the database, not the internet.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: portal-to-axisd-portal-api
+  labels:
+    app.kubernetes.io/name: axis
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: axis
+      app.kubernetes.io/component: portal
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: axis
+              app.kubernetes.io/component: daemon
+      ports:
+        - protocol: TCP
+          port: 7801
+    - to:
+        # EDIT: where your cluster's DNS runs (kube-system on most).
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+# The daemon's portal port: from the portal, and from nobody else.  (Its main
+# port stays as networkpolicy.yaml has it: from the ingress controller only,
+# so the portal cannot reach it.)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: axisd-portal-api-from-portal
+  labels:
+    app.kubernetes.io/name: axis
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: axis
+      app.kubernetes.io/component: daemon
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: axis
+              app.kubernetes.io/component: portal
+      ports:
+        - protocol: TCP
+          port: 7801

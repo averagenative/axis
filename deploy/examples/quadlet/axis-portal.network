@@ -1,0 +1,21 @@
+# axis-portal.network - the network the daemon and the request portal share
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Optional, with axis-portal.container (README.md, "The request portal").
+# Only the daemon and the portal are on it: the database is not, and the
+# portal is on no other network.  The portal's token and the requesters'
+# passwords cross it unencrypted, which is why it holds only those two.
+#
+# The subnet is fixed so that the daemon's address on it can be: the portal
+# API listens on that address alone.  The gateway is the address a request
+# through the portal's published port arrives from, which the portal trusts
+# as its reverse proxy.
+# EDIT: another subnet if 172.31.78.0/24 is in use on this machine (and then
+# the addresses in axis.container and axis-portal.container).
+[Unit]
+Description=The network of Axis and its request portal
+
+[Network]
+NetworkName=axis-portal
+Subnet=172.31.78.0/24
+Gateway=172.31.78.1

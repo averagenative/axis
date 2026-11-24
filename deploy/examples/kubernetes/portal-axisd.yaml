@@ -1,0 +1,22 @@
+# portal-axisd.yaml - gives the daemon its portal listener (a patch)
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Applied by kustomization.yaml with portal.yaml, when you switch the request
+# portal on: the daemon then answers the portal API on port 7801, a listener
+# of its own that answers nothing else.  Without this patch the daemon has no
+# portal listener.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: axisd
+spec:
+  template:
+    spec:
+      containers:
+        - name: axisd
+          ports:
+            - name: portal-api
+              containerPort: 7801
+          env:
+            - name: AXIS_PORTAL_LISTEN_PORT
+              value: "7801"

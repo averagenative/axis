@@ -111,9 +111,11 @@ services:
       retries: 3
       start_period: 60s
     stop_grace_period: 45s
+    # (Written as a map, not a list, so that compose.portal.yaml can add
+    # to it: some Compose front ends cannot merge a list with a map.)
     networks:
-      - axis-proxy
-      - private
+      axis-proxy: {}
+      private: {}
 
   postgres:
     image: docker.io/library/postgres:17

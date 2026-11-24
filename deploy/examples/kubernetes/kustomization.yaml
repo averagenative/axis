@@ -5,6 +5,8 @@
 #
 # worker.yaml is left out until a worker has a token; ingress.yaml is the
 # plain Ingress (use ../traefik/ingressroute.yaml instead for Traefik).
+# portal.yaml and portal-axisd.yaml, the request portal, are left out until
+# you switch them on.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: axis
@@ -19,3 +21,12 @@ resources:
   - ingress.yaml
   - networkpolicy.yaml
   # - worker.yaml
+  # The request portal (not reviewed for the internet; README.md, "The
+  # request portal"): uncomment the line below and the patches block
+  # under it.
+  # - portal.yaml
+# patches:
+#   - path: portal-axisd.yaml
+#     target:
+#       kind: Deployment
+#       name: axisd

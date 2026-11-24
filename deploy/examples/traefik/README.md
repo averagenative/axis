@@ -93,6 +93,119 @@ that reaches Axis some other way (from another container on its network,
 say) with `-H 'X-Forwarded-Proto: https'` gets a cookie without `Secure`:
 the header was ignored.
 
+## The request portal
+
+`compose.portal.yaml` adds the request portal (`axis-portal`) to the Compose
+example: the pages that people who are not administrators use to ask for a
+title. It is optional. `compose.yaml` alone starts no portal, and the daemon
+then has no portal listener.
+
+**The request portal has not been reviewed for exposure to the internet.**
+Until [the deployment guide](../../README.md#the-request-portal) says that
+the review has passed, let the portal be reached only from a network you
+trust. Do not open its host name to the internet.
+
+The portal needs an image that contains `axis-portal`: a release after
+0.1.0-rc2, or an image that you build (`make container`, then
+`AXIS_IMAGE=localhost/axis:latest` in `.env`).
+
+What the file adds:
+
+| Piece | What it is |
+| --- | --- |
+| `portal` | `axis-portal` from the same image, read-only, with no capability, no volume and no secret but its token |
+| `axis-portal` (network) | The daemon and the portal, and nobody else |
+| `axis-portal-proxy` (network) | Traefik and the portal, and nobody else |
+| On `axis` | The portal API on port 7801, on the daemon's address on `axis-portal` alone; the main port on the daemon's address on `axis-proxy` alone |
+
+The portal is not on `axis-proxy` or on `private`, so it can reach neither
+PostgreSQL nor the pages of Axis. It reaches the daemon's port 7801 and
+nothing else. The portal's token and the requesters' passwords cross
+`axis-portal` over plain HTTP, which is why that network holds only the
+daemon and the portal.
+
+What to edit in `compose.portal.yaml` (marked `EDIT`): the host name of the
+portal in the router rule, the image line, and the subnet if `172.30.1.0/24`
+is taken.
+
+1. Bring up `compose.yaml` first and create the first administrator, as in
+   [Compose](#compose).
+2. Start Axis with the portal's file, so that the daemon gets its portal
+   listener. The portal itself cannot start yet, because its token does not
+   exist:
+
+   ```sh
+   : > secrets/axis_portal_token
+   docker compose -f compose.yaml -f compose.portal.yaml up -d axis
+   ```
+
+3. In Axis, open **System**, then **Request portal**. The page says "On: the
+   portal API is answered on port 7801". Select **Make a token**, and copy
+   the token that Axis shows once.
+4. Put the token in the secret file. Let the portal's user read the file,
+   and nobody else:
+
+   ```sh
+   printf '%s' 'THE-TOKEN' > secrets/axis_portal_token
+   chmod 600 secrets/axis_portal_token
+   ```
+
+   The file must belong to the user that the portal runs as (`PUID`). With
+   rootless Podman, that user is counted inside your user namespace: run
+   `podman unshare chown 1000:1000 secrets/axis_portal_token` for the
+   default `PUID`.
+
+5. Create a requester account: open **System**, then **Users**, and set
+   **Role** to **Requester (the request portal only)**.
+6. Point the DNS name of the portal at this machine, and start everything:
+
+   ```sh
+   docker compose -f compose.yaml -f compose.portal.yaml up -d
+   ```
+
+7. Open `https://requests.example.com/login`, with your host name, and log
+   in as the requester.
+
+From then on, name both files in every `docker compose` command for this
+directory. A command that names only `compose.yaml` removes the portal and
+the daemon's portal listener at the next `up -d`.
+
+Check that it worked:
+
+```sh
+docker compose -f compose.yaml -f compose.portal.yaml ps portal     # healthy
+curl -sI https://requests.example.com/login | grep -i -e '^HTTP' -e strict-transport
+curl -s -o /dev/null -w '%{http_code}\n' https://requests.example.com/admin/users   # 404
+```
+
+The first `curl` shows `200` and a `Strict-Transport-Security` header. The
+second shows `404`: no page of Axis is reachable through the portal.
+
+If the login page says "This portal answers over HTTPS only", the portal
+does not believe Traefik. Read `docker compose ... logs portal`: one line
+names the address that forwarded headers came from. `AXIS_PORTAL_TRUSTED_PROXIES`
+must resolve to that address.
+
+Traefik gives the portal what it cannot do itself: the redirect from HTTP,
+HSTS, a limit of 64 KiB on a request's body, a limit on the requests one
+address has open, and a rate limit. Traefik v3 allows 60 seconds for a
+request's head and body by default
+(`--entrypoints.websecure.transport.respondingTimeouts.readTimeout`); do
+not set it to 0.
+
+To replace the token: make a second token in Axis, write it to
+`secrets/axis_portal_token`, run `docker compose -f compose.yaml -f
+compose.portal.yaml up -d --force-recreate portal`, and then revoke the
+first token. Everyone who is logged in to the portal logs in again.
+
+With Podman, the notes under [Podman](#podman) apply to the portal too.
+Through a published port of rootless Podman, Traefik sees the network's own
+address for every client, so the portal counts every visitor as one address
+for its login throttle.
+
+Not run for this example: Docker, a certificate from a real certificate
+authority, and the Kubernetes `ingressroute.yaml` with the portal.
+
 ## Back up and restore
 
 Follow [Backing up the database](../../README.md#backing-up-the-database):

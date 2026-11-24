@@ -29,6 +29,13 @@ Environment=AXIS_LOG_LEVEL=info
 # journal (README.md, step 1):
 # Secret=axis_admin_password,type=mount,target=/run/secrets/axis_admin_password
 # Environment=AXIS_ADMIN_USERNAME=admin AXIS_ADMIN_PASSWORD_FILE=/run/secrets/axis_admin_password
+# The request portal (optional, and not reviewed for the internet: README.md,
+# "The request portal").  Uncomment the three lines: the daemon joins the
+# portal's network at a fixed address, and answers the portal API there, on
+# a port of its own that answers nothing else.
+# Network=axis-portal.network:ip=172.31.78.2
+# Environment=AXIS_PORTAL_LISTEN_PORT=7801
+# Environment=AXIS_PORTAL_LISTEN_HOST=172.31.78.2
 # EDIT: the user and group that may read your media (any numeric ids).
 User=1000
 Group=1000

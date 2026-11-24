@@ -1,0 +1,147 @@
+# compose.portal.yaml - the request portal, added to the Traefik example
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# NOT REVIEWED FOR THE INTERNET.  The request portal (axis-portal), the portal
+# API and the requester role have not had their independent security review.
+# Until the documents of Axis say that the review has passed, let the portal
+# be reached only from a network you trust: do not open its host name to the
+# internet.
+#
+# Optional, and left out unless you name this file.  compose.yaml alone
+# starts no portal and gives the daemon no portal listener.  To add the
+# portal (README.md, "The request portal", has the steps in order):
+#
+#   docker compose -f compose.yaml -f compose.portal.yaml up -d
+#
+# What this file adds:
+#
+#   portal   axis-portal, from the same image with another entrypoint: the
+#            pages people who are not administrators use to ask for a title.
+#            It has no database address, no media, no volume and no secret
+#            but its token; it is read-only, has no capability and writes
+#            nothing.
+#   axis     gains the portal API on port 7801, bound to its address on the
+#            network axis-portal alone, and its main listener (7800) is bound
+#            to its address on the network axis-proxy alone.  So the portal's
+#            container reaches the portal API and nothing else of Axis: not
+#            the login page, not the interface, not the worker API.
+#
+# The networks:
+#
+#   axis-portal        axis and portal, and nobody else.  The portal's token
+#                      and the requesters' passwords cross it unencrypted
+#                      (plain http, AXIS_PORTAL_ALLOW_INSECURE_HTTP): that is
+#                      why it holds only those two.
+#   axis-portal-proxy  traefik and portal, and nobody else.
+#   axis-proxy         traefik and axis, as before.  The portal is not on it.
+#   private            axis and postgres, as before.  The portal is not on it.
+#
+# Change the lines marked EDIT.
+
+services:
+  traefik:
+    networks:
+      axis-portal-proxy: {}
+
+  axis:
+    environment:
+      # The portal API: a listener of its own, which answers the portal API
+      # and nothing else, on the daemon's address on the portal's network.
+      AXIS_PORTAL_LISTEN_PORT: "7801"
+      AXIS_PORTAL_LISTEN_HOST: 172.30.1.2
+      # The main listener: on the daemon's address on Traefik's network
+      # only, so that it is not answered on the portal's network.  The health
+      # check asks this address.
+      AXIS_LISTEN_HOST: 172.30.0.3
+    networks:
+      axis-proxy:
+        ipv4_address: 172.30.0.3
+      private: {}
+      axis-portal:
+        ipv4_address: 172.30.1.2
+
+  portal:
+    # EDIT: the same image as axis in compose.yaml.
+    image: ${AXIS_IMAGE:-ghcr.io/averagenative/axis:0.1.0-rc2}
+    entrypoint: ["/usr/bin/axis-portal"]
+    restart: unless-stopped
+    user: "${PUID:-1000}:${PGID:-1000}"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 64
+    mem_limit: 256m
+    # No volume and no tmpfs: the portal writes no file.  (Docker then gives
+    # it nothing writable.  Podman mounts its own small tmpfs on /tmp, /run
+    # and /var/tmp in every read-only container; the portal does not use
+    # them.)
+    environment:
+      # The daemon's portal listener, by the daemon's name on the network the
+      # two share.  Plain http: see "The networks" above.
+      AXIS_PORTAL_URL: http://axis:7801
+      AXIS_PORTAL_ALLOW_INSECURE_HTTP: "true"
+      AXIS_PORTAL_TOKEN_FILE: /run/secrets/axis_portal_token
+      # Every interface of the container; its networks decide who reaches it.
+      AXIS_PORTAL_WEB_LISTEN_HOST: 0.0.0.0
+      # Traefik, by its service name, and nothing else.  The portal serves a
+      # login only to a request that Traefik reports as https, and takes the
+      # client's address from Traefik.  Without this line nobody can log in.
+      AXIS_PORTAL_TRUSTED_PROXIES: traefik
+    secrets:
+      - axis_portal_token
+    # No ports: Traefik is the way in.
+    labels:
+      - traefik.enable=true
+      # Traefik reaches the portal on the network the two share, not on
+      # the one it reaches Axis on.
+      - traefik.docker.network=axis-portal-proxy
+      # EDIT: the name the portal is reached by.  A name of its own: never a
+      # path under the name of Axis.
+      - traefik.http.routers.axis-portal.rule=Host(`requests.example.com`)
+      - traefik.http.routers.axis-portal.entrypoints=websecure
+      - traefik.http.routers.axis-portal.tls=true
+      - traefik.http.routers.axis-portal.tls.certresolver=letsencrypt
+      - traefik.http.services.axis-portal.loadbalancer.server.port=7802
+      - traefik.http.routers.axis-portal.middlewares=axis-portal-headers,axis-portal-body,axis-portal-inflight,axis-portal-rate
+      # What the portal cannot do itself, so the proxy must: HSTS (the portal
+      # sends it too), a cap on a request's size before it is read, a cap on
+      # the requests one address has open, and on how many it makes.
+      - traefik.http.middlewares.axis-portal-headers.headers.stsseconds=31536000
+      - traefik.http.middlewares.axis-portal-body.buffering.maxrequestbodybytes=65536
+      - traefik.http.middlewares.axis-portal-inflight.inflightreq.amount=16
+      - traefik.http.middlewares.axis-portal-rate.ratelimit.average=20
+      - traefik.http.middlewares.axis-portal-rate.ratelimit.burst=60
+    depends_on:
+      axis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/usr/bin/axis-portal", "--healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    stop_grace_period: 15s
+    networks:
+      - axis-portal
+      - axis-portal-proxy
+
+networks:
+  # The daemon and the portal, and nobody else.  The subnet is fixed so that
+  # the daemon's address on it can be: the portal API listens on that address
+  # alone.
+  # EDIT: another subnet if 172.30.1.0/24 is in use on this host (and then
+  # the two 172.30.1.2 above).
+  axis-portal:
+    name: axis-portal
+    ipam:
+      config:
+        - subnet: 172.30.1.0/24
+  # Traefik and the portal, and nobody else.
+  axis-portal-proxy:
+    name: axis-portal-proxy
+
+secrets:
+  axis_portal_token:
+    file: ./secrets/axis_portal_token
