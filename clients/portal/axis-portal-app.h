@@ -13,17 +13,22 @@
  *
  * One function answers every request (there is no router to add a route
  * to), in this order, and whatever it answers carries the security headers
- * of the engine's interface (web/axis-web-headers.h):
+ * of the engine's interface (web/axis-web-headers.h), with the portal's own
+ * stricter content security policy (AXIS_PORTAL_CSP), and over HTTPS
+ * Strict-Transport-Security:
  *
  *   1. the path is one of the portal's own, written exactly, or the answer
  *      is the portal's own 404.  Nothing is passed on, ever;
  *   2. the method is one the path takes (405);
- *   3. the stylesheet and the probe (the probe to a loopback address that
- *      forwards for nobody; 404 for anyone else) are answered here;
- *   4. the request came over HTTPS, as a listed trusted proxy reports it,
- *      or the answer is a page that says the portal needs it (unless the
- *      test-only override is set).  Forwarding headers from anyone else are
- *      ignored;
+ *   3. the stylesheet and the probe (the probe to a loopback address, with a
+ *      loopback Host, that forwards for nobody: no forwarding header of any
+ *      kind; 404 for anyone else) are answered here;
+ *   4. a listed trusted proxy that does not say who the client is (no
+ *      X-Forwarded-For with an address that is not a proxy's) is answered
+ *      503, and a line of the log says why; the request came over HTTPS, as
+ *      a listed trusted proxy reports it, or the answer is a page that says
+ *      the portal needs it (unless the test-only override is set).
+ *      Forwarding headers from anyone else are ignored;
  *   5. the query and, for a POST, the form are read by axis-portal-form.h or
  *      refused whole (400; a form that is not urlencoded 415); a POST that
  *      the browser reports as coming from another site is refused (403);
@@ -69,6 +74,16 @@ G_BEGIN_DECLS
 
 /* The largest body of a request (the limits answer 413 beyond it). */
 #define AXIS_PORTAL_MAX_BODY_BYTES        (64 * 1024)
+
+/* The portal's content security policy: the engine interface's is wider
+ * than the portal needs.  Its pages load nothing but its own stylesheet and
+ * pictures, have no script at all, and post only to itself. */
+#define AXIS_PORTAL_CSP "default-src 'none'; style-src 'self'; img-src 'self'; form-action 'self'; " \
+	"frame-ancestors 'none'; base-uri 'none'"
+
+/* Sent with every answer to a visit that came over HTTPS: a browser that has
+ * seen it does not open the portal over plain http again for a year. */
+#define AXIS_PORTAL_HSTS "max-age=31536000"
 
 /* What `whoami` said is kept this long, to draw a page's header. */
 #define AXIS_PORTAL_WHO_SECONDS           30

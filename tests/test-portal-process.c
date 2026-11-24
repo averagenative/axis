@@ -761,9 +761,10 @@ test_restart(Fixture *fx, gconstpointer data)
 	g_assert_cmpint(run_portal(fx, health_env, "--healthcheck", NULL, &err), ==, 0);
 	g_clear_pointer(&err, g_free);
 
-	/* Spec (portal): Headers -- a page of the portal carries the content
-	 * security policy and the security headers of the engine's interface:
-	 * compared with what the daemon itself sends with its login page. */
+	/* Spec (portal): Headers -- a page of the portal carries the security
+	 * headers of the engine's interface, compared with what the daemon
+	 * itself sends with its login page, and a content security policy of its
+	 * own that allows less; over HTTPS, Strict-Transport-Security. */
 	{
 		static const gchar *const pages[] = { "/login", "/", "/nothing-here", "/static/portal.css", NULL };
 		const gchar *const *names = axis_web_security_header_names();
@@ -777,8 +778,16 @@ test_restart(Fixture *fx, gconstpointer data)
 			for (j = 0; pages[j] != NULL; j++) {
 				g_autofree gchar *portals = header_of(fx->port, pages[j], OUTSIDE, names[i]);
 
-				g_assert_cmpstr(portals, ==, engines);
+				if (strcmp(names[i], "Content-Security-Policy") == 0)
+					g_assert_cmpstr(portals, ==, AXIS_PORTAL_CSP);
+				else
+					g_assert_cmpstr(portals, ==, engines);
 			}
+		}
+		for (j = 0; pages[j] != NULL; j++) {
+			g_autofree gchar *hsts = header_of(fx->port, pages[j], OUTSIDE, "Strict-Transport-Security");
+
+			g_assert_cmpstr(hsts, ==, AXIS_PORTAL_HSTS);
 		}
 	}
 

@@ -119,6 +119,10 @@ typedef struct
 	 * beyond it is answered with (%NULL: no body). */
 	guint        max_body_bytes;
 	const gchar *too_large_json;
+	/* The Content-Security-Policy of the refusals written here, when the
+	 * listener has one of its own (the request portal's); %NULL: the
+	 * shell's (AXIS_WEB_CSP). */
+	const gchar *content_security_policy;
 } AxisWebLimitsOptions;
 
 typedef struct _AxisWebLimits AxisWebLimits;

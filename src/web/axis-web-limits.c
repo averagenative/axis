@@ -81,6 +81,7 @@ struct _AxisWebLimits
 	gboolean       local_is_public;	/* tests: loopback held to the per-address cap */
 	goffset        max_body;	/* 0: the shell's limits */
 	gchar         *too_large_json;	/* the body of a 413, or NULL for none */
+	gchar         *csp;		/* the refusals' Content-Security-Policy, or NULL for the shell's */
 	AxisProxyList *own_trusted;
 	AxisWebLimitsTrustedFunc trusted;	/* whose proxies, or NULL for own_trusted */
 	AxisWebLimitsExemptFunc  exempt;	/* which requests the caps are not for, or NULL */
@@ -365,8 +366,21 @@ on_linger_readable(
  * is dropped.  Falls back to libsoup's own refusal if the connection cannot
  * be taken.
  */
+/* The shell's security headers, with the listener's own policy if it has
+ * one, and "no-store". */
+static void
+security_headers(
+	AxisWebLimits      *self,
+	SoupMessageHeaders *headers
+){
+	axis_web_replace_security_headers(headers);
+	if (self->csp != NULL)
+		soup_message_headers_replace(headers, "Content-Security-Policy", self->csp);
+}
+
 static void
 answer_now(
+	AxisWebLimits     *self,
 	SoupServerMessage *message,
 	guint              status,
 	const gchar       *retry_after,
@@ -389,14 +403,14 @@ answer_now(
 
 		soup_message_body_set_accumulate(soup_server_message_get_request_body(message), FALSE);
 		soup_server_message_set_status(message, status, NULL);
-		axis_web_replace_security_headers(response);
+		security_headers(self, response);
 		soup_message_headers_replace(response, "Connection", "close");
 		if (retry_after != NULL)
 			soup_message_headers_replace(response, "Retry-After", retry_after);
 		return;
 	}
 
-	axis_web_replace_security_headers(headers);
+	security_headers(self, headers);
 	soup_message_headers_replace(headers, "Content-Type", "text/plain; charset=utf-8");
 	soup_message_headers_replace(headers, "Connection", "close");
 	if (retry_after != NULL)
@@ -450,6 +464,7 @@ in_flight_free(gpointer data)
 /* A refusal libsoup writes: the body is read and dropped first. */
 static void
 refuse(
+	AxisWebLimits     *self,
 	SoupServerMessage *message,
 	guint              status
 ){
@@ -457,7 +472,7 @@ refuse(
 
 	soup_message_body_set_accumulate(soup_server_message_get_request_body(message), FALSE);
 	soup_server_message_set_status(message, status, NULL);
-	axis_web_replace_security_headers(headers);
+	security_headers(self, headers);
 	soup_message_headers_replace(headers, "Connection", "close");
 }
 
@@ -529,7 +544,8 @@ on_got_headers(
 				return;
 			}
 			note_refused(self, conn->peer, conn->waiting, "a request");
-			answer_now(message, 503, "5", "Axis has too many connections open right now. Try again in a few seconds.\n");
+			answer_now(self, message, 503, "5", "Axis has too many connections open right now. Try again in a few "
+				"seconds.\n");
 			return;
 		}
 	}
@@ -540,8 +556,8 @@ on_got_headers(
 	if (has_body && !g_atomic_int_get(&self->bodies)) {
 		const gchar *text = self->refusal != NULL ? self->refusal(self->refusal_data) : NULL;
 
-		answer_now(message, 503, "5", text != NULL ? text : "Axis is not ready for this request. Try again in a few "
-			"seconds.\n");
+		answer_now(self, message, 503, "5", text != NULL ? text : "Axis is not ready for this request. Try again in a "
+			"few seconds.\n");
 		return;
 	}
 
@@ -551,7 +567,7 @@ on_got_headers(
 		is_worker_path(path) ? AXIS_WEB_LIMITS_WORKER_BODY : AXIS_WEB_MAX_REQUEST_BODY;
 	if (has_body && (encoding != SOUP_ENCODING_CONTENT_LENGTH ||
 	                 soup_message_headers_get_content_length(headers) > limit)) {
-		refuse(message, 413);
+		refuse(self, message, 413);
 		if (self->too_large_json != NULL)
 			soup_server_message_set_response(message, "application/json", SOUP_MEMORY_COPY, self->too_large_json,
 				strlen(self->too_large_json));
@@ -575,7 +591,7 @@ on_got_headers(
 				"(server.max_connections_per_address)", "a request");
 			g_free(flight->client);
 			g_free(flight);
-			answer_now(message, 429, "5", "Too many requests from your address at once. Try again in a few "
+			answer_now(self, message, 429, "5", "Too many requests from your address at once. Try again in a few "
 				"seconds.\n");
 			return;
 		}
@@ -786,7 +802,8 @@ axis_web_limits_install(
 	self->local_is_public = options->local_is_public;
 	self->max_body = (goffset)options->max_body_bytes;
 	self->too_large_json = g_strdup(options->too_large_json);
-	self->own_trusted = axis_proxy_list_parse(options->trusted_proxies != NULL ? options->trusted_proxies : "", NULL);
+	self->csp = g_strdup(options->content_security_policy);
+	self->own_trusted =axis_proxy_list_parse(options->trusted_proxies != NULL ? options->trusted_proxies : "", NULL);
 	if (self->own_trusted == NULL)
 		self->own_trusted = axis_proxy_list_parse("", NULL);
 	self->conns = g_hash_table_new_full(g_direct_hash, g_direct_equal, NULL, (GDestroyNotify)conn_free);
@@ -831,6 +848,7 @@ axis_web_limits_unref(AxisWebLimits *self)
 	axis_proxy_list_free(self->own_trusted);
 	g_free(self->refused_peer);
 	g_free(self->too_large_json);
+	g_free(self->csp);
 	g_free(self);
 }
 

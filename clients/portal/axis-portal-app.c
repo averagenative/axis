@@ -203,6 +203,7 @@ struct _AxisPortalApp
 	gsize              poster_bytes;
 	guint              pending;	/* pages waiting for the daemon */
 	gboolean           stopping;
+	gboolean           said_https;	/* the line on plain http was written */
 	gint64             time_offset_us;
 	guint              noted[N_NOTES];	/* how many of each kind there were */
 	AxisPortalLogBudget lines[N_NOTES];	/* how many were written */
@@ -596,12 +597,20 @@ to_login(
 	return response;
 }
 
-/* The security headers of the engine's interface, and no caching unless the
- * answer has a policy of its own (the stylesheet, a poster). */
+/* The security headers of the engine's interface with the portal's own
+ * content security policy, Strict-Transport-Security when the visit came
+ * over HTTPS, and no caching unless the answer has a policy of its own (the
+ * stylesheet, a poster). */
 static void
-finish_headers(HtmxResponse *response)
-{
+finish_headers(
+	HtmxResponse *response,
+	gboolean      https
+){
 	axis_web_add_security_headers(response);
+	/* (One value for each name: this replaces the engine's.) */
+	htmx_response_add_header(response, "Content-Security-Policy", AXIS_PORTAL_CSP);
+	if (https)
+		htmx_response_add_header(response, "Strict-Transport-Security", AXIS_PORTAL_HSTS);
 	if (g_object_get_data(G_OBJECT(response), KEEP_CACHE_KEY) == NULL)
 		htmx_response_add_header(response, "Cache-Control", "no-store");
 }
@@ -1801,8 +1810,11 @@ handle_session(
 	/* A search is a GET, and the session cookie is Lax: a link on another
 	 * site would spend the person's searches.  (The session's own counts
 	 * are taken in page_run(), once the daemon has said whose it is.) */
-	if (visit->route == AXIS_PORTAL_ROUTE_SEARCH && query != NULL && visit->cross_site)
+	if (visit->route == AXIS_PORTAL_ROUTE_SEARCH && query != NULL && visit->cross_site) {
+		note(self, NOTE_CROSS_SITE, "refused a search from %s as from another site: the browser says so in "
+			"Sec-Fetch-Site", visit->client);
 		return forbidden();
+	}
 
 	who = who_lookup(self, visit->session_key);
 	/* A poster the portal holds, for a person the daemon knew within the
@@ -1865,11 +1877,102 @@ handle_session(
 	return deferred;
 }
 
-/* Answers one request: see the order in axis-portal-app.h. */
+/* What a header a stranger wrote may be logged as: at most 100 characters
+ * of [A-Za-z0-9.:[]_-], any other one a '?'. */
+static gchar *
+loggable(const gchar *text)
+{
+	GString *out = g_string_new(NULL);
+	const gchar *p;
+
+	for (p = text != NULL ? text : ""; *p != '\0' && out->len < 100; p++)
+		g_string_append_c(out, g_ascii_isalnum(*p) || strchr(".:[]_-", *p) != NULL ? *p : '?');
+	return g_string_free(out, FALSE);
+}
+
+/* Logs a post (or a search) refused as from another site, with what was
+ * compared, so that a proxy that rewrites Host without X-Forwarded-Host can
+ * be found from the log. */
+static void
+note_cross_site(
+	AxisPortalApp *self,
+	HtmxRequest   *request,
+	const gchar   *forwarded_host,
+	const gchar   *client
+){
+	const gchar *site = header_of(request, "Sec-Fetch-Site");
+	const gchar *origin = header_of(request, "Origin");
+	const gchar *host = forwarded_host != NULL ? forwarded_host : header_of(request, "Host");
+
+	if (site != NULL && strcmp(site, "same-origin") != 0) {
+		g_autofree gchar *said = loggable(site);
+
+		note(self, NOTE_CROSS_SITE, "refused a request from %s as from another site: the browser says Sec-Fetch-Site: "
+			"%s", client, said);
+	} else {
+		g_autofree gchar *from = loggable(origin != NULL && strstr(origin, "://") != NULL ? strstr(origin, "://") + 3 :
+			origin);
+		g_autofree gchar *to = loggable(host);
+
+		note(self, NOTE_CROSS_SITE, "refused a post from %s as from another site: its Origin is %s and the host is %s "
+			"(%s; a proxy that rewrites Host must send X-Forwarded-Host)", client, from, to,
+			forwarded_host != NULL ? "from X-Forwarded-Host" : "from Host");
+	}
+}
+
+/* Whether a Host header names this machine by a loopback address. */
+static gboolean
+host_is_loopback(const gchar *host)
+{
+	g_autofree gchar *address = NULL;
+	AxisIpAddress parsed;
+	const gchar *colon;
+
+	if (host == NULL || host[0] == '\0')
+		return FALSE;
+	if (host[0] == '[') {
+		const gchar *end = strchr(host, ']');
+
+		if (end == NULL || (end[1] != '\0' && end[1] != ':'))
+			return FALSE;
+		address = g_strndup(host + 1, (gsize)(end - host - 1));
+	} else {
+		colon = strchr(host, ':');
+		address = colon != NULL && strchr(colon + 1, ':') == NULL ? g_strndup(host, (gsize)(colon - host)) :
+			g_strdup(host);
+	}
+	return axis_ip_address_parse(address, &parsed) && axis_ip_address_is_loopback(&parsed);
+}
+
+/* Whether the probe is asked by this machine itself, for nobody else: a
+ * loopback peer, a loopback Host, and no header of any proxy. */
+static gboolean
+probe_is_local(
+	HtmxRequest *request,
+	const gchar *peer
+){
+	static const gchar *const forwarding[] = {
+		"X-Forwarded-For", "Forwarded", "X-Real-IP", "Via", "X-Forwarded-Proto", "X-Forwarded-Host", NULL
+	};
+	AxisIpAddress from;
+	guint i;
+
+	if (peer == NULL || !axis_ip_address_parse(peer, &from) || !axis_ip_address_is_loopback(&from))
+		return FALSE;
+	for (i = 0; forwarding[i] != NULL; i++) {
+		if (header_of(request, forwarding[i]) != NULL)
+			return FALSE;
+	}
+	return host_is_loopback(header_of(request, "Host"));
+}
+
+/* Answers one request: see the order in axis-portal-app.h.  @https: (out)
+ * whether the visit came over HTTPS. */
 static HtmxResponse *
 serve(
 	AxisPortalApp *self,
-	HtmxRequest   *request
+	HtmxRequest   *request,
+	gboolean      *https
 ){
 	SoupServerMessage *message = htmx_request_get_message(request);
 	HtmxMethod method = htmx_request_get_method(request);
@@ -1879,6 +1982,8 @@ serve(
 	g_autofree gchar *cookie = NULL;
 	HtmxResponse *response = NULL;
 	AxisIpAddress from;
+	gboolean proxied;
+	gboolean blind = FALSE;
 	gboolean readable;
 	gchar *expected;
 	Visit visit;
@@ -1888,6 +1993,29 @@ serve(
 	memset(&visit, 0, sizeof(visit));
 	if (self->stopping)
 		return unavailable();
+
+	/* Who asks, and how: decided here, once, from the peer and from what a
+	 * listed proxy says.  Anyone else's forwarding headers are ignored.
+	 * (Before anything is answered: every answer to a visit over HTTPS has
+	 * Strict-Transport-Security, a 404 too.) */
+	axis_proxy_resolve_full(self->trusted, peer, FALSE, header_list_of(request, "X-Forwarded-For"),
+		header_list_of(request, "X-Forwarded-Proto"), header_list_of(request, "X-Forwarded-Host"), &visit.client,
+		&visit.https, &forwarded_host);
+	/* (Said here: a page that waits for the daemon takes the visit.) */
+	*https = visit.https;
+	visit.client_key = axis_proxy_address_key(visit.client);
+	proxied =peer != NULL && axis_ip_address_parse(peer, &from) && axis_proxy_list_contains(self->trusted, &from);
+	if (self->resolver != NULL && peer != NULL && axis_ip_address_parse(peer, &from) && !proxied)
+		axis_proxy_resolver_poke(self->resolver);
+	/* A listed proxy that says nothing of who the client is (no
+	 * X-Forwarded-For, one that cannot be read, or only proxies in it) would
+	 * make every visitor one client: one throttle, and one address told to
+	 * the daemon. */
+	if (proxied) {
+		AxisIpAddress client;
+
+		blind = !axis_ip_address_parse(visit.client, &client) || axis_proxy_list_contains(self->trusted, &client);
+	}
 
 	/* 1. One of the portal's own paths, or its own 404. */
 	visit.route = axis_portal_route_parse(htmx_request_get_path(request), &visit.id, &visit.request_id);
@@ -1917,16 +2045,6 @@ serve(
 	if (response != NULL)
 		goto out;
 
-	/* Who asks, and how: decided here, once, from the peer and from what a
-	 * listed proxy says.  Anyone else's forwarding headers are ignored. */
-	axis_proxy_resolve_full(self->trusted, peer, FALSE, header_list_of(request, "X-Forwarded-For"),
-		header_list_of(request, "X-Forwarded-Proto"), header_list_of(request, "X-Forwarded-Host"), &visit.client,
-		&visit.https, &forwarded_host);
-	visit.client_key = axis_proxy_address_key(visit.client);
-	if (self->resolver != NULL && peer != NULL && axis_ip_address_parse(peer, &from) &&
-	    !axis_proxy_list_contains(self->trusted, &from))
-		axis_proxy_resolver_poke(self->resolver);
-
 	/* 3. The stylesheet, and the probe. */
 	if (visit.route == AXIS_PORTAL_ROUTE_STYLE) {
 		response = htmx_response_new();
@@ -1938,8 +2056,7 @@ serve(
 	if (visit.route == AXIS_PORTAL_ROUTE_HEALTH) {
 		/* Only to this machine itself, asking for nobody else: it says that
 		 * the program runs, and nothing more. */
-		if (peer != NULL && axis_ip_address_parse(peer, &from) && axis_ip_address_is_loopback(&from) &&
-		    header_of(request, "X-Forwarded-For") == NULL && header_of(request, "Forwarded") == NULL) {
+		if (probe_is_local(request, peer)) {
 			response = htmx_response_new();
 			htmx_response_set_content(response, "ok\n");
 			htmx_response_set_content_type(response, "text/plain; charset=utf-8");
@@ -1949,11 +2066,24 @@ serve(
 		goto out;
 	}
 
-	/* 4. Over HTTPS, or not at all. */
+	/* 4. A proxy that says who the client is, over HTTPS, or not at all. */
+	if (blind) {
+		note(self, NOTE_PROXY, "refused a visit: the trusted proxy %s did not say who the client is (an "
+			"X-Forwarded-For whose last address is not a trusted proxy's is needed)", visit.client);
+		response = unavailable();
+		goto out;
+	}
 	if (!visit.https && !self->insecure) {
+		/* What the administrator must do is said in the log, once: a
+		 * stranger is not told what the program is or how it is set up. */
+		if (!self->said_https) {
+			self->said_https = TRUE;
+			g_message("refused a visit over plain http, and will refuse every one without a line each: the portal "
+				"serves only what a reverse proxy listed in trusted_proxies (AXIS_PORTAL_TRUSTED_PROXIES) reports as "
+				"https (X-Forwarded-Proto)");
+		}
 		response = say(403, "HTTPS is needed", "This portal answers over HTTPS only. Open it through its https "
-			"address. If you are its administrator: the portal must be behind a reverse proxy that it trusts "
-			"(AXIS_PORTAL_TRUSTED_PROXIES) and that reports the visit as https.");
+			"address.");
 		goto out;
 	}
 	visit.secure = visit.https || !self->insecure;
@@ -1993,6 +2123,7 @@ serve(
 			goto out;
 		}
 		if (!same_origin(request, forwarded_host, visit.https)) {
+			note_cross_site(self, request, forwarded_host, visit.client);
 			response = forbidden();
 			goto out;
 		}
@@ -2074,7 +2205,7 @@ on_page_complete(
 	HtmxResponse *response,
 	gpointer      user_data
 ){
-	finish_headers(response);
+	finish_headers(response, GPOINTER_TO_INT(user_data));
 }
 
 /* The one function that answers every request.  The router is never
@@ -2087,14 +2218,15 @@ portal_middleware(
 	gpointer            user_data
 ){
 	AxisPortalApp *self = user_data;
-	HtmxResponse *response = serve(self, htmx_context_get_request(context));
+	gboolean https = FALSE;
+	HtmxResponse *response = serve(self, htmx_context_get_request(context), &https);
 
 	if (response == NULL)
 		response = not_found();
 	if (htmx_response_is_deferred(response))
-		htmx_response_on_complete(response, on_page_complete, NULL, NULL);
+		htmx_response_on_complete(response, on_page_complete, GINT_TO_POINTER(https), NULL);
 	else
-		finish_headers(response);
+		finish_headers(response, https);
 	htmx_context_set_response(context, response);
 }
 
@@ -2184,6 +2316,7 @@ axis_portal_app_install(
 	options.max_connections = self->max_connections;
 	options.max_per_address = self->max_per_address;
 	options.max_body_bytes = AXIS_PORTAL_MAX_BODY_BYTES;
+	options.content_security_policy = AXIS_PORTAL_CSP;
 	limits = axis_web_limits_install(server, &options);
 	axis_web_limits_set_sources(limits, limits_trusted, NULL, self);
 	htmx_server_use(server, portal_middleware, self, NULL);

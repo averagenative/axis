@@ -422,6 +422,21 @@ fixture_teardown(Fixture *fx, gconstpointer data)
 		g_error("%s:%d: \"%s\" is in:\n%s", __FILE__, __LINE__, (needle), (text)); \
 } G_STMT_END
 
+/* How many times @needle is in @text. */
+static guint
+count_of(
+	const gchar *text,
+	const gchar *needle
+){
+	guint n = 0;
+
+	while ((text = strstr(text, needle)) != NULL) {
+		n++;
+		text += strlen(needle);
+	}
+	return n;
+}
+
 /* A request as a browser behind the fixture's proxy sends it (in the other
  * modes: as it is), from @from (%NULL: OUTSIDE), with @more headers. */
 static AxisTestReply
@@ -487,7 +502,10 @@ on_typed(
 	g_main_loop_quit(typed->loop);
 }
 
-/* A post whose body is declared @type; the status. */
+static void assert_headers(AxisTestReply *reply);
+
+/* A post whose body is declared @type; the status.  Whatever it is answered
+ * with carries the security headers. */
 static guint
 post_typed(
 	Fixture     *fx,
@@ -514,6 +532,13 @@ post_typed(
 	g_main_loop_unref(typed.loop);
 	g_assert_nonnull(typed.bytes);
 	g_bytes_unref(typed.bytes);
+	{
+		AxisTestReply view;
+
+		memset(&view, 0, sizeof(view));
+		view.message = message;
+		assert_headers(&view);
+	}
 	return soup_message_get_status(message);
 }
 
@@ -1367,7 +1392,76 @@ test_probe(Fixture *fx, gconstpointer data)
 	reply = axis_test_web_request(fx->session, fx->port, "POST", "/healthz", NULL, NULL, "a=1");
 	assert_status(&reply, 405);
 	axis_test_reply_clear(&reply);
+	/* Found by the review of P3 (M7): a proxy on this machine that sends
+	 * only some other header of its kind, or a Host that is not this
+	 * machine's, is not this machine asking. */
+	{
+		static const gchar *const headers[] = {
+			"X-Real-IP", "Via", "X-Forwarded-Proto", "X-Forwarded-Host", "Forwarded", NULL
+		};
+		static const gchar *const values[] = {
+			OUTSIDE, "1.1 proxy", "https", "portal.example.net", "for=203.0.113.5", NULL
+		};
+		static const gchar *const other_host[] = { "Host", "portal.example.net", NULL };
+		guint i;
+
+		for (i = 0; headers[i] != NULL; i++) {
+			const gchar *one[3];
+
+			one[0] = headers[i];
+			one[1] = values[i];
+			one[2] = NULL;
+			reply = axis_test_web_request(fx->session, fx->port, "GET", "/healthz", NULL, one, NULL);
+			assert_status(&reply, 404);
+			axis_test_reply_clear(&reply);
+		}
+		reply = axis_test_web_request(fx->session, fx->port, "GET", "/healthz", NULL, other_host, NULL);
+		if (g_strcmp0(soup_message_headers_get_one(soup_message_get_request_headers(reply.message), "Host"),
+			      "portal.example.net") == 0)
+			assert_status(&reply, 404);
+		else
+			g_test_message("libsoup sent its own Host: the probe's Host check was not tried");
+		axis_test_reply_clear(&reply);
+	}
 	g_assert_cmpuint(asked(fx, NULL), ==, 0);
+}
+
+/* Found by the review of P3 (M3): a listed proxy that sends no usable
+ * X-Forwarded-For made every visitor one client, the proxy itself: one
+ * login throttle for all, and the proxy's address told to the daemon.  Such
+ * a visit is refused, the daemon is not asked, and the log says why. */
+static void
+test_proxy_says_nobody(Fixture *fx, gconstpointer data)
+{
+	static const gchar *const only_proto[] = { "X-Forwarded-Proto", "https", NULL };
+	static const gchar *const only_proxies[] = { "X-Forwarded-Proto", "https", "X-Forwarded-For", "127.0.0.1", NULL };
+	static const gchar *const with_port[] = {
+		"X-Forwarded-Proto", "https", "X-Forwarded-For", "203.0.113.5:4711", NULL
+	};
+	const gchar *const *cases[3];
+	guint i;
+
+	cases[0] = only_proto;
+	cases[1] = only_proxies;
+	cases[2] = with_port;
+	for (i = 0; i < G_N_ELEMENTS(cases); i++) {
+		AxisTestReply reply = axis_test_web_request(fx->session, fx->port, "GET", "/login", NULL, cases[i], NULL);
+
+		assert_status(&reply, 503);
+		assert_lacks(reply.body, "<form");
+		assert_headers(&reply);
+		axis_test_reply_clear(&reply);
+	}
+	assert_has(log_text->str, "refused a visit: the trusted proxy 127.0.0.1 did not say who the client is");
+	g_assert_cmpuint(asked(fx, NULL), ==, 0);
+	/* The stylesheet and the probe are nobody's. */
+	{
+		AxisTestReply reply = axis_test_web_request(fx->session, fx->port, "GET", AXIS_PORTAL_STYLE_PATH, NULL,
+			only_proto, NULL);
+
+		assert_status(&reply, 200);
+		axis_test_reply_clear(&reply);
+	}
 }
 
 /* Every address a page refers to (href, src, action) is a path of the
@@ -1403,11 +1497,12 @@ assert_own_addresses(
 	assert_lacks(html, "https://");
 }
 
-/* The security headers of the engine's interface, on any answer. */
+/* The security headers of the engine's interface, with the portal's own
+ * content security policy, on any answer. */
 static void
 assert_headers(AxisTestReply *reply)
 {
-	g_assert_cmpstr(axis_test_reply_header(reply, "Content-Security-Policy"), ==, AXIS_WEB_CSP);
+	g_assert_cmpstr(axis_test_reply_header(reply, "Content-Security-Policy"), ==, AXIS_PORTAL_CSP);
 	g_assert_cmpstr(axis_test_reply_header(reply, "X-Content-Type-Options"), ==, "nosniff");
 	g_assert_cmpstr(axis_test_reply_header(reply, "X-Frame-Options"), ==, "DENY");
 	g_assert_cmpstr(axis_test_reply_header(reply, "Referrer-Policy"), ==, "same-origin");
@@ -1444,6 +1539,9 @@ test_headers(Fixture *fx, gconstpointer data)
 	for (i = 0; paths[i] != NULL; i++) {
 		reply = get(fx, paths[i], cookie);
 		assert_headers(&reply);
+		/* (M5) The visit came over HTTPS: the browser is told to keep to it. */
+		if (g_strcmp0(axis_test_reply_header(&reply, "Strict-Transport-Security"), AXIS_PORTAL_HSTS) != 0)
+			g_error("%s has no Strict-Transport-Security", paths[i]);
 		if (g_str_has_prefix(reply.body, "<!DOCTYPE html>"))
 			assert_own_addresses(reply.body, NULL);
 		if (strcmp(paths[i], "/art/3") == 0) {
@@ -1471,12 +1569,31 @@ test_headers(Fixture *fx, gconstpointer data)
 	reply = post(fx, "/title/3/request", cookie, form);
 	assert_status(&reply, 200);
 	assert_headers(&reply);
+	g_assert_cmpstr(axis_test_reply_header(&reply, "Strict-Transport-Security"), ==, AXIS_PORTAL_HSTS);
 	assert_own_addresses(reply.body, NULL);
 	axis_test_reply_clear(&reply);
 	reply = send_from(fx, "DELETE", "/requests", cookie, NULL, NULL, NULL);
 	assert_status(&reply, 405);
 	assert_headers(&reply);
 	axis_test_reply_clear(&reply);
+	/* (M6) The portal's policy is its own, narrower than the engine's: no
+	 * script from anywhere, nothing but its stylesheet and its pictures. */
+	g_assert_cmpstr(AXIS_PORTAL_CSP, !=, AXIS_WEB_CSP);
+	assert_has(AXIS_PORTAL_CSP, "default-src 'none'");
+	assert_lacks(AXIS_PORTAL_CSP, "script-src");
+	/* (M15) The refusals by the limits (a body too large) and the
+	 * portal's own (a body that is not a form) carry them too; a refusal
+	 * for too many searches, over plain HTTP and a daemon that is away are
+	 * asserted where they are tried. */
+	{
+		g_autofree gchar *large = g_strnfill(65 * 1024, 'a');
+
+		reply = post(fx, "/title/3/request", cookie, large);
+		assert_status(&reply, 413);
+		assert_headers(&reply);
+		axis_test_reply_clear(&reply);
+		g_assert_cmpuint(post_typed(fx, "/title/3/request", cookie, "application/json", "{}"), ==, 415);
+	}
 
 	/* What is served as a picture is one: an answer of the daemon that is
 	 * not, is not served. */
@@ -1981,6 +2098,14 @@ test_post_without_token(Fixture *fx, gconstpointer data)
 		assert_status(&reply, 403);
 		axis_test_reply_clear(&reply);
 	}
+	/* Found by the review of P3 (M4): a proxy that rewrites Host made every
+	 * post "from another site" and nothing said why.  The log says what was
+	 * compared. */
+	assert_has(log_text->str, "refused a post from " OUTSIDE " as from another site: its Origin is evil.example.net "
+		"and the host is 127.0.0.1:");
+	assert_has(log_text->str, "a proxy that rewrites Host must send X-Forwarded-Host");
+	assert_has(log_text->str, "the browser says Sec-Fetch-Site: cross-site");
+	assert_has(log_text->str, "the browser says Sec-Fetch-Site: same-site");
 	/* The token in the address is not the token (and a post has no query). */
 	{
 		g_autofree gchar *path = g_strdup_printf("/title/3/request?_csrf=%s", csrf);
@@ -2200,6 +2325,12 @@ test_plain_http(Fixture *fx, gconstpointer data)
 	assert_lacks(reply.body, "<form");
 	assert_lacks(reply.body, "name=\"password\"");
 	g_assert_null(axis_test_reply_header(&reply, "Set-Cookie"));
+	/* (M15) The headers; (M5) no HSTS over plain http; (M12) the page
+	 * tells a stranger nothing of the program's settings. */
+	assert_headers(&reply);
+	g_assert_null(axis_test_reply_header(&reply, "Strict-Transport-Security"));
+	assert_lacks(reply.body, "AXIS_PORTAL");
+	assert_lacks(reply.body, "proxy");
 	axis_test_reply_clear(&reply);
 	reply = post(fx, "/login", NULL, "username=robin&password=" ROBIN_PASSWORD);
 	assert_status(&reply, 403);
@@ -2221,6 +2352,8 @@ test_plain_http(Fixture *fx, gconstpointer data)
 	assert_status(&reply, 200);
 	axis_test_reply_clear(&reply);
 	g_assert_cmpuint(asked(fx, NULL), ==, 0);
+	/* The administrator's sentence is in the log, once. */
+	g_assert_cmpuint(count_of(log_text->str, "AXIS_PORTAL_TRUSTED_PROXIES"), ==, 1);
 }
 
 /* The test-only override: plain http is served, with cookies that are
@@ -2254,6 +2387,8 @@ test_insecure_override(Fixture *fx, gconstpointer data)
 	assert_status(&reply, 303);
 	line = set_cookie_line(&reply, AXIS_PORTAL_SESSION_COOKIE_PLAIN);
 	g_assert_cmpstr(line, ==, expected);
+	/* Plain http: no HSTS. */
+	g_assert_null(axis_test_reply_header(&reply, "Strict-Transport-Security"));
 	axis_test_reply_clear(&reply);
 	/* The address the daemon is told is the peer's own, not the header's. */
 	assert_has(last_call(fx, "login")->body, "\"client_address\":\"127.0.0.1\"");
@@ -2811,6 +2946,7 @@ test_search_flood(Fixture *fx, gconstpointer data)
 		reply = get(fx, path, cookie);
 		if (reply.status == 429) {
 			g_assert_nonnull(axis_test_reply_header(&reply, "Retry-After"));
+			assert_headers(&reply);
 			/* (M17) A refusal for a person who is logged in does not tell
 			 * them to log in. */
 			assert_has(reply.body, "Back to the lists");
@@ -2994,21 +3130,6 @@ test_log(Fixture *fx, gconstpointer data)
 	assert_lacks(log_text->str, "__Host-");
 }
 
-/* How many times @needle is in @text. */
-static guint
-count_of(
-	const gchar *text,
-	const gchar *needle
-){
-	guint n = 0;
-
-	while ((text = strstr(text, needle)) != NULL) {
-		n++;
-		text += strlen(needle);
-	}
-	return n;
-}
-
 /* Found by the review of P3 (S3): each refusal was a line of the log, so a
  * stranger refused a thousand times a second wrote that many lines.  Of one
  * kind, AXIS_PORTAL_LOG_LINES_A_MINUTE are written in a minute; then one line
@@ -3083,6 +3204,7 @@ main(int argc, char **argv)
 	ADD("/portal/pages/without-session", MODE_PROXY, test_without_session);
 	ADD("/portal/pages/two-session-cookies", MODE_PROXY, test_two_session_cookies);
 	ADD("/portal/pages/probe-loopback-only", MODE_PROXY, test_probe);
+	ADD("/portal/pages/proxy-says-nobody", MODE_PROXY, test_proxy_says_nobody);
 	ADD("/portal/pages/headers", MODE_PROXY, test_headers);
 	ADD("/portal/pages/state-and-form", MODE_PROXY, test_state_and_form);
 	ADD("/portal/pages/provider-text", MODE_PROXY, test_provider_text);
