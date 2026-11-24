@@ -1942,6 +1942,67 @@ not_added_source(
 	return TRUE;
 }
 
+/* "once", "twice", "5 times".  Transfer full. */
+static gchar *
+times_text(guint n)
+{
+	if (n == 1)
+		return g_strdup("once");
+	if (n == 2)
+		return g_strdup("twice");
+	return g_strdup_printf("%u times", n);
+}
+
+/*
+ * (Slice P4.)  The portal API reached one of its ceilings over all people in
+ * the last 24 hours: the failed logins of an hour, or what the requests of a
+ * day count.  One notice for both, under "Worth a look": nothing is broken
+ * and nothing waits, but it is what a stranger who guesses passwords, or a
+ * portal in the wrong hands, runs into.  It says which and how often, and
+ * names no account: who failed to log in is not known, and who was refused a
+ * request is not what the notice is about.  Read from memory
+ * (axis_requests_portal_limit_count()), so it is gone 24 hours after the last
+ * time, or when the daemon restarts.
+ */
+static gboolean
+portal_limit_source(
+	const AxisAttentionReading  *reading,
+	GPtrArray                   *items,
+	gpointer                     user_data,
+	GError                     **error
+){
+	AxisRequests *self = user_data;
+	g_autofree gchar *logins_text = NULL;
+	g_autofree gchar *day_text = NULL;
+	g_autofree gchar *words = NULL;
+	AxisAttentionItem *item;
+	gint64 logins_last = 0;
+	gint64 day_last = 0;
+	guint logins = axis_requests_portal_limit_count(self, AXIS_REQUESTS_PORTAL_LIMIT_LOGINS, &logins_last);
+	guint day = axis_requests_portal_limit_count(self, AXIS_REQUESTS_PORTAL_LIMIT_DAY, &day_last);
+
+	if (logins == 0 && day == 0)
+		return TRUE;
+	logins_text = times_text(logins);
+	day_text = times_text(day);
+	if (logins > 0 && day > 0)
+		words = g_strdup_printf("The request portal reached its limit of failed logins in an hour %s and its limit of "
+			"requests in a day %s in the last 24 hours.", logins_text, day_text);
+	else if (logins > 0)
+		words = g_strdup_printf("The request portal reached its limit of failed logins in an hour %s in the last 24 "
+			"hours.", logins_text);
+	else
+		words = g_strdup_printf("The request portal reached its limit of requests in a day %s in the last 24 hours.",
+			day_text);
+	item = axis_attention_item_new("requests.portal_limit", "", AXIS_ATTENTION_LOOK, (guint64)logins + day,
+		MAX(logins_last, day_last) / G_USEC_PER_SEC);
+	axis_attention_item_say(item, words, NULL, NULL);
+	axis_attention_item_link(item, "/admin/portal", "Open Request portal");
+	item->since_us = MAX(logins_last, day_last);
+	g_ptr_array_add(items, item);
+	return TRUE;
+}
+
 /* ── An account that goes ───────────────────────────────────────── */
 
 static void
@@ -1973,6 +2034,7 @@ axis_web_requests_register(
 	axis_web_add_title_actions(web, actions_collect, actions_render, figures_free, self);
 	axis_web_add_attention_source(web, "the requests", waiting_source, self);
 	axis_web_add_attention_source(web, "the approved requests", not_added_source, self);
+	axis_web_add_attention_source(web, "the request portal's limits", portal_limit_source, self);
 
 	axis_web_route_full(web, HTMX_METHOD_GET, "/requests", AXIS_WEB_ROUTE_DEFAULT, handle_page, self);
 	axis_web_route_full(web, HTMX_METHOD_POST, "/requests", AXIS_WEB_ROUTE_DEFAULT, handle_ask, self);

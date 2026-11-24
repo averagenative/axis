@@ -493,6 +493,9 @@ ask_locked(
 		axis_db_result_get_int64(result, 0, 0, &counted);
 		axis_db_result_get_int64(result, 0, 1, &own);
 		if (counted + need > ceiling) {
+			/* Reached, for the notice and the page "Request portal": by the
+			 * first request it refuses on this day. */
+			axis_requests_portal_limit_reached(self, AXIS_REQUESTS_PORTAL_LIMIT_DAY, start);
 			g_set_error_literal(error, AXIS_REQUESTS_ERROR, AXIS_REQUESTS_ERROR_PORTAL_FULL,
 				"the portal's limit for today is reached; ask again tomorrow");
 			return FALSE;

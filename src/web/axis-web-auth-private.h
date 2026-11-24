@@ -129,6 +129,13 @@ struct _AxisWebAuth
 	gint64             portal_admitted_us;	/* when a login was last admitted over the hourly ceiling */
 	GQueue             portal_waiting;	/* logins waiting for the one hashing place */
 	gboolean           portal_hashing;	/* one is being checked */
+	void             (*portal_ceiling)(gpointer user_data);	/* told when the hour's failures reach the ceiling; nullable */
+	gpointer           portal_ceiling_data;
+	gint64             portal_ceiling_told_us;	/* when it was last told (monotonic); 0: never */
+	/* The addresses a valid portal token was presented from, as counted
+	 * (an IPv6 address by its /64) -> gint64* when last (monotonic): no login
+	 * at the engine's own interface from one of them. */
+	GHashTable        *portal_addresses;
 };
 
 /* Made and freed with the auth; and, as it stops, every login that still

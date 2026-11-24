@@ -62,6 +62,7 @@ axis_web_auth_portal_init(AxisWebAuth *self)
 		AXIS_AUTH_THROTTLE_MAX_US, AXIS_AUTH_THROTTLE_FORGET_US, AXIS_AUTH_THROTTLE_MAX_KEYS);
 	g_queue_init(&self->portal_failures);
 	g_queue_init(&self->portal_waiting);
+	self->portal_addresses = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
 }
 
 void
@@ -73,6 +74,103 @@ axis_web_auth_portal_clear(AxisWebAuth *self)
 	axis_login_throttle_free(self->portal_by_owner);
 	g_queue_clear_full(&self->portal_failures, g_free);
 	g_queue_clear_full(&self->portal_waiting, (GDestroyNotify)login_free);
+	g_clear_pointer(&self->portal_addresses, g_hash_table_unref);
+}
+
+/* ── The addresses that speak as a portal ───────────────────────── */
+
+void
+axis_web_auth_portal_note_address(
+	AxisWebAuth *self,
+	const gchar *address
+){
+	g_autofree gchar *key = axis_proxy_address_key(address != NULL ? address : "");
+	gint64 now = axis_web_auth_now_monotonic(self);
+	gint64 *when;
+
+	if (key == NULL || key[0] == '\0')
+		return;
+	when = g_hash_table_lookup(self->portal_addresses, key);
+	if (when != NULL) {
+		*when = now;
+		return;
+	}
+	/* Room for a new one: those whose time has run out go, and then, when
+	 * the table is still full, the one unused longest.  Whoever presents the
+	 * token from many addresses keeps the ones it used last, its own of this
+	 * moment among them. */
+	if (g_hash_table_size(self->portal_addresses) >= AXIS_PORTAL_ADDRESSES_MAX) {
+		GHashTableIter iter;
+		gpointer name;
+		gpointer value;
+		const gchar *oldest = NULL;
+		gint64 oldest_us = G_MAXINT64;
+
+		g_hash_table_iter_init(&iter, self->portal_addresses);
+		while (g_hash_table_iter_next(&iter, &name, &value)) {
+			if (now - *(gint64 *)value >= AXIS_PORTAL_ADDRESS_REMEMBERED_US) {
+				g_hash_table_iter_remove(&iter);
+			} else if (*(gint64 *)value < oldest_us) {
+				oldest_us = *(gint64 *)value;
+				oldest = name;
+			}
+		}
+		if (g_hash_table_size(self->portal_addresses) >= AXIS_PORTAL_ADDRESSES_MAX && oldest != NULL)
+			g_hash_table_remove(self->portal_addresses, oldest);
+	}
+	when = g_new(gint64, 1);
+	*when = now;
+	g_hash_table_insert(self->portal_addresses, g_steal_pointer(&key), when);
+	/* Said once for an address: an administrator who is refused there finds
+	 * the reason in the log. */
+	g_message("portal API: %s presented a portal token; a login to Axis itself from that address is refused until "
+		"24 hours after its last request", address);
+}
+
+gboolean
+axis_web_auth_portal_address_known(
+	AxisWebAuth *self,
+	const gchar *address
+){
+	g_autofree gchar *key = axis_proxy_address_key(address != NULL ? address : "");
+	gint64 *when;
+
+	if (key == NULL || key[0] == '\0')
+		return FALSE;
+	when = g_hash_table_lookup(self->portal_addresses, key);
+	if (when == NULL)
+		return FALSE;
+	if (axis_web_auth_now_monotonic(self) - *when >= AXIS_PORTAL_ADDRESS_REMEMBERED_US) {
+		g_hash_table_remove(self->portal_addresses, key);
+		return FALSE;
+	}
+	return TRUE;
+}
+
+guint
+axis_web_auth_portal_addresses(AxisWebAuth *self)
+{
+	GHashTableIter iter;
+	gpointer value;
+	gint64 now = axis_web_auth_now_monotonic(self);
+	guint n = 0;
+
+	g_hash_table_iter_init(&iter, self->portal_addresses);
+	while (g_hash_table_iter_next(&iter, NULL, &value)) {
+		if (now - *(gint64 *)value < AXIS_PORTAL_ADDRESS_REMEMBERED_US)
+			n++;
+	}
+	return n;
+}
+
+void
+axis_web_auth_portal_set_ceiling_func(
+	AxisWebAuth *self,
+	void       (*func)(gpointer user_data),
+	gpointer     user_data
+){
+	self->portal_ceiling = func;
+	self->portal_ceiling_data = user_data;
 }
 
 /* ── The counts ─────────────────────────────────────────────────── */
@@ -114,11 +212,29 @@ failures_add(
 ){
 	gint64 *when = g_new(gint64, 1);
 
+	failures_trim(self, now);
 	*when = now;
 	g_queue_push_tail(&self->portal_failures, when);
+	/* The ceiling is reached by the failure that fills the hour: the ones
+	 * admitted beyond it, one a minute, reach nothing anew, and failures that
+	 * arrive just as fast as old ones are forgotten reach it once an hour,
+	 * not at each of them. */
+	if (g_queue_get_length(&self->portal_failures) == AXIS_PORTAL_LOGIN_FAILURES_AN_HOUR &&
+	    (self->portal_ceiling_told_us == 0 || now - self->portal_ceiling_told_us >= HOUR_US)) {
+		self->portal_ceiling_told_us = now;
+		if (self->portal_ceiling != NULL)
+			self->portal_ceiling(self->portal_ceiling_data);
+	}
 	/* Never more than the ceiling and what could be in flight beyond it. */
 	while (g_queue_get_length(&self->portal_failures) > AXIS_PORTAL_LOGIN_FAILURES_AN_HOUR * 4)
 		g_free(g_queue_pop_head(&self->portal_failures));
+}
+
+guint
+axis_web_auth_portal_failures(AxisWebAuth *self)
+{
+	failures_trim(self, axis_web_auth_now_monotonic(self));
+	return g_queue_get_length(&self->portal_failures);
 }
 
 static gint64

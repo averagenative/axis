@@ -14,6 +14,7 @@
 #include "web/axis-web-auth-private.h"
 #include "web/axis-password.h"
 #include "web/axis-web-auth-input.h"
+#include "web/axis-web-auth-portal.h"
 
 #include <sodium.h>
 #include <string.h>
@@ -452,6 +453,20 @@ handle_login(
 	gint64 wait;
 	Attempt attempt;
 	LoginWork *work;
+
+	/* (add-request-portal, slice P4.)  An address that presented a portal
+	 * token in the last 24 hours speaks as a portal, and is not let in as a
+	 * person: the answer of a wrong password, and the password is not
+	 * checked.  Whoever holds a portal sees every password typed into it; an
+	 * administrator's, typed there by mistake, is then of no use from the
+	 * portal's own place in the network.  No count is touched: nothing here
+	 * can delay a login from anywhere else. */
+	if (axis_web_auth_portal_address_known(auth, state->client_address)) {
+		axis_web_auth_audit("login refused: client=%s presented a portal token in the last 24 hours, and an "
+			"address that speaks as a portal cannot log in here (the page Request portal says more)",
+			state->client_address);
+		return login_page(request, 401, next, typed, LOGIN_FAILED);
+	}
 
 	/* Refused before any password work, even when it would be right; the
 	 * attempts already being checked count as the failures they may be. */

@@ -37,6 +37,14 @@ struct _AxisRequests
 	 * its listener (0: off). */
 	AxisPortalTokens   *portal_tokens;
 	guint               portal_port;
+	/* When each of the portal's ceilings was reached, the newest last
+	 * (axis_requests_portal_limit_reached()): in memory, any thread. */
+	GMutex              portal_limit_lock;
+	gint64              portal_limit_at[AXIS_REQUESTS_PORTAL_LIMITS][AXIS_REQUESTS_PORTAL_LIMIT_KEPT];
+	guint               portal_limit_n[AXIS_REQUESTS_PORTAL_LIMITS];
+	/* The accounts' side of the portal API, for the same page (borrowed, set
+	 * when the pages are registered; NULL in a test without them). */
+	struct _AxisWebAuth *auth;
 	/* The pages (main loop). */
 	guint               pending;
 	gboolean            stopping;

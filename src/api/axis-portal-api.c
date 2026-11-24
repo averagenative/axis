@@ -360,6 +360,11 @@ portal_gate(
 		htmx_context_set_response(context, response);
 		return;
 	}
+	/* This address speaks as a portal: no login at the engine's own
+	 * interface from it for a day (web/axis-web-auth-portal.h).  Before the
+	 * budget and everything else: whatever becomes of the request, the token
+	 * was presented. */
+	axis_web_auth_portal_note_address(self->auth, peer);
 	/* The token's budget: every request that presents it, whatever it asks,
 	 * so that a portal in the wrong hands cannot keep the daemon busy. */
 	wait = budget_take(&self->by_token, id, now);
@@ -1767,6 +1772,14 @@ handle_operation(
 
 /* ── Lifetime ───────────────────────────────────────────────────── */
 
+static void
+login_ceiling_reached(gpointer user_data)
+{
+	AxisPortalApi *self = user_data;
+
+	axis_requests_portal_limit_reached(self->requests, AXIS_REQUESTS_PORTAL_LIMIT_LOGINS, 0);
+}
+
 AxisPortalApi *
 axis_portal_api_new(
 	AxisDbPool       *pool,
@@ -1798,6 +1811,9 @@ axis_portal_api_new(
 	/* Not exclusive: its threads are made when there is work, and never
 	 * more than these at once. */
 	self->threads = g_thread_pool_new(work_thread, self, AXIS_PORTAL_API_THREADS, FALSE, NULL);
+	/* The hour's ceiling of failed logins is the accounts'; that it was
+	 * reached is told where the day's ceiling is (the notice, the page). */
+	axis_web_auth_portal_set_ceiling_func(auth, login_ceiling_reached, self);
 	return self;
 }
 
@@ -1848,6 +1864,9 @@ axis_portal_api_stop(AxisPortalApi *self)
 {
 	g_return_if_fail(self != NULL);
 
+	/* The first time, while the accounts are certainly still there. */
+	if (!self->stopping)
+		axis_web_auth_portal_set_ceiling_func(self->auth, NULL, NULL);
 	self->stopping = TRUE;
 	while (self->pending > 0)
 		g_main_context_iteration(NULL, TRUE);

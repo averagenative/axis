@@ -479,6 +479,7 @@ axis_requests_new(
 
 	self = g_new0(AxisRequests, 1);
 	g_atomic_ref_count_init(&self->ref);
+	g_mutex_init(&self->portal_limit_lock);
 	self->pool = pool;
 	self->settings = settings != NULL ? axis_settings_ref(settings) : NULL;
 	self->meta = axis_meta_ref(meta);
@@ -512,6 +513,7 @@ axis_requests_unref(AxisRequests *self)
 	g_clear_pointer(&self->storage, axis_storage_unref);
 	g_clear_pointer(&self->quality, axis_quality_store_unref);
 	g_clear_pointer(&self->zone, g_time_zone_unref);
+	g_mutex_clear(&self->portal_limit_lock);
 	g_free(self);
 }
 
@@ -537,6 +539,98 @@ axis_requests_set_portal(
 ){
 	self->portal_tokens = tokens;
 	self->portal_port = port;
+}
+
+/* ── The portal's ceilings, as they were reached ────────────────── */
+
+void
+axis_requests_portal_limit_reached(
+	AxisRequests            *self,
+	AxisRequestsPortalLimit  which,
+	gint64                   not_again_since_us
+){
+	gint64 now = axis_requests_now(self);
+	gint64 *at;
+	guint n;
+
+	g_return_if_fail(self != NULL);
+	g_return_if_fail((guint)which < AXIS_REQUESTS_PORTAL_LIMITS);
+
+	g_mutex_lock(&self->portal_limit_lock);
+	at = self->portal_limit_at[which];
+	n = self->portal_limit_n[which];
+	if (n > 0 && not_again_since_us != 0 && at[n - 1] >= not_again_since_us) {
+		g_mutex_unlock(&self->portal_limit_lock);
+		return;
+	}
+	if (n == AXIS_REQUESTS_PORTAL_LIMIT_KEPT) {
+		memmove(at, at + 1, (n - 1) * sizeof(*at));
+		n--;
+	}
+	at[n++] = now;
+	self->portal_limit_n[which] = n;
+	g_mutex_unlock(&self->portal_limit_lock);
+	/* Never who: the notice and the page name no account, and neither does
+	 * this line. */
+	g_message("requests: the portal reached its limit of %s", which == AXIS_REQUESTS_PORTAL_LIMIT_DAY ?
+		"requests for a day (requests.portal_per_day); requests through it are refused until tomorrow" :
+		"failed logins for an hour; logins through it are admitted one a minute for now");
+}
+
+guint
+axis_requests_portal_limit_count(
+	AxisRequests            *self,
+	AxisRequestsPortalLimit  which,
+	gint64                  *last_us
+){
+	gint64 since = axis_requests_now(self) - G_GINT64_CONSTANT(24) * 3600 * G_USEC_PER_SEC;
+	guint count = 0;
+	guint i;
+
+	g_return_val_if_fail(self != NULL, 0);
+	g_return_val_if_fail((guint)which < AXIS_REQUESTS_PORTAL_LIMITS, 0);
+
+	if (last_us != NULL)
+		*last_us = 0;
+	g_mutex_lock(&self->portal_limit_lock);
+	for (i = 0; i < self->portal_limit_n[which]; i++) {
+		if (self->portal_limit_at[which][i] <= since)
+			continue;
+		count++;
+		if (last_us != NULL)
+			*last_us = self->portal_limit_at[which][i];
+	}
+	g_mutex_unlock(&self->portal_limit_lock);
+	return count;
+}
+
+gboolean
+axis_requests_portal_today(
+	AxisRequests  *self,
+	gint64        *counted,
+	gint64        *ceiling,
+	GError       **error
+){
+	g_autoptr(GTimeZone) local = self->zone != NULL ? g_time_zone_ref(self->zone) : g_time_zone_new_local();
+	g_autoptr(AxisDbResult) result = NULL;
+	g_autofree gchar *from = NULL;
+	const gchar *params[1];
+	gint64 start = 0;
+	gint64 end = 0;
+
+	*counted = 0;
+	*ceiling = axis_requests_setting_int(self, AXIS_REQUESTS_SETTING_PORTAL_DAY, AXIS_REQUESTS_PORTAL_A_DAY);
+	axis_request_window_bounds(local, axis_requests_now(self), AXIS_REQUEST_WINDOW_DAY, &start, &end);
+	from = axis_requests_int_text(start);
+	params[0] = from;
+	/* As the ask's own count (axis-requests-ask.c): a movie one, a season one
+	 * each, whoever made them and whatever became of them. */
+	if (!axis_db_pool_exec(self->pool, "SELECT coalesce(sum(CASE WHEN r.kind = 'movie' THEN 1 ELSE (SELECT count(*) FROM"
+	        " request_season s WHERE s.request_id = r.id) END), 0) FROM request r WHERE r.via = 'portal'"
+	        " AND r.created_at >= " AXIS_REQUESTS_TS(1), 1, params, &result, error))
+		return FALSE;
+	axis_db_result_get_int64(result, 0, 0, counted);
+	return TRUE;
 }
 
 gboolean

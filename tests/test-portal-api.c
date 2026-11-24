@@ -224,7 +224,12 @@ fixture_setup(Fixture *fx, gconstpointer data)
 
 	fx->server = htmx_server_new();
 	g_assert_true(htmx_server_listen_on(fx->server, "127.0.0.1", 0, &error));
-	fx->auth = axis_web_auth_new(r->t->pool, "", AXIS_SECURE_COOKIES_AUTO, &error);
+	/* A proxy on this machine is believed about the client's address: the
+	 * portal's requests arrive from 127.0.0.1, and since slice P4 an address
+	 * that speaks as a portal cannot log in at the engine's own interface.
+	 * The people of these tests who log in there come from elsewhere,
+	 * through that proxy (engine_login()), as they would. */
+	fx->auth = axis_web_auth_new(r->t->pool, "127.0.0.1", AXIS_SECURE_COOKIES_AUTO, &error);
 	g_assert_no_error(error);
 	fx->web = axis_web_new(fx->server, fx->registry, fx->auth);
 	axis_web_hub_install(fx->hub, fx->web, fx->auth);
@@ -600,13 +605,19 @@ cookies_after(AxisTestReply *reply)
 	return g_string_free(cookies, FALSE);
 }
 
-/* A login at the engine's own login page: the reply (its status says
- * whether it worked: 303, or 401). */
+/* Where the people who log in at the engine's interface are (a made-up
+ * address of documentation's range), as the proxy on this machine says. */
+static const gchar *const from_elsewhere[] = { "X-Forwarded-For", "192.0.2.44", NULL };
+
+/* A login at the engine's own login page from the address @from says
+ * (%NULL: this machine's own, where the portal of these tests is too): the
+ * reply (its status says whether it worked: 303, or 401). */
 static AxisTestReply
-engine_login(
-	Fixture     *fx,
-	const gchar *username,
-	const gchar *password
+engine_login_from(
+	Fixture            *fx,
+	const gchar        *username,
+	const gchar        *password,
+	const gchar *const *from
 ){
 	g_autoptr(GRegex) field = g_regex_new("name=\"_csrf\"[^>]*value=\"([^\"]+)\"|value=\"([^\"]+)\"[^>]*name=\"_csrf\"", 0,
 		0, NULL);
@@ -616,7 +627,7 @@ engine_login(
 	g_autofree gchar *escaped = NULL;
 	g_autofree gchar *secret = g_uri_escape_string(password, NULL, TRUE);
 	g_autofree gchar *form = NULL;
-	AxisTestReply page = axis_test_web_request(fx->session, fx->port, "GET", "/login", NULL, NULL, NULL);
+	AxisTestReply page = axis_test_web_request(fx->session, fx->port, "GET", "/login", NULL, from, NULL);
 
 	assert_status(&page, 200);
 	before = cookies_after(&page);
@@ -629,7 +640,16 @@ engine_login(
 	axis_test_reply_clear(&page);
 	escaped = g_uri_escape_string(token, NULL, TRUE);
 	form = g_strdup_printf("_csrf=%s&username=%s&password=%s", escaped, username, secret);
-	return axis_test_web_request(fx->session, fx->port, "POST", "/login", before, NULL, form);
+	return axis_test_web_request(fx->session, fx->port, "POST", "/login", before, from, form);
+}
+
+static AxisTestReply
+engine_login(
+	Fixture     *fx,
+	const gchar *username,
+	const gchar *password
+){
+	return engine_login_from(fx, username, password, from_elsewhere);
 }
 
 static gchar *
@@ -2866,11 +2886,277 @@ test_engine_queue_full(Fixture *fx, gconstpointer data)
 	g_cond_clear(&blocker.cond);
 }
 
+/*
+ * Scenarios (web-auth, slice P4): A login from the portal's address; Another
+ * address.  The portal of these tests calls from 127.0.0.1.  Once it has
+ * presented its token, the administrator's right password is refused at the
+ * engine's login from that address as a wrong one is, without a hash and
+ * without a session, for 24 hours after the portal's last request; the same
+ * administrator logs in from another address, and a session that existed
+ * goes on.
+ */
+static void
+test_portal_address(Fixture *fx, gconstpointer data)
+{
+	static const gchar *const other[] = { "X-Forwarded-For", "198.51.100.20", NULL };
+	g_autofree gchar *before = NULL;
+	g_autofree gchar *cookies = NULL;
+	AxisTestReply reply;
+	guint hashes;
+	guint i;
+
+	/* Before the portal has said anything, this address is anyone's. */
+	g_assert_cmpuint(axis_web_auth_portal_addresses(fx->auth), ==, 0);
+	reply = engine_login_from(fx, "root", ADMIN_PASSWORD, NULL);
+	assert_status(&reply, 303);
+	before = cookies_after(&reply);
+	axis_test_reply_clear(&reply);
+	g_assert_nonnull(strstr(before, "axis_session="));
+
+	/* A token that is not a portal's makes no address a portal's. */
+	reply = send_to(fx, fx->portal_port, "POST", API "hello", "zz-not-a-token", NULL, "{}", NULL);
+	assert_status(&reply, 401);
+	axis_test_reply_clear(&reply);
+	g_assert_cmpuint(axis_web_auth_portal_addresses(fx->auth), ==, 0);
+	reply = engine_login_from(fx, "root", ADMIN_PASSWORD, NULL);
+	assert_status(&reply, 303);
+	axis_test_reply_clear(&reply);
+
+	/* The portal calls: one request with its token is enough, whatever
+	 * becomes of it (this one is refused as a browser's). */
+	{
+		static const gchar *const browser[] = { "Origin", "https://portal.example.org", NULL };
+
+		reply = send_to(fx, fx->portal_port, "POST", API "hello", fx->token, NULL, "{}", browser);
+		assert_status(&reply, 403);
+		axis_test_reply_clear(&reply);
+	}
+	g_assert_cmpuint(axis_web_auth_portal_addresses(fx->auth), ==, 1);
+	g_assert_cmpuint(axis_test_log_count(G_LOG_LEVEL_MESSAGE, "*127.0.0.1 presented a portal token*"), ==, 1);
+	g_free(expect(fx, "hello", "{}", 200));
+	/* (Said once for an address.) */
+	g_assert_cmpuint(axis_test_log_count(G_LOG_LEVEL_MESSAGE, "*127.0.0.1 presented a portal token*"), ==, 1);
+
+	/* The administrator's right password, from the portal's address: the
+	 * answer of a wrong one, no hash, no session.  More often than a
+	 * username's free failures: no count is touched by it. */
+	hashes = axis_password_verify_count();
+	for (i = 0; i < AXIS_AUTH_USER_FREE_FAILURES + 3; i++) {
+		reply = engine_login_from(fx, "root", ADMIN_PASSWORD, NULL);
+		assert_status(&reply, 401);
+		assert_holds(reply.body, "The username or password is incorrect.");
+		cookies = cookies_after(&reply);
+		g_assert_null(strstr(cookies, "axis_session="));
+		g_clear_pointer(&cookies, g_free);
+		axis_test_reply_clear(&reply);
+	}
+	g_assert_cmpuint(axis_password_verify_count(), ==, hashes);
+	g_assert_cmpuint(axis_test_log_count(G_LOG_LEVEL_MESSAGE, "*audit: login refused: client=127.0.0.1 presented a "
+		"portal token*"), ==, AXIS_AUTH_USER_FREE_FAILURES + 3);
+	/* A wrong password from somewhere else reads the same. */
+	reply = engine_login_from(fx, "uma", "not-umas-password-at-all", other);
+	assert_status(&reply, 401);
+	assert_holds(reply.body, "The username or password is incorrect.");
+	axis_test_reply_clear(&reply);
+
+	/* The session that existed is not affected. */
+	reply = axis_test_web_request(fx->session, fx->port, "GET", "/admin/users", before, NULL, NULL);
+	assert_status(&reply, 200);
+	axis_test_reply_clear(&reply);
+
+	/* Another address: the same administrator logs in, at once. */
+	reply = engine_login_from(fx, "root", ADMIN_PASSWORD, other);
+	assert_status(&reply, 303);
+	cookies = cookies_after(&reply);
+	g_assert_nonnull(strstr(cookies, "axis_session="));
+	g_clear_pointer(&cookies, g_free);
+	axis_test_reply_clear(&reply);
+
+	/* 24 hours after the last time, not the first: a request at 23 hours
+	 * keeps the address a portal's until 47. */
+	axis_web_auth_set_time_offset(fx->auth, G_GINT64_CONSTANT(23) * 3600 * G_USEC_PER_SEC);
+	g_free(expect(fx, "hello", "{}", 200));
+	axis_web_auth_set_time_offset(fx->auth, G_GINT64_CONSTANT(25) * 3600 * G_USEC_PER_SEC);
+	reply = engine_login_from(fx, "root", ADMIN_PASSWORD, NULL);
+	assert_status(&reply, 401);
+	axis_test_reply_clear(&reply);
+	g_assert_cmpuint(axis_web_auth_portal_addresses(fx->auth), ==, 1);
+	axis_web_auth_set_time_offset(fx->auth, (G_GINT64_CONSTANT(47) * 3600 + 1) * G_USEC_PER_SEC);
+	g_assert_cmpuint(axis_web_auth_portal_addresses(fx->auth), ==, 0);
+	reply = engine_login_from(fx, "root", ADMIN_PASSWORD, NULL);
+	assert_status(&reply, 303);
+	axis_test_reply_clear(&reply);
+}
+
+/* The table of addresses is bounded: the one unused longest goes for a new
+ * one, and the newest are kept. */
+static void
+test_portal_addresses_bounded(Fixture *fx, gconstpointer data)
+{
+	guint i;
+
+	for (i = 0; i < AXIS_PORTAL_ADDRESSES_MAX + 10; i++) {
+		g_autofree gchar *address = g_strdup_printf("%s.%u", i < 250 ? "198.51.100" : "203.0.113", 1 + i % 250);
+
+		axis_web_auth_set_time_offset(fx->auth, (gint64)i * G_USEC_PER_SEC);
+		axis_web_auth_portal_note_address(fx->auth, address);
+	}
+	g_assert_cmpuint(axis_web_auth_portal_addresses(fx->auth), ==, AXIS_PORTAL_ADDRESSES_MAX);
+	/* The first ten went; the eleventh and the last are known. */
+	g_assert_false(axis_web_auth_portal_address_known(fx->auth, "198.51.100.1"));
+	g_assert_false(axis_web_auth_portal_address_known(fx->auth, "198.51.100.10"));
+	g_assert_true(axis_web_auth_portal_address_known(fx->auth, "198.51.100.11"));
+	g_assert_true(axis_web_auth_portal_address_known(fx->auth, "203.0.113.16"));
+	/* An IPv6 address counts by its /64, as the throttles count it. */
+	axis_web_auth_portal_note_address(fx->auth, "2001:db8:1:2::10");
+	g_assert_true(axis_web_auth_portal_address_known(fx->auth, "2001:db8:1:2:aaaa::1"));
+	g_assert_false(axis_web_auth_portal_address_known(fx->auth, "2001:db8:1:3::10"));
+	/* Nothing is no address. */
+	axis_web_auth_portal_note_address(fx->auth, NULL);
+	axis_web_auth_portal_note_address(fx->auth, "");
+	g_assert_false(axis_web_auth_portal_address_known(fx->auth, NULL));
+	g_assert_false(axis_web_auth_portal_address_known(fx->auth, ""));
+}
+
+/*
+ * Scenario (attention, slice P4): The portal reached a limit.  The hour's
+ * ceiling of failed logins is reached twice, and the day's ceiling of
+ * requests once: one notice under "Worth a look" says which and how often,
+ * links to the page "Request portal" and names no account; the page shows
+ * where the day and the hour stand.  Nobody but an administrator is shown
+ * either.
+ */
+static void
+test_limit_notice(Fixture *fx, gconstpointer data)
+{
+	g_autoptr(GError) error = NULL;
+	g_autofree gchar *admin = engine_session(fx, "root", ADMIN_PASSWORD);
+	g_autofree gchar *uma = engine_session(fx, "uma", USER_PASSWORD);
+	g_autofree gchar *sam = NULL;
+	gint64 kiln = film(fx, AXIS_TEST_REQUESTS_KILN);
+	gint64 bells = film(fx, AXIS_TEST_REQUESTS_BELLS);
+	gint64 ledger = film(fx, AXIS_TEST_REQUESTS_LEDGER);
+	AxisTestReply reply;
+	guint round;
+	guint i;
+
+	/* Nothing reached: no notice, and the page says so. */
+	axis_test_web_read_attention(fx->web);
+	reply = axis_test_web_request(fx->session, fx->port, "GET", "/attention", admin, NULL, NULL);
+	assert_status(&reply, 200);
+	assert_lacks(reply.body, "The request portal reached");
+	axis_test_reply_clear(&reply);
+	reply = axis_test_web_request(fx->session, fx->port, "GET", "/admin/portal", admin, NULL, NULL);
+	assert_status(&reply, 200);
+	assert_holds(reply.body, "Requests made through the portal today count 0 of 30");
+	assert_holds(reply.body, "Failed logins through the portal in the last hour: 0 of 30.");
+	assert_holds(reply.body, "Neither limit was reached in the last 24 hours");
+	assert_holds(reply.body, "have not been reviewed for exposure to the internet");
+	assert_holds(reply.body, "only from a network you trust");
+	assert_lacks(reply.body, "is not part of this version");
+	axis_test_reply_clear(&reply);
+
+	/* Twenty-nine failures reach nothing. */
+	for (i = 0; i < AXIS_PORTAL_LOGIN_FAILURES_AN_HOUR - 1; i++) {
+		g_autofree gchar *name = g_strdup_printf("stranger%u", i);
+		g_autofree gchar *address = g_strdup_printf("203.0.113.%u", i + 1);
+		g_autofree gchar *body = login_body(name, "some-password-or-other", address);
+
+		g_free(expect(fx, "login", body, 401));
+	}
+	g_assert_cmpuint(axis_requests_portal_limit_count(fx->r->requests, AXIS_REQUESTS_PORTAL_LIMIT_LOGINS, NULL), ==, 0);
+
+	/* The thirtieth reaches the hour's ceiling; the ones admitted beyond it
+	 * reach nothing anew.  More than an hour later, thirty more: twice. */
+	for (round = 0; round < 2; round++) {
+		guint from = round == 0 ? AXIS_PORTAL_LOGIN_FAILURES_AN_HOUR - 1 : 0;
+
+		axis_web_auth_set_time_offset(fx->auth, (gint64)round * 3700 * G_USEC_PER_SEC);
+		for (i = from; i < AXIS_PORTAL_LOGIN_FAILURES_AN_HOUR; i++) {
+			g_autofree gchar *name = g_strdup_printf("stranger%u-%u", round, i);
+			g_autofree gchar *address = g_strdup_printf("203.0.113.%u", 100 + i);
+			g_autofree gchar *body = login_body(name, "some-password-or-other", address);
+
+			g_free(expect(fx, "login", body, 401));
+		}
+		g_assert_cmpuint(axis_requests_portal_limit_count(fx->r->requests, AXIS_REQUESTS_PORTAL_LIMIT_LOGINS, NULL),
+			==, round + 1);
+		{
+			/* One more is admitted over the ceiling, and fails. */
+			g_autofree gchar *body = login_body("stranger-more", "some-password-or-other", "203.0.113.250");
+
+			g_free(expect(fx, "login", body, 401));
+		}
+		g_assert_cmpuint(axis_requests_portal_limit_count(fx->r->requests, AXIS_REQUESTS_PORTAL_LIMIT_LOGINS, NULL),
+			==, round + 1);
+	}
+	g_assert_cmpuint(axis_test_log_count(G_LOG_LEVEL_MESSAGE, "*the portal reached its limit of failed logins*"), ==, 2);
+
+	axis_test_web_read_attention(fx->web);
+	reply = axis_test_web_request(fx->session, fx->port, "GET", "/attention", admin, NULL, NULL);
+	assert_status(&reply, 200);
+	assert_holds(reply.body, "Worth a look");
+	assert_holds(reply.body, "The request portal reached its limit of failed logins in an hour twice in the last 24 "
+		"hours.");
+	assert_holds(reply.body, "href=\"/admin/portal\"");
+	assert_holds(reply.body, "Open Request portal");
+	/* It names no account: not one that failed, not one that exists. */
+	assert_lacks(reply.body, "stranger");
+	assert_lacks(reply.body, "robin");
+	assert_lacks(reply.body, "203.0.113.");
+	axis_test_reply_clear(&reply);
+
+	/* The day's ceiling, reached by the first request it refuses; the ones
+	 * refused after it on the same day reach nothing anew.  (A remembered
+	 * device is not held to the hour's ceiling, but sam has none: the hour
+	 * is waited out.) */
+	axis_web_auth_set_time_offset(fx->auth, G_GINT64_CONSTANT(3) * 3700 * G_USEC_PER_SEC);
+	sam = login(fx, "sam", SAM_PASSWORD);
+	g_assert_true(axis_settings_set(fx->r->settings, AXIS_REQUESTS_SETTING_PORTAL_DAY, "1", &error));
+	g_assert_no_error(error);
+	g_free(ask_movie(fx, sam, kiln, 200));
+	g_assert_cmpuint(axis_requests_portal_limit_count(fx->r->requests, AXIS_REQUESTS_PORTAL_LIMIT_DAY, NULL), ==, 0);
+	g_free(ask_movie(fx, sam, bells, 429));
+	g_free(ask_movie(fx, sam, ledger, 429));
+	g_assert_cmpuint(axis_requests_portal_limit_count(fx->r->requests, AXIS_REQUESTS_PORTAL_LIMIT_DAY, NULL), ==, 1);
+
+	axis_test_web_read_attention(fx->web);
+	reply = axis_test_web_request(fx->session, fx->port, "GET", "/attention", admin, NULL, NULL);
+	assert_status(&reply, 200);
+	assert_holds(reply.body, "The request portal reached its limit of failed logins in an hour twice and its limit of "
+		"requests in a day once in the last 24 hours.");
+	assert_lacks(reply.body, "sam");
+	axis_test_reply_clear(&reply);
+
+	/* The page: where the day and the hour stand, and how often. */
+	reply = axis_test_web_request(fx->session, fx->port, "GET", "/admin/portal", admin, NULL, NULL);
+	assert_status(&reply, 200);
+	assert_holds(reply.body, "Requests made through the portal today count 1 of 1");
+	/* (An apostrophe is written as a character reference.) */
+	assert_holds(reply.body, "share of the day is 1.");
+	assert_holds(reply.body, "limit of requests 1 time, the hour&#39;s limit of failed logins 2 times.");
+	assert_lacks(reply.body, "stranger");
+	axis_test_reply_clear(&reply);
+
+	/* Not an administrator: no notice, and no page. */
+	reply = axis_test_web_request(fx->session, fx->port, "GET", "/", uma, NULL, NULL);
+	assert_status(&reply, 200);
+	assert_lacks(reply.body, "The request portal reached");
+	assert_lacks(reply.body, "/attention");
+	axis_test_reply_clear(&reply);
+	reply = axis_test_web_request(fx->session, fx->port, "GET", "/admin/portal", uma, NULL, NULL);
+	g_assert_cmpuint(reply.status, !=, 200);
+	axis_test_reply_clear(&reply);
+}
+
 int
 main(int argc, char **argv)
 {
 	g_test_init(&argc, &argv, NULL);
 
+	AXIS_TEST_ADD_DB_CASE("/web/auth/login-from-portal-address", Fixture, NULL, test_portal_address);
+	AXIS_TEST_ADD_DB_CASE("/web/auth/portal-addresses-bounded", Fixture, NULL, test_portal_addresses_bounded);
+	AXIS_TEST_ADD_DB_CASE("/web/attention/portal-reached-a-limit", Fixture, NULL, test_limit_notice);
 	AXIS_TEST_ADD_DB_CASE("/portal/api/listener/only-the-api", Fixture, NULL, test_listener);
 	AXIS_TEST_ADD_DB_CASE("/portal/api/token/gate", Fixture, NULL, test_gate);
 	AXIS_TEST_ADD_DB_CASE("/web/portal/token-shown-once", Fixture, NULL, test_token_page);

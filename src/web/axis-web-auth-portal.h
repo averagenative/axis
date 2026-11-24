@@ -135,6 +135,64 @@ axis_web_auth_portal_logout(
 	const gchar *proof
 );
 
+/* (add-request-portal, slice P4.)  An address a valid portal token was
+ * presented from is remembered this long after the last time, and at most
+ * this many of them (the one unused longest is forgotten for a new one). */
+#define AXIS_PORTAL_ADDRESS_REMEMBERED_US (G_GINT64_CONSTANT(24) * 3600 * G_USEC_PER_SEC)
+#define AXIS_PORTAL_ADDRESSES_MAX         256
+
+/**
+ * axis_web_auth_portal_note_address:
+ * @address: (nullable): the address of the connection a valid portal token
+ *   arrived on (the portal listener reads no forwarding header)
+ *
+ * Remembers that @address speaks as a portal.  For
+ * %AXIS_PORTAL_ADDRESS_REMEMBERED_US after the last time, a login at the
+ * engine's own interface from that address is refused with the answer of a
+ * wrong password, and its password is not checked: a password typed into a
+ * portal that is in the wrong hands cannot be used from the portal's own
+ * place in the network.  A session that exists is not affected.  Kept in
+ * memory: a restart of the daemon forgets the addresses until the portal's
+ * next request.  Main loop only.
+ */
+void
+axis_web_auth_portal_note_address(
+	AxisWebAuth *self,
+	const gchar *address
+);
+
+/* Whether @address (a client's, as the engine's login sees it) is such an
+ * address now.  Main loop only. */
+gboolean
+axis_web_auth_portal_address_known(
+	AxisWebAuth *self,
+	const gchar *address
+);
+
+/* How many addresses are remembered now.  Main loop only. */
+guint
+axis_web_auth_portal_addresses(AxisWebAuth *self);
+
+/**
+ * axis_web_auth_portal_set_ceiling_func:
+ * @func: (nullable): called on the main loop each time the failed logins of
+ *   the last hour reach %AXIS_PORTAL_LOGIN_FAILURES_AN_HOUR from below
+ *
+ * Who is told that the hourly ceiling was reached (the notice and the page
+ * "Request portal").
+ */
+void
+axis_web_auth_portal_set_ceiling_func(
+	AxisWebAuth *self,
+	void       (*func)(gpointer user_data),
+	gpointer     user_data
+);
+
+/* How many failed logins through the portal API the last hour holds, for the
+ * page "Request portal".  Main loop only. */
+guint
+axis_web_auth_portal_failures(AxisWebAuth *self);
+
 /* How many logins wait for the hashing place now, and whether one is being
  * checked: for tests. */
 guint
