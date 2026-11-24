@@ -80,9 +80,10 @@
 #
 #   make -j16 check && make -j16 fuzz
 #
-# On 16 processors the two take about ten minutes (nine and a half, then
-# one and a half with FUZZ_SECONDS=20).  The longest test program sets the
-# time of the tests: the list of the ten slowest says which.
+# On 16 processors the two take about ten minutes from an empty build
+# directory (nine, then one and a half with FUZZ_SECONDS=20), and six when
+# the fuzz targets are compiled already.  The longest test program sets
+# the time of the tests: the list of the ten slowest says which.
 
 include config.mk
 
