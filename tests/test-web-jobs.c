@@ -1347,9 +1347,12 @@ test_progress_is_coalesced(Fixture *fx, gconstpointer data)
 static void
 test_activity_indicator(Fixture *fx, gconstpointer data)
 {
+	const gchar *none_running = "<span class=\"activity-count\">0</span><span> jobs running</span>";
 	g_autoptr(AxisTestStream) stream = NULL;
 	AxisTestReply page;
+	gint64 until;
 	gint64 id;
+	guint told;
 
 	SKIP_WITHOUT_DB(fx);
 	page = get_as(fx, fx->viewer, "/");
@@ -1378,11 +1381,18 @@ test_activity_indicator(Fixture *fx, gconstpointer data)
 	assert_contains(page.body, "<span class=\"activity-kinds\">: 1 other job</span>");
 	axis_test_reply_clear(&page);
 
-	/* And it finishes. */
+	/* And it finishes.  The stream may hold a fragment that says 0 already:
+	 * on a busy machine the counts are read once while the job is queued
+	 * and not yet running, and the header is told of that too.  The
+	 * fragment that tells of the end is one more than those. */
+	told = axis_test_stream_count(stream, none_running);
 	open_gate(fx);
 	wait_for_state(fx, id, "succeeded");
-	g_assert_true(axis_test_stream_wait_for(stream,
-		"<span class=\"activity-count\">0</span><span> jobs running</span>", 5000));
+	until = g_get_monotonic_time() + 5000 * 1000;
+	while (axis_test_stream_count(stream, none_running) <= told) {
+		g_assert_cmpint(g_get_monotonic_time(), <, until);
+		axis_test_pump_for(10);
+	}
 	g_assert_cmpint(axis_web_jobs_get_running(fx->jobs), ==, 0);
 }
 
