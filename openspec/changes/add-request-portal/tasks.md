@@ -101,7 +101,7 @@ Gate:
 Build:
 
 - [ ] 2.1 Confirm first what "Believed and not confirmed" says about a second listener, and record the answer in `design.md`.
-- [ ] 2.2 Migration `0081_portal_api.sql`: the role `requester` in the check constraint of `app_user`, `portal_token`, `kind` on `web_session` (`web` for every existing row).
+- [ ] 2.2 Migration `NNNN_portal_api.sql` (the next free number in `data/migrations/` when it is written; 0083 is P1's): the role `requester` in the check constraint of `app_user`, `portal_token`, `kind` on `web_session` (`web` for every existing row).
 - [ ] 2.3 The requester role in the user store, the Users page, the engine's login, the session lookup and the middleware; the password rules for a requester.
 - [ ] 2.4 The portal listener (`server.portal_listen_port`, `AXIS_PORTAL_LISTEN_PORT`), with a router that holds the operations only, under the connection limits.
 - [ ] 2.5 The portal gate and the token store, beside the worker's; the page "Request portal".

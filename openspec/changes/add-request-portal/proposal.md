@@ -46,7 +46,7 @@ What stays out:
 
 ## Impact
 
-- **Database.** Two migrations: `0080_requests.sql` (P1: `request`, `request_season`, `request_follower`, `request_closed_title`, the per-person request settings on `app_user`) and `0081_portal_api.sql` (P2: the `requester` role, `portal_token`, a kind on `web_session`). Both only add tables, columns and a wider check constraint, and are safe on a live database.
+- **Database.** Two migrations: `0083_requests.sql` (P1: `request`, `request_season`, `request_follower`, `request_closed_title`, the per-person request settings on `app_user`) and a `portal_api` migration with the next free number when P2 is built (P2: the `requester` role, `portal_token`, a kind on `web_session`). Both only add tables, columns and a wider check constraint, and are safe on a live database.
 - **Daemon.** New code in `src/requests/` (the model and its rules), `src/api/` (the portal API beside the worker API), `src/web/` (the Requests pages, the Request portal page, the role and credential-class checks in the one authentication middleware), and a second listener in `src/axisd/main.c`. `axis_movies_add()` and `axis_tv_add()` are called by an approval, unchanged.
 - **A new binary.** `clients/portal/`, linked like `axis-worker` without libpq, with a link check of its own.
 - **Image and examples.** `axis-portal` is added to the image. The Compose, Kubernetes and Quadlet examples gain an optional portal service and a network for it.

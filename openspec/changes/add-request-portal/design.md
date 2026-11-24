@@ -200,13 +200,15 @@ The members of a title and of a request are fixed in the `portal` specification,
 
 ## 3. Requests
 
-**Data model** (migration `0080_requests.sql`):
+**Data model** (migration `0083_requests.sql`):
 
-- `request`: an identifier, a public identifier, the title, the kind, who asked, when, the decision (`waiting`, `approved`, `declined`, `withdrawn`, `replaced`), who decided and when, whether it was approved automatically, the decline's reason, the library folder and quality profile used, and the movie or series row it added. A partial unique index allows one open request (waiting or approved) for a movie.
+- `request`: an identifier, a public identifier, the title, the kind, who asked, when, the decision (`waiting`, `approved`, `declined`, `withdrawn`, `replaced`), who decided and when, how it was approved (by an administrator, automatically, or without waiting because Axis was looking for the title already), the decline's reason, the library folder and quality profile used, and the movie or series row it added. A partial unique index allows one open request (waiting or approved) for a movie.
 - `request_season`: a request and a season number. One open request for a series' season, by a partial unique index.
 - `request_follower`: a request and a person.
 - `request_closed_title`: a title and a kind that an administrator closed to requests, with who and when.
 - On `app_user`: the two switches and the two limits of a person (null for the installation's).
+
+As built in P1, the rows also hold: the name of the account that asked (kept so that a request still says who asked when the account is deleted; the account's own column is then empty); when the request was counted against that person's quota (when it was made, or when a follower took it over); why a request waits although the person's switch is on; the engine's own reason when an approved title could not be added, and when it was added; and whether it came through the engine's interface or the portal API, which P2's daily ceiling counts. `request_season` repeats the title and carries an "open" flag that a trigger keeps equal to its request's decision, so that the unique index can be on the season itself. A trigger moves a title's requests to the record that is kept when two records of a title merge, as the movies' and the series' own triggers do.
 
 **Seasons.** The person's choice (whole series, first, latest, picked) is expanded by the daemon when the request is made, from the seasons the title's record has then. The specials are in a request only when picked by number. A season that the provider announces later is not part of an earlier "whole series" request; it is asked for when it exists. That is the price of a list that never widens by itself, and it is an open question whether a follow-on for new seasons is wanted later.
 
@@ -282,8 +284,8 @@ Each slice stands alone, is reviewed alone, and leaves nothing that faces the in
 
 | Slice | What it builds | Reachable from where | Migration |
 |---|---|---|---|
-| P1 | The request model, quotas, followers, states, automatic approval, the Requests pages, the notices, Request for an ordinary user in the engine's interface. | The engine's interface only. | `0080_requests.sql` |
-| P2 | The requester role, the portal token, the portal listener, the eleven operations and their enforcement tests, portal sessions, the daemon's limits, the page "Request portal". | The portal listener, off by default. No program speaks to it but the tests. | `0081_portal_api.sql` |
+| P1 | The request model, quotas, followers, states, automatic approval, the Requests pages, the notices, Request for an ordinary user in the engine's interface. | The engine's interface only. | `0083_requests.sql` |
+| P2 | The requester role, the portal token, the portal listener, the eleven operations and their enforcement tests, portal sessions, the daemon's limits, the page "Request portal". | The portal listener, off by default. No program speaks to it but the tests. | `portal_api`, with the next free number then |
 | P3 | `axis-portal`: its pages against that API, its CSRF and cookies, its own limits, its log, its link check, its fuzz targets. | A developer's machine. Not in the examples. | None |
 | P4 | The image, the container hardening, the examples and their checks, the proxy guide, the address rule, the notices for the ceilings, the known limits. | Where a person puts it, with the "not reviewed" statement. | None |
 | P5 | An independent security review of P1 to P4 as a whole, its findings fixed with tests, and the documents changed to say what was reviewed. | The internet, from here on. | None |

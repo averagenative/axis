@@ -661,6 +661,113 @@ test_check_current(Fixture *fx, gconstpointer data)
 	g_assert_cmpuint(axis_db_pool_get_n_in_use(fx->pool), ==, 0);
 }
 
+/*
+ * add-request-portal, slice P1 (task 1.1): 0083_requests.sql on a database
+ * that has accounts already.  The accounts keep everything they had and get
+ * the two switches off and no limit of their own; and the rules the tables
+ * hold by themselves hold: one open request for a movie and for a season, a
+ * season's "open" following its request's decision.
+ */
+static void
+test_requests_on_accounts(Fixture *fx, gconstpointer data)
+{
+	g_autoptr(GError) error = NULL;
+	g_autoptr(GDir) dir = NULL;
+	g_autoptr(GPtrArray) files = g_ptr_array_new_with_free_func(g_free);
+	g_autoptr(GPtrArray) keep = g_ptr_array_new_with_free_func(g_free);
+	g_autoptr(GArray) before = g_array_new(FALSE, TRUE, sizeof(AxisDbMigration));
+	g_autofree gchar *title = NULL;
+	g_autofree gchar *accounts = NULL;
+	const gchar *entry;
+	guint requests_version = 0;
+	guint i;
+
+	if (fx->db == NULL)
+		return;
+
+	dir = g_dir_open(AXIS_MIGRATION_DIR, 0, &error);
+	g_assert_no_error(error);
+	while ((entry = g_dir_read_name(dir)) != NULL)
+		g_ptr_array_add(files, g_strdup(entry));
+	g_ptr_array_sort_values(files, (GCompareFunc)strcmp);
+	/* Every migration before the requests', as an older daemon applied them. */
+	for (i = 0; i < files->len; i++) {
+		const gchar *file = g_ptr_array_index(files, i);
+		g_autofree gchar *path = g_build_filename(AXIS_MIGRATION_DIR, file, NULL);
+		AxisDbMigration migration;
+		gchar *contents = NULL;
+		gchar *name = NULL;
+		guint version = 0;
+
+		g_assert_true(axis_db_migration_parse_filename(file, &version, &name));
+		g_ptr_array_add(keep, name);
+		if (g_strcmp0(name, "requests") == 0) {
+			requests_version = version;
+			break;
+		}
+		g_assert_true(g_file_get_contents(path, &contents, NULL, &error));
+		g_ptr_array_add(keep, contents);
+		memset(&migration, 0, sizeof(migration));
+		migration.version = version;
+		migration.name = name;
+		migration.sql = contents;
+		migration.no_transaction = axis_db_migration_has_no_transaction_marker(contents);
+		g_array_append_val(before, migration);
+	}
+	g_assert_cmpuint(requests_version, >, 1);
+	g_assert_true(axis_db_migrate_with(fx->pool, (const AxisDbMigration *)before->data, before->len, &error));
+	g_assert_no_error(error);
+	assert_query(fx, "SELECT to_regclass('request') IS NULL", "t");
+	axis_test_db_exec(fx->db, "INSERT INTO app_user (username, password_hash, role, disabled, auth_epoch) VALUES"
+		" ('root', '$argon2id$not-a-password', 'admin', false, 3), ('robin', '$argon2id$not-a-password', 'user', true, 7)");
+	axis_test_db_exec(fx->db, "INSERT INTO meta_title (kind, title, provider, provider_id) VALUES"
+		" ('film', 'A Made-Up Film', 'fixture', 'm1'), ('series', 'A Made-Up Series', 'fixture', 's1')");
+
+	g_assert_true(axis_db_migrate(fx->pool, &error));
+	g_assert_no_error(error);
+	accounts = q(fx, "SELECT string_agg(username || ' ' || role || ' ' || disabled || ' ' || auth_epoch || ' ' ||"
+		" request_auto_movies || ' ' || request_auto_series || ' ' || coalesce(request_movies_limit::text, '-') || ' '"
+		" || coalesce(request_seasons_limit::text, '-'), ', ' ORDER BY username) FROM app_user");
+	g_assert_cmpstr(accounts, ==, "robin user true 7 false false - -, root admin false 3 false false - -");
+
+	/* One open request for a movie: a second is refused by the database. */
+	axis_test_db_exec(fx->db, "INSERT INTO request (public_id, title_id, kind, requested_by, requested_name, created_at,"
+		" counted_at) SELECT 'AAAAAAAAAAAAAAAAAAAAA1', t.id, 'movie', u.id, u.username, now(), now()"
+		" FROM meta_title t, app_user u WHERE t.provider_id = 'm1' AND u.username = 'robin'");
+	assert_query(fx, "WITH tried AS (INSERT INTO request (public_id, title_id, kind, requested_name, created_at,"
+		" counted_at) SELECT 'AAAAAAAAAAAAAAAAAAAAA2', id, 'movie', 'robin', now(), now() FROM meta_title"
+		" WHERE provider_id = 'm1' ON CONFLICT DO NOTHING RETURNING 1) SELECT count(*) FROM tried", "0");
+	/* Declined, it is open no more, and the title can be asked for again. */
+	axis_test_db_exec(fx->db, "UPDATE request SET decision = 'declined' WHERE public_id = 'AAAAAAAAAAAAAAAAAAAAA1'");
+	assert_query(fx, "WITH tried AS (INSERT INTO request (public_id, title_id, kind, requested_name, created_at,"
+		" counted_at) SELECT 'AAAAAAAAAAAAAAAAAAAAA2', id, 'movie', 'robin', now(), now() FROM meta_title"
+		" WHERE provider_id = 'm1' ON CONFLICT DO NOTHING RETURNING 1) SELECT count(*) FROM tried", "1");
+
+	/* One open request for a season; a season's "open" follows its request. */
+	title = q(fx, "SELECT id::text FROM meta_title WHERE provider_id = 's1'");
+	axis_test_db_exec(fx->db, "INSERT INTO request (public_id, title_id, kind, requested_name, created_at, counted_at)"
+		" SELECT 'AAAAAAAAAAAAAAAAAAAAA3', id, 'series', 'robin', now(), now() FROM meta_title WHERE provider_id = 's1'");
+	axis_test_db_exec(fx->db, "INSERT INTO request (public_id, title_id, kind, requested_name, created_at, counted_at)"
+		" SELECT 'AAAAAAAAAAAAAAAAAAAAA4', id, 'series', 'robin', now(), now() FROM meta_title WHERE provider_id = 's1'");
+	axis_test_db_exec(fx->db, "INSERT INTO request_season (request_id, title_id, season) SELECT id, title_id, 1"
+		" FROM request WHERE public_id = 'AAAAAAAAAAAAAAAAAAAAA3'");
+	assert_query(fx, "WITH tried AS (INSERT INTO request_season (request_id, title_id, season) SELECT id, title_id, 1"
+		" FROM request WHERE public_id = 'AAAAAAAAAAAAAAAAAAAAA4' ON CONFLICT DO NOTHING RETURNING 1)"
+		" SELECT count(*) FROM tried", "0");
+	axis_test_db_exec(fx->db, "UPDATE request SET decision = 'withdrawn' WHERE public_id = 'AAAAAAAAAAAAAAAAAAAAA3'");
+	assert_query(fx, "SELECT bool_or(open)::text FROM request_season", "false");
+	assert_query(fx, "WITH tried AS (INSERT INTO request_season (request_id, title_id, season) SELECT id, title_id, 1"
+		" FROM request WHERE public_id = 'AAAAAAAAAAAAAAAAAAAAA4' ON CONFLICT DO NOTHING RETURNING 1)"
+		" SELECT count(*) FROM tried", "1");
+
+	/* An account that is deleted leaves its requests, naming no one. */
+	axis_test_db_exec(fx->db, "DELETE FROM app_user WHERE username = 'robin'");
+	assert_query(fx, "SELECT count(*) FROM request WHERE public_id = 'AAAAAAAAAAAAAAAAAAAAA1'"
+		" AND requested_by IS NULL AND requested_name = 'robin'", "1");
+	assert_lock_free(fx);
+	g_assert_cmpuint(axis_db_pool_get_n_in_use(fx->pool), ==, 0);
+}
+
 #define ADD(path, func) \
 	g_test_add(path, Fixture, NULL, fixture_setup, func, fixture_teardown)
 
@@ -684,6 +791,7 @@ main(int argc, char **argv)
 	ADD("/db/migrate/statement-timeout-disabled", test_statement_timeout_disabled);
 	ADD("/db/migrate/invalid-lists", test_invalid_lists);
 	ADD("/db/migrate/check-current", test_check_current);
+	ADD("/db/migrate/requests-on-accounts", test_requests_on_accounts);
 
 	return g_test_run();
 }
