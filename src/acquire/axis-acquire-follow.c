@@ -520,21 +520,66 @@ finish_stale_searches(
 /* Older searches go, with their releases (grabs and history keep what they
  * said).  The latest automatic ones and the latest manual ones are kept
  * apart: a person's looks never push out what explains a title's state. */
-static gboolean
-prune_searches(
+/*
+ * Not at every follow-up (every minute), and not all at once: once in
+ * AXIS_ACQUIRE_PRUNE_EVERY_S (and at the first follow-up after a start), at
+ * most AXIS_ACQUIRE_PRUNE_BATCH searches a statement, each statement its own
+ * transaction, at most AXIS_ACQUIRE_PRUNE_BATCHES of them.  One statement
+ * for everything old enough took a search's stored releases with it for
+ * every search in one transaction: after a long stop that was 110,000
+ * searches and their 280,000 releases in 4.5 s, with the rows locked until
+ * it ended.  What a time leaves waits for the next.
+ */
+gboolean
+axis_acquire_prune_searches(
 	AxisAcquire  *self,
+	gboolean      now,
+	guint        *deleted_out,
 	GError      **error
 ){
 	g_autofree gchar *kept = axis_acquire_int_text(AXIS_ACQUIRE_SEARCHES_KEPT);
 	g_autofree gchar *after = axis_acquire_int_text(AXIS_ACQUIRE_SEARCH_KEEP_S);
-	g_autofree gchar *sql = axis_acquire_sql(self, "DELETE FROM %S s WHERE s.finished_at < now() - $2::integer *"
-		" interval '1 second' AND s.id NOT IN (SELECT k.id FROM %S k WHERE k.%O = s.%O"
-		" AND (k.cause = 'list') = (s.cause = 'list') ORDER BY k.id DESC LIMIT $1::integer)");
-	const gchar *params[2];
+	g_autofree gchar *batch = axis_acquire_int_text(AXIS_ACQUIRE_PRUNE_BATCH);
+	g_autofree gchar *sql = axis_acquire_sql(self, "WITH gone AS (DELETE FROM %S WHERE id IN (SELECT s.id FROM %S s"
+		" WHERE s.finished_at < now() - $2::integer * interval '1 second' AND s.id NOT IN (SELECT k.id FROM %S k"
+		" WHERE k.%O = s.%O AND (k.cause = 'list') = (s.cause = 'list') ORDER BY k.id DESC LIMIT $1::integer)"
+		" LIMIT $3::integer) RETURNING 1) SELECT count(*) FROM gone");
+	const gchar *params[3];
+	gint64 at = g_get_monotonic_time();
+	guint deleted = 0;
+	guint i;
+
+	if (deleted_out != NULL)
+		*deleted_out = 0;
+	g_mutex_lock(&self->hook_lock);
+	if (!now && self->prune_after_us != 0 && at < self->prune_after_us) {
+		g_mutex_unlock(&self->hook_lock);
+		return TRUE;
+	}
+	g_mutex_unlock(&self->hook_lock);
 
 	params[0] = kept;
 	params[1] = after;
-	return axis_db_pool_exec(self->pool, sql, 2, params, NULL, error);
+	params[2] = batch;
+	for (i = 0; i < AXIS_ACQUIRE_PRUNE_BATCHES; i++) {
+		g_autoptr(AxisDbResult) result = NULL;
+		gint64 n = 0;
+
+		if (!axis_db_pool_exec(self->pool, sql, 3, params, &result, error))
+			return FALSE;
+		axis_db_result_get_int64(result, 0, 0, &n);
+		deleted += (guint)MAX(n, 0);
+		if (n < AXIS_ACQUIRE_PRUNE_BATCH)
+			break;
+	}
+	/* The hour is spent only by a time that worked: after a failure the next
+	 * follow-up tries again. */
+	g_mutex_lock(&self->hook_lock);
+	self->prune_after_us = at + (gint64)AXIS_ACQUIRE_PRUNE_EVERY_S * G_USEC_PER_SEC;
+	g_mutex_unlock(&self->hook_lock);
+	if (deleted_out != NULL)
+		*deleted_out = deleted;
+	return TRUE;
 }
 
 /* A claim the daemon never handed over: adopt the download it sent, if
@@ -920,7 +965,7 @@ axis_acquire_run_follow(
 		retry_removals(self, &report, error) &&
 		record_completions(self, &report, error) &&
 		(self->info->follow_more == NULL || self->info->follow_more(self->data, &report, error)) &&
-		prune_searches(self, error);
+		axis_acquire_prune_searches(self, FALSE, NULL, error);
 	if (report_out != NULL)
 		*report_out = report;
 	return ok;

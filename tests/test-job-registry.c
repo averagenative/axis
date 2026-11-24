@@ -11,6 +11,7 @@
 
 #include "core/axis-error.h"
 #include "core/axis-module.h"
+#include "jobs/axis-history.h"
 #include "jobs/axis-job-builtin.h"
 #include "jobs/axis-job-error.h"
 #include "jobs/axis-job-lifecycle.h"
@@ -362,7 +363,7 @@ static void
 test_every_kind_described(void)
 {
 	const AxisModuleInfo *(*const getters[])(void) = {
-		axis_job_builtin_get_module, axis_web_settings_get_module, axis_web_jobs_get_module,
+		axis_job_builtin_get_module, axis_history_get_module, axis_web_settings_get_module, axis_web_jobs_get_module,
 		axis_web_storage_get_module, axis_web_library_get_module, axis_web_probe_get_module,
 		axis_web_browser_get_module, axis_web_analysis_get_module, axis_web_savings_get_module,
 		axis_web_compat_get_module, axis_web_profiles_get_module, axis_web_workers_get_module,
@@ -410,6 +411,9 @@ test_every_kind_described(void)
 	g_assert_cmpint(axis_job_registry_get_class(registry, "movies.follow"), ==, AXIS_JOB_CLASS_UPKEEP);
 	g_assert_cmpint(axis_job_registry_get_class(registry, "import.run"), ==, AXIS_JOB_CLASS_WORK);
 	g_assert_cmpint(axis_job_registry_get_class(registry, "jobs.prune"), ==, AXIS_JOB_CLASS_UPKEEP);
+	g_assert_cmpint(axis_job_registry_get_class(registry, AXIS_HISTORY_PRUNE_KIND), ==, AXIS_JOB_CLASS_UPKEEP);
+	g_assert_cmpstr(axis_job_registry_get_label(registry, AXIS_HISTORY_PRUNE_KIND), ==,
+		"Deleting old history of movies, series, downloads and imports");
 	g_test_message("%u kinds from the modules, %u of them upkeep", kinds, upkeep);
 	g_assert_cmpuint(kinds, >=, 25);
 }

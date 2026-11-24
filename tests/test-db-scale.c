@@ -15,6 +15,8 @@
  *                     make DEBUG=1 build/gcc-debug/tests/test-db-scale
  *                     AXIS_DB_SCALE=100 tests/with-postgres.sh \
  *                       build/gcc-debug/tests/test-db-scale
+ *   AXIS_DB_SCALE_PLANS  set: the whole plan of every statement measured is
+ *                   printed, not only its lines that matter
  *
  * What is measured is what ships: the daemon's own functions are called,
  * the statements they send are told to the test by the pool
@@ -29,8 +31,13 @@
  *
  *   /db/scale/fixes     what this change fixed, before and after, with the
  *                       bounds `make check` holds
- *   /db/scale/report    what is only measured (the next batch); at 2 % of
- *                       the scale unless AXIS_DB_SCALE says otherwise
+ *   /db/scale/second    what scale-database-second-batch fixed (the TV
+ *                       scheduler, the Jobs list, storing a search's
+ *                       results, the prune of old searches, the lists'
+ *                       counts), with its bounds; "before" is the first
+ *                       batch's report, in that change's design.md
+ *   /db/scale/report    what is only measured; at 2 % of the scale unless
+ *                       AXIS_DB_SCALE says otherwise
  *
  * Every title here is made up ("Generated Series 12").
  */
@@ -60,6 +67,7 @@
 #include "download/axis-download.h"
 #include "import/axis-import.h"
 #include "indexer/axis-indexer.h"
+#include "jobs/axis-history.h"
 #include "jobs/axis-job-registry.h"
 #include "library/axis-analysis.h"
 #include "meta/axis-meta.h"
@@ -866,6 +874,8 @@ add_row(
 	g_ptr_array_add(fx->rows, row);
 	/* (Progress; the table at the end has the plans' lines.) */
 	g_print("%-7s %-62s %10.1f ms\n", phase, name, row->exec_ms);
+	if (plan != NULL && g_getenv("AXIS_DB_SCALE_PLANS") != NULL)
+		g_print("%s\n", plan);
 	return row;
 }
 
@@ -1233,25 +1243,6 @@ test_fixes(Fixture *fx, gconstpointer data)
 
 /* ── What is only measured ──────────────────────────────────────── */
 
-static const gchar *jobs_cursor;	/* of call_jobs_list() */
-static const gchar *jobs_state;
-
-static void
-call_jobs_list(Fixture *fx)
-{
-	g_autoptr(GError) error = NULL;
-	g_autoptr(GPtrArray) rows = NULL;
-	g_autofree gchar *next = NULL;
-	g_auto(GStrv) queues = NULL;
-	AxisJobFilter filter;
-
-	memset(&filter, 0, sizeof(filter));
-	filter.cursor = jobs_cursor;
-	filter.state = jobs_state;
-	if (!axis_web_jobs_list(fx->t->pool, fx->kinds, &filter, &rows, &next, &queues, &error))
-		g_print("the Jobs list failed: %s\n", error->message);
-}
-
 static void
 call_movies_page(Fixture *fx)
 {
@@ -1373,29 +1364,51 @@ pool_set_jit(
 	g_free(held);
 }
 
-/* Storing one search's thousand results as the search does: one INSERT a
- * row in one transaction (src/acquire/axis-acquire-search.c), rolled back;
- * and, to compare, the same rows in one statement. */
-static void
-report_store_results(Fixture *fx)
-{
+/* ── What the second batch fixed ────────────────────────────────── */
+
+/* What `make check` holds of them, at a tenth of the scale and under the
+ * sanitizers: generous, and of the database's own time but for the
+ * scheduler, whose time is the process's. */
+#define BOUND_JOBS_LIST_MS   100.0
+#define BOUND_PRUNE_MS       5000.0
+#define BOUND_SCHEDULE_S     60.0
+
+static gchar *stored_digest;	/* of store_results(): what the first call stored */
+
+/*
+ * Storing one search's thousand results in one transaction that is rolled
+ * back.  @batched: with the statement the search itself sends
+ * (axis_acquire_candidates_sql(), in src/acquire/axis-acquire-search.c),
+ * AXIS_ACQUIRE_CANDIDATES_A_STATEMENT rows a statement; else as the search
+ * did before, one INSERT a row.  The time in milliseconds.
+ */
+static gdouble
+store_results(
+	Fixture  *fx,
+	gboolean  batched
+){
 	static const gchar one[] = "INSERT INTO series_candidate (search_id, position, release_id, source_id,"
 		" name, protocol, size_bytes, published_at, seeders, indexer, indexer_id, info_hash, name_key, quality, match,"
 		" match_text, accepted, safety, blocklisted, rank, score, reasons) VALUES ($1::bigint, $2::integer,"
 		" $3::bigint, $4::bigint, $5, $6, $7::bigint, to_timestamp($8::bigint / 1000000.0), $9::integer, $10,"
 		" $11::bigint, $12, $13, $14, $15, $16, $17::boolean, $18::boolean, $19::boolean, $20::integer,"
 		" $21::integer, $22::jsonb) RETURNING id";
+	static const gchar reasons[] = "[{\"k\": \"profile\", \"c\": \"quality_not_wanted\", \"t\": \"As the test made"
+		" it.\"}]";
 	g_autoptr(GError) error = NULL;
+	g_autofree gchar *statement = axis_acquire_candidates_sql("series_candidate");
 	g_autofree gchar *search = axis_test_db_query(fx->t->db, "SELECT max(id)::text FROM series_search"
 		" WHERE outcome = 'nothing_found'");
 	AxisDbConn *conn = axis_db_pool_acquire(fx->t->pool, &error);
 	gint64 began;
+	gdouble ms;
+	guint first;
 	guint i;
 
 	g_assert_nonnull(conn);
 	g_assert_true(axis_db_conn_begin(conn, &error));
 	began = g_get_monotonic_time();
-	for (i = 0; i < 1000; i++) {
+	for (i = 0; !batched && i < 1000; i++) {
 		g_autoptr(AxisDbResult) inserted = NULL;
 		g_autofree gchar *position = g_strdup_printf("%u", i + 100);
 		g_autofree gchar *name = g_strdup_printf("Generated.Series.S01E01.%u.1080p.WEB-DL-GRP", i);
@@ -1422,29 +1435,429 @@ report_store_results(Fixture *fx)
 		params[18] = "false";
 		params[19] = position;
 		params[20] = "0";
-		params[21] = "[{\"k\": \"profile\", \"c\": \"quality_not_wanted\", \"t\": \"As the test made it.\"}]";
+		params[21] = reasons;
 		g_assert_true(axis_db_conn_exec(conn, one, 22, params, &inserted, &error));
 	}
-	g_print("storing 1,000 results of one search, one INSERT a row: %.0f ms\n",
-		(g_get_monotonic_time() - began) / 1000.0);
-	axis_db_conn_rollback(conn, NULL);
-	g_assert_true(axis_db_conn_begin(conn, &error));
-	began = g_get_monotonic_time();
+	for (first = 0; batched && first < 1000; first += AXIS_ACQUIRE_CANDIDATES_A_STATEMENT) {
+		guint n = MIN((guint)AXIS_ACQUIRE_CANDIDATES_A_STATEMENT, 1000 - first);
+		g_autoptr(GString) rows = g_string_new("[");
+		g_autoptr(AxisDbResult) inserted = NULL;
+		const gchar *params[2];
+
+		for (i = 0; i < n; i++)
+			g_string_append_printf(rows, "%s{\"position\": %u, \"release_id\": %u, \"source_id\": 1, \"name\":"
+				" \"Generated.Series.S01E01.%u.1080p.WEB-DL-GRP\", \"protocol\": \"usenet\", \"size_bytes\": 1000000000,"
+				" \"published_us\": 1794657600000000, \"indexer\": \"Generated Indexer\", \"indexer_id\": 1,"
+				" \"name_key\": \"Generated.Series.S01E01.%u.1080p.WEB-DL-GRP\", \"quality\": \"webdl_1080p\","
+				" \"match\": \"match\", \"match_text\": \"As the test made it.\", \"accepted\": false, \"safety\": false,"
+				" \"blocklisted\": false, \"rank\": %u, \"score\": 0, \"reasons\": %s}", i > 0 ? "," : "",
+				first + i + 100, first + i + 100, first + i, first + i, first + i + 100, reasons);
+		g_string_append_c(rows, ']');
+		params[0] = search;
+		params[1] = rows->str;
+		g_assert_true(axis_db_conn_exec(conn, statement, 2, params, &inserted, &error));
+		g_assert_no_error(error);
+		g_assert_cmpuint(axis_db_result_get_n_rows(inserted), ==, n);
+	}
+	ms = (g_get_monotonic_time() - began) / 1000.0;
+	/* Both ways store the same rows. */
 	{
+		g_autoptr(AxisDbResult) stored = NULL;
 		const gchar *params[1];
 
 		params[0] = search;
-		g_assert_true(axis_db_conn_exec(conn, "INSERT INTO series_candidate (search_id, position, release_id,"
-			" source_id, name, protocol, name_key, quality, match, match_text, accepted, safety, reasons)"
-			" SELECT $1::bigint, p + 100, p, 1, 'Generated.Series.S01E01.' || p || '.1080p.WEB-DL-GRP', 'usenet',"
-			" 'generated-' || p, 'webdl_1080p', 'match', 'As the test made it.', false, false,"
-			" '[{\"k\": \"profile\", \"c\": \"quality_not_wanted\", \"t\": \"As the test made it.\"}]'::jsonb"
-			" FROM generate_series(1, 1000) p", 1, params, NULL, &error));
+		g_assert_true(axis_db_conn_exec(conn, "SELECT md5(string_agg(concat_ws('|', position, release_id, source_id,"
+			" name, protocol, size_bytes, published_at, seeders, indexer, indexer_id, info_hash, name_key, quality,"
+			" match, match_text, accepted, safety, blocklisted, rank, score, reasons), ';' ORDER BY position))"
+			" FROM series_candidate WHERE search_id = $1::bigint AND position >= 100", 1, params, &stored, &error));
 		g_assert_no_error(error);
+		if (stored_digest == NULL)
+			stored_digest = g_strdup(axis_db_result_get_text(stored, 0, 0));
+		g_assert_cmpstr(axis_db_result_get_text(stored, 0, 0), ==, stored_digest);
 	}
-	g_print("the same 1,000 rows in one statement: %.0f ms\n", (g_get_monotonic_time() - began) / 1000.0);
 	axis_db_conn_rollback(conn, NULL);
 	axis_db_pool_release(fx->t->pool, conn);
+	return ms;
+}
+
+/* The Jobs list as it was before this change, with @filter's values written
+ * in: the ids of its page, "," between them.  What the list must still
+ * give. */
+static gchar *
+jobs_list_before(
+	Fixture             *fx,
+	const AxisJobFilter *filter,
+	const gchar         *upkeep
+){
+	g_autofree gchar *states = filter->state == NULL ? g_strdup("NULL::text[]") :
+		strcmp(filter->state, "active") == 0 ? g_strdup("'{queued,running}'::text[]") :
+		g_strdup_printf("'{%s}'::text[]", filter->state);
+	g_autofree gchar *queue = filter->queue != NULL ? g_strdup_printf("'%s'", filter->queue) : g_strdup("NULL");
+	g_autofree gchar *active = filter->cursor == NULL ? g_strdup("NULL") :
+		g_strdup(filter->cursor[0] == 'a' ? "true" : "false");
+	g_autofree gchar *job_class = filter->job_class != NULL ? g_strdup_printf("'%s'", filter->job_class) :
+		g_strdup("NULL");
+	g_autofree gchar *ask = g_strdup_printf("SELECT string_agg(x.id::text, ',' ORDER BY x.active DESC, x.id DESC)"
+		" FROM (SELECT id, state IN ('queued', 'running') AS active FROM job"
+		" WHERE (%s IS NULL OR state::text = ANY (%s))"
+		" AND (%s::text IS NULL OR queue = %s::text)"
+		" AND (%s::boolean IS NULL OR (state IN ('queued', 'running'), id) < (%s::boolean, %s::bigint))"
+		" AND (%s::text IS NULL OR (kind = ANY ('%s'::text[])) = (%s::text = 'upkeep'))"
+		" ORDER BY (state IN ('queued', 'running')) DESC, id DESC LIMIT %u) x", states, states, queue, queue, active,
+		active, filter->cursor != NULL ? filter->cursor + 1 : "0", job_class, upkeep, job_class,
+		filter->limit != 0 ? filter->limit : AXIS_JOBS_PAGE_SIZE);
+	gchar *ids = axis_test_db_query(fx->t->db, ask);
+
+	return ids != NULL ? ids : g_strdup("");
+}
+
+static AxisJobFilter jobs_filter;	/* of call_jobs_list() */
+static gchar *jobs_ids;			/* what it listed */
+static gchar *jobs_next;
+
+static void
+call_jobs_list(Fixture *fx)
+{
+	g_autoptr(GError) error = NULL;
+	g_autoptr(GPtrArray) rows = NULL;
+	g_auto(GStrv) queues = NULL;
+	GString *ids = g_string_new(NULL);
+	guint i;
+
+	g_clear_pointer(&jobs_ids, g_free);
+	g_clear_pointer(&jobs_next, g_free);
+	g_assert_true(axis_web_jobs_list(fx->t->pool, fx->kinds, &jobs_filter, &rows, &jobs_next, &queues, &error));
+	g_assert_no_error(error);
+	for (i = 0; i < rows->len; i++)
+		g_string_append_printf(ids, "%s%" G_GINT64_FORMAT, i > 0 ? "," : "",
+			((const AxisJobRow *)g_ptr_array_index(rows, i))->id);
+	jobs_ids = g_string_free(ids, FALSE);
+	/* The six queues of the generated jobs, the old probes', and those of
+	 * what the test queued since. */
+	g_assert_cmpuint(g_strv_length(queues), >=, 7);
+}
+
+/* One page of the Jobs list: what it gives is what the statement before this
+ * change gave, and neither of its statements reads the job table. */
+static void
+measure_jobs_page(
+	Fixture     *fx,
+	const gchar *name,
+	const gchar *upkeep
+){
+	g_autofree gchar *before = jobs_list_before(fx, &jobs_filter, upkeep);
+	Row *row = measure_call(fx, name, "after", call_jobs_list, "top AS (SELECT",
+		"Scan on job|Scan using job|Sort Method");
+
+	g_assert_cmpstr(jobs_ids, ==, before);
+	g_assert_null(strstr(row->lines, "Seq Scan on job"));
+	g_assert_cmpfloat(row->exec_ms, <, BOUND_JOBS_LIST_MS);
+}
+
+static void
+call_schedule(
+	Fixture              *fx,
+	const gchar          *name,
+	AxisTvScheduleReport *report
+){
+	g_autoptr(GError) error = NULL;
+	g_autoptr(GPtrArray) all = NULL;
+	glong rss = peak_rss_kb();
+	gint64 began;
+	gdouble seconds;
+
+	memset(report, 0, sizeof(*report));
+	listen_begin();
+	began = g_get_monotonic_time();
+	g_assert_true(axis_tv_run_schedule(fx->tv, report, &error));
+	g_assert_no_error(error);
+	seconds = (g_get_monotonic_time() - began) / 1000000.0;
+	all = listen_end();
+	g_print("the TV scheduler, %s: %.1f s; the episodes of %u series read, %u wanted of them, %u due, %u searches "
+		"queued, %u series synced; the process's peak memory went from %ld MiB to %ld MiB\n", name, seconds,
+		report->series_read, report->considered, report->due, report->queued, report->synced, rss / 1024,
+		peak_rss_kb() / 1024);
+	/* (A page's statement takes some 25 ms; only what takes longer is
+	 * told.) */
+	report_sent(fx, name, all, 60.0);
+	g_assert_cmpfloat(seconds, <, BOUND_SCHEDULE_S);
+}
+
+static void
+test_second(Fixture *fx, gconstpointer data)
+{
+	g_autoptr(GError) error = NULL;
+	g_auto(GStrv) upkeep_kinds = NULL;
+	g_autofree gchar *upkeep = NULL;
+	g_autofree gchar *cursor = NULL;
+	g_autofree gchar *joined = NULL;
+	AxisTvScheduleReport report;
+	gint64 n_series;
+	gint64 began;
+	guint deleted = 0;
+	Row *row;
+
+	make_database(fx);
+	n_series = qi(fx, "SELECT count(*) FROM series");
+
+	/*
+	 * 1. The TV scheduler, as its job runs it every fifteen minutes.  First
+	 * as the database was made: every aired episode is wanted (the profile
+	 * of the generated series would upgrade every file) and none was paced,
+	 * so every series has something due and all are read, a page at a time.
+	 */
+	sql(fx, "UPDATE series SET synced_at = now()");
+	call_schedule(fx, "everything due", &report);
+	g_assert_cmpuint(report.series_read, ==, n_series);
+	g_assert_cmpuint(report.due, ==, qi(fx, "SELECT count(*) FROM series_episode WHERE air_date <= DATE '2026-11-14'"));
+	g_assert_cmpuint(report.queued, ==, 5);
+	/*
+	 * Then as a library is most of the time: what was searched for waits for
+	 * its next time, and what is in the library at a quality its profile does
+	 * not upgrade from is settled.  One series in twenty keeps an episode in
+	 * three due; another one in twenty has every file at the top of the
+	 * ladder and no next search time, which the database tells apart by the
+	 * profile; the others are paced.  Only the first are read.
+	 */
+	sql(fx, "UPDATE series_episode SET next_search_at = to_timestamp(%" G_GINT64_FORMAT ") + interval '4 hours'"
+		" WHERE series_id %% 20 > 1 OR (series_id %% 20 = 0 AND id %% 3 <> 0)", NOW_US / G_USEC_PER_SEC);
+	sql(fx, "UPDATE series_file SET quality = '%s' WHERE series_id %% 20 = 1", axis_quality_name(AXIS_QUALITY_DISC));
+	sql(fx, "UPDATE series_episode e SET next_search_at = to_timestamp(%" G_GINT64_FORMAT ") + interval '4 hours'"
+		" WHERE e.series_id %% 20 = 1 AND NOT EXISTS (SELECT 1 FROM series_file_episode sfe"
+		" WHERE sfe.episode_id = e.id)", NOW_US / G_USEC_PER_SEC);
+	sql(fx, "DELETE FROM job WHERE kind = '" AXIS_TV_SEARCH_KIND "' AND state = 'queued'");
+	sql(fx, "VACUUM ANALYZE series_episode");
+	sql(fx, "VACUUM ANALYZE series_file");
+	call_schedule(fx, "one series in twenty has something due", &report);
+	g_assert_cmpuint(report.series_read, ==, qi(fx, "SELECT count(*) FROM series WHERE id % 20 = 0"));
+	g_assert_cmpuint(report.due, ==, qi(fx, "SELECT count(*) FROM series_episode WHERE series_id % 20 = 0"
+		" AND id % 3 = 0 AND air_date <= DATE '2026-11-14'"));
+	{
+		g_autofree gchar *schedule = axis_tv_store_statement("schedule");
+		g_auto(GStrv) one = g_strsplit(schedule, "$1", -1);
+		g_autofree gchar *with1 = g_strjoinv("'2026-11-14'", one);
+		g_auto(GStrv) two = g_strsplit(with1, "$2", -1);
+		g_autofree gchar *now = g_strdup_printf("%" G_GINT64_FORMAT, NOW_US);
+		g_autofree gchar *with2 = g_strjoinv(now, two);
+		g_auto(GStrv) three = g_strsplit(with2, "$3", -1);
+		g_autofree gchar *with3 = g_strjoinv("(SELECT array_agg(id) FROM quality_profile)", three);
+		g_auto(GStrv) four = g_strsplit(with3, "$4", -1);
+		g_autofree gchar *with4 = g_strjoinv("(SELECT array_agg('{disc}'::text) FROM quality_profile)", four);
+
+		measure_sql(fx, "TV scheduler: the series with an episode that can be due", "after", with4, FALSE, NULL);
+	}
+	g_print("the series' metadata is followed %u series a run, a run every %d s: %" G_GINT64_FORMAT " series take %.1f "
+		"hours to go round (5 a run before: %.1f days)\n", axis_tv_sync_batch(n_series), AXIS_TV_SCHEDULE_INTERVAL_S,
+		n_series, (gdouble)n_series / axis_tv_sync_batch(n_series) * AXIS_TV_SCHEDULE_INTERVAL_S / 3600.0,
+		n_series / 5.0 * AXIS_TV_SCHEDULE_INTERVAL_S / 86400.0);
+
+	/* 2. The Jobs list: each page as its filters make it. */
+	upkeep_kinds = axis_job_registry_list_class(fx->kinds, AXIS_JOB_CLASS_UPKEEP);
+	joined = g_strjoinv(",", upkeep_kinds);
+	upkeep = g_strdup_printf("{%s}", joined);
+	memset(&jobs_filter, 0, sizeof(jobs_filter));
+	measure_jobs_page(fx, "Jobs: the first page", upkeep);
+	jobs_filter.job_class = "work";
+	measure_jobs_page(fx, "Jobs: the work, first page", upkeep);
+	g_assert_nonnull(jobs_next);
+	cursor = g_strdup(jobs_next);
+	jobs_filter.cursor = cursor;
+	measure_jobs_page(fx, "Jobs: the work, second page", upkeep);
+	g_clear_pointer(&cursor, g_free);
+	cursor = g_strdup_printf("f%" G_GINT64_FORMAT, qi(fx, "SELECT max(id) / 2 FROM job"));
+	jobs_filter.cursor = cursor;
+	measure_jobs_page(fx, "Jobs: the work, a page half way", upkeep);
+	jobs_filter.cursor = NULL;
+	jobs_filter.job_class = "upkeep";
+	jobs_filter.limit = AXIS_JOBS_BRIEF_SIZE;
+	measure_jobs_page(fx, "Jobs: the upkeep in brief", upkeep);
+	jobs_filter.limit = 0;
+	jobs_filter.job_class = "work";
+	jobs_filter.state = "failed";
+	measure_jobs_page(fx, "Jobs: the failed work", upkeep);
+	jobs_filter.state = "active";
+	measure_jobs_page(fx, "Jobs: the work that waits or runs", upkeep);
+	jobs_filter.state = "cancelled";
+	jobs_filter.queue = "queue3";
+	measure_jobs_page(fx, "Jobs: the cancelled work of one queue", upkeep);
+	/* A filter that nothing passes walked every job before. */
+	jobs_filter.state = "queued";
+	jobs_filter.queue = "queue0";
+	jobs_filter.job_class = NULL;
+	measure_jobs_page(fx, "Jobs: a state and a queue that no job has", upkeep);
+	g_assert_cmpstr(jobs_ids, ==, "");
+	memset(&jobs_filter, 0, sizeof(jobs_filter));
+	row = measure_call(fx, "Jobs: the queues' names", "after", call_jobs_list, "SELECT DISTINCT queue",
+		"Scan on job|Scan using job");
+	g_assert_null(strstr(row->lines, "Seq Scan on job"));
+	g_assert_cmpfloat(row->exec_ms, <, BOUND_JOBS_LIST_MS);
+	g_clear_pointer(&jobs_ids, g_free);
+	g_clear_pointer(&jobs_next, g_free);
+
+	/* 3. Storing a search's results. */
+	{
+		gdouble each = store_results(fx, FALSE);
+		gdouble batched = store_results(fx, TRUE);
+
+		g_print("storing 1,000 results of one search: %.0f ms one INSERT a row, %.0f ms %d rows a statement\n", each,
+			batched, AXIS_ACQUIRE_CANDIDATES_A_STATEMENT);
+		g_assert_cmpfloat(batched * 2, <, each);
+		g_clear_pointer(&stored_digest, g_free);
+	}
+
+	/*
+	 * 4. The prune of old searches: with nothing old enough to go, then with
+	 * every search a month old (what the first follow-up after a long stop
+	 * finds): one time takes its batches and leaves the rest.
+	 */
+	{
+		g_autoptr(GPtrArray) all = NULL;
+		const Sent *prune;
+		gint64 old;
+
+		listen_begin();
+		g_assert_true(axis_tv_prune_searches(fx->tv, &deleted, &error));
+		g_assert_no_error(error);
+		all = listen_end();
+		g_assert_cmpuint(deleted, ==, 0);
+		prune = sent_find(all, "DELETE FROM series_search");
+		g_assert_nonnull(prune);
+		{
+			g_autofree gchar *literal = sent_literal(prune);
+			g_autofree gchar *plan = plan_of(fx, literal, TRUE, NULL);
+
+			add_row(fx, "prune: no search is old enough to go", "after", -1, plan, NULL);
+		}
+		g_clear_pointer(&all, g_ptr_array_unref);
+		sql(fx, "UPDATE series_search SET started_at = now() - interval '30 days', finished_at = now() - interval"
+			" '30 days'");
+		sql(fx, "VACUUM ANALYZE series_search");
+		old = qi(fx, "SELECT count(*) FROM series_search");
+		listen_begin();
+		began = g_get_monotonic_time();
+		g_assert_true(axis_tv_prune_searches(fx->tv, &deleted, &error));
+		g_assert_no_error(error);
+		g_print("the prune, every search a month old: %u of %" G_GINT64_FORMAT " searches went in %.0f ms, %"
+			G_GINT64_FORMAT " are left of which 5 a series stay\n", deleted, old,
+			(g_get_monotonic_time() - began) / 1000.0, qi(fx, "SELECT count(*) FROM series_search"));
+		all = listen_end();
+		g_assert_cmpuint(deleted, >, 0);
+		g_assert_cmpuint(deleted, <=, AXIS_ACQUIRE_PRUNE_BATCH * AXIS_ACQUIRE_PRUNE_BATCHES);
+		{
+			guint statements = 0;
+			guint k;
+
+			for (k = 0; k < all->len; k++) {
+				if (strstr(((const Sent *)g_ptr_array_index(all, k))->sql, "DELETE FROM series_search") != NULL)
+					statements++;
+			}
+			g_assert_cmpuint(statements, <=, AXIS_ACQUIRE_PRUNE_BATCHES);
+		}
+		prune = sent_find(all, "DELETE FROM series_search");
+		g_assert_nonnull(prune);
+		{
+			g_autofree gchar *literal = sent_literal(prune);
+			g_autofree gchar *plan = plan_of(fx, literal, TRUE, NULL);
+
+			row = add_row(fx, "prune: one statement of it (1,000 searches at most)", "after", -1, plan,
+				"Delete on|Trigger for constraint|Scan on series_search|Scan using series_search|Limit");
+			g_assert_cmpfloat(row->exec_ms, <, BOUND_PRUNE_MS);
+		}
+	}
+
+	/* 5. The lists and what they count. */
+	{
+		g_autoptr(GPtrArray) all = NULL;
+		g_autofree gchar *classes = axis_tv_store_statement("classes");
+		g_auto(GStrv) one = g_strsplit(classes, "$1", -1);
+		g_autofree gchar *with1 = g_strjoinv("NULL", one);
+		g_auto(GStrv) two = g_strsplit(with1, "$2", -1);
+		g_autofree gchar *with2 = g_strjoinv("'2026-11-14'", two);
+		g_auto(GStrv) three = g_strsplit(with2, "$3", -1);
+		g_autofree gchar *with3 = g_strjoinv("'none'", three);
+
+		measure_sql(fx, "TV: the episodes counted by class", "after", with3, FALSE, NULL);
+		listen_begin();
+		call_movies_page(fx);
+		all = listen_end();
+		report_sent(fx, "Movies list", all, 5.0);
+		g_clear_pointer(&all, g_ptr_array_unref);
+		listen_begin();
+		call_movies_attention(fx);
+		all = listen_end();
+		report_sent(fx, "movies' attention count", all, 5.0);
+		report_page(fx, "/series");
+		report_page(fx, "/series/wanted");
+		report_page(fx, "/films");
+		report_page(fx, "/jobs");
+	}
+
+	/*
+	 * What the indexes of 0081 change beside the list: the last job of a kind
+	 * (asked by a page) is found among that kind's jobs, and the follow-up's
+	 * question for the searches that never finished (every minute) reads
+	 * those only.
+	 */
+	{
+		g_autoptr(GPtrArray) all = NULL;
+		AxisAcquireFollowReport followed;
+		const Sent *stale;
+		guint i;
+
+		for (i = 0; i < 3; i++)
+			measure_sql(fx, other_statements[i].name, "after", other_statements[i].statement, FALSE,
+				" job|on job|Sort Method");
+		memset(&followed, 0, sizeof(followed));
+		listen_begin();
+		g_assert_true(axis_tv_run_follow(fx->tv, &followed, &error));
+		g_assert_no_error(error);
+		all = listen_end();
+		stale = sent_find(all, "UPDATE series_search s SET finished_at = now()");
+		g_assert_nonnull(stale);
+		{
+			g_autofree gchar *literal = sent_literal(stale);
+			g_autofree gchar *plan = plan_of(fx, literal, TRUE, NULL);
+
+			row = add_row(fx, "follow-up: the searches that never finished", "after", -1, plan,
+				"series_search");
+			g_assert_null(strstr(row->lines, "Seq Scan on series_search"));
+		}
+		/* Within the hour of the prune above: the follow-up sends none. */
+		g_assert_null(sent_find(all, "DELETE FROM series_search"));
+	}
+
+	/* 6. What a run's share of the syncs costs when every series is behind
+	 * the metadata (last: the generated series have no record at a provider,
+	 * and a sync lists their episodes as gone). */
+	sql(fx, "UPDATE series SET synced_at = now() - interval '7 hours'");
+	call_schedule(fx, "every series behind the metadata", &report);
+	g_assert_cmpuint(report.synced, ==, axis_tv_sync_batch(n_series));
+
+	/* What 0081_scale_lists.sql costs at an upgrade: each index built again
+	 * on this database. */
+	{
+		static const gchar *const built[] = { "job_list_idx", "series_search_unfinished", "movie_search_unfinished" };
+		guint i;
+
+		g_print("the indexes of 0081_scale_lists.sql, each built on the database above:\n");
+		for (i = 0; i < G_N_ELEMENTS(built); i++) {
+			g_autofree gchar *ask = g_strdup_printf("SELECT indexdef FROM pg_indexes WHERE schemaname = 'public'"
+				" AND indexname = '%s'", built[i]);
+			g_autofree gchar *def = axis_test_db_query(fx->t->db, ask);
+			g_autofree gchar *size_ask = g_strdup_printf("SELECT pg_size_pretty(pg_relation_size('%s'::regclass))",
+				built[i]);
+			g_autofree gchar *size = NULL;
+
+			g_assert_nonnull(def);
+			sql(fx, "DROP INDEX %s", built[i]);
+			began = g_get_monotonic_time();
+			axis_test_db_exec(fx->t->db, def);
+			g_print("  %-32s %8.0f ms", built[i], (g_get_monotonic_time() - began) / 1000.0);
+			size = axis_test_db_query(fx->t->db, size_ask);
+			g_print("  %s\n", size);
+		}
+	}
+	print_table(fx);
 }
 
 static void
@@ -1452,9 +1865,7 @@ test_report(Fixture *fx, gconstpointer data)
 {
 	g_autoptr(GError) error = NULL;
 	g_autoptr(GPtrArray) all = NULL;
-	g_autofree gchar *cursor = NULL;
 	g_autofree gchar *classes = axis_tv_store_statement("classes");
-	const Sent *prune;
 	gint64 began;
 	glong rss;
 
@@ -1464,44 +1875,9 @@ test_report(Fixture *fx, gconstpointer data)
 		fx->percent = 2;
 	make_database(fx);
 
-	/* The Jobs list. */
-	jobs_cursor = NULL;
-	jobs_state = NULL;
-	measure_call(fx, "Jobs: the first page", "now", call_jobs_list, "ORDER BY (state IN", " job |on job|Sort Method");
-	measure_call(fx, "Jobs: the queues' names", "now", call_jobs_list, "SELECT DISTINCT queue",
-		" job |on job|Sort Method");
-	cursor = g_strdup_printf("f%" G_GINT64_FORMAT, qi(fx, "SELECT max(id) / 2 FROM job"));
-	jobs_cursor = cursor;
-	measure_call(fx, "Jobs: a later page (half way)", "now", call_jobs_list, "ORDER BY (state IN",
-		" job |on job|Sort Method");
-	jobs_cursor = NULL;
-	jobs_state = "failed";
-	measure_call(fx, "Jobs: the failed ones, first page", "now", call_jobs_list, "ORDER BY (state IN",
-		" job |on job|Sort Method");
-	jobs_state = NULL;
-
-	/* The TV scheduler, as its job runs it every fifteen minutes. */
-	{
-		AxisTvScheduleReport report;
-		gboolean ok;
-
-		memset(&report, 0, sizeof(report));
-		rss = peak_rss_kb();
-		listen_begin();
-		began = g_get_monotonic_time();
-		ok = axis_tv_run_schedule(fx->tv, &report, &error);
-		g_print("the TV scheduler: %s in %.1f s; %u episodes considered, %u due, %u searches queued; the process's "
-			"peak memory went from %ld MiB to %ld MiB\n", ok ? "ran" : error->message,
-			(g_get_monotonic_time() - began) / 1000000.0, report.considered, report.due, report.queued, rss / 1024,
-			peak_rss_kb() / 1024);
-		g_clear_error(&error);
-		all = listen_end();
-		report_sent(fx, "TV scheduler", all, 20.0);
-		g_clear_pointer(&all, g_ptr_array_unref);
-		g_print("the series' metadata is followed 5 series a run, a run every %d s: %" G_GINT64_FORMAT " series take %.1f "
-			"days to go round\n", AXIS_TV_SCHEDULE_INTERVAL_S, qi(fx, "SELECT count(*) FROM series"),
-			qi(fx, "SELECT count(*) FROM series") / 5.0 * AXIS_TV_SCHEDULE_INTERVAL_S / 86400.0);
-	}
+	/* (The Jobs list, the TV scheduler, the prune of old searches and the
+	 * storing of a search's results were here: /db/scale/second holds them
+	 * now.) */
 
 	/* The movies. */
 	{
@@ -1535,40 +1911,6 @@ test_report(Fixture *fx, gconstpointer data)
 	all = listen_end();
 	report_sent(fx, "movies' attention count", all, 0.0);
 	g_clear_pointer(&all, g_ptr_array_unref);
-
-	/* The follow-up's prune of old searches, as it is sent every minute:
-	 * with nothing old enough to go, and with everything old enough (what
-	 * the first run after a long stop finds). */
-	{
-		AxisAcquireFollowReport report;
-
-		memset(&report, 0, sizeof(report));
-		listen_begin();
-		began = g_get_monotonic_time();
-		if (!axis_tv_run_follow(fx->tv, &report, &error)) {
-			g_print("the TV follow-up failed: %s\n", error->message);
-			g_clear_error(&error);
-		}
-		g_print("the TV follow-up: %.0f ms the call\n", (g_get_monotonic_time() - began) / 1000.0);
-		all = listen_end();
-		report_sent(fx, "TV follow-up", all, 5.0);
-		prune = sent_find(all, "DELETE FROM series_search");
-		if (prune != NULL) {
-			g_autofree gchar *literal = sent_literal(prune);
-			g_autofree gchar *steady = plan_of(fx, literal, TRUE, NULL);
-			g_autofree gchar *plan = plan_of(fx, literal, TRUE, "UPDATE series_search SET started_at = now() -"
-				" interval '30 days', finished_at = now() - interval '30 days'");
-
-			add_row(fx, "prune: no search is old enough to go", "now", -1, steady, NULL);
-			add_row(fx, "prune: every search is a month old (all but 5 a series go)", "now", -1, plan,
-				"Delete on|Trigger for constraint|Seq Scan|SubPlan");
-			sql(fx, "VACUUM ANALYZE series_search");
-		} else {
-			g_print("the TV follow-up sent no prune of series_search\n");
-		}
-		g_clear_pointer(&all, g_ptr_array_unref);
-	}
-	report_store_results(fx);
 
 	/* The pages of speed-up-lists-and-dashboard, at this scale. */
 	report_page(fx, "/");
@@ -1631,6 +1973,185 @@ test_report(Fixture *fx, gconstpointer data)
 	print_table(fx);
 }
 
+/* ── The deletion of old history (history retention) ────────────── */
+
+/* The indexes of 0082_history_retention.sql. */
+static const gchar *const retention_indexes[] = {
+	"series_event_age", "movie_event_age", "series_grab_age", "movie_grab_age", "download_age",
+	"series_event_grab", "movie_event_grab", "series_blocklist_grab", "movie_blocklist_grab",
+	"series_file_import", "movie_file_import"
+};
+
+/* The tables of the history and of what names it, which no statement of a
+ * run may read whole ("Seq Scan on <table> "). */
+static const gchar *const retention_tables[] = {
+	"series_event", "movie_event", "series_grab", "movie_grab", "series_grab_episode", "download", "import",
+	"import_file", "import_action", "import_assignment", "series_file", "movie_file", "job"
+};
+
+/* Generous, of the database's own time for one statement, under the
+ * session's statement timeout of AXIS_DB_STATEMENT_TIMEOUT_MS. */
+#define BOUND_RETENTION_MS 5000.0
+
+static void
+retention_counts(
+	Fixture     *fx,
+	const gchar *when
+){
+	g_print("%s: %" G_GINT64_FORMAT " series events, %" G_GINT64_FORMAT " movie events, %" G_GINT64_FORMAT
+		" imports with %" G_GINT64_FORMAT " files, %" G_GINT64_FORMAT " series grabs, %" G_GINT64_FORMAT
+		" movie grabs, %" G_GINT64_FORMAT " downloads\n", when, qi(fx, "SELECT count(*) FROM series_event"),
+		qi(fx, "SELECT count(*) FROM movie_event"), qi(fx, "SELECT count(*) FROM import"),
+		qi(fx, "SELECT count(*) FROM import_file"), qi(fx, "SELECT count(*) FROM series_grab"),
+		qi(fx, "SELECT count(*) FROM movie_grab"), qi(fx, "SELECT count(*) FROM download"));
+}
+
+/* Each statement of @all explained as it was sent (in a transaction rolled
+ * back: it looks at the rows after those the run took): none reads a whole
+ * table, none takes longer than the bound; the first of each table and the
+ * slowest are added to the table printed at the end. */
+static void
+retention_explain(
+	Fixture   *fx,
+	GPtrArray *all
+){
+	gboolean seen[AXIS_HISTORY_N_PARTS] = { FALSE };
+	g_autofree gchar *slowest = NULL;
+	gdouble slowest_ms = -1;
+	guint i;
+	guint k;
+
+	for (i = 0; i < all->len; i++) {
+		const Sent *sent = g_ptr_array_index(all, i);
+		g_autofree gchar *literal = NULL;
+		g_autofree gchar *plan = NULL;
+		gdouble ms;
+		gint part = -1;
+
+		for (k = 0; k < AXIS_HISTORY_N_PARTS; k++) {
+			g_autofree gchar *mark = g_strdup_printf("DELETE FROM %s ", axis_history_part_name((AxisHistoryPart)k));
+
+			if (strstr(sent->sql, mark) != NULL)
+				part = (gint)k;
+		}
+		if (part < 0)
+			continue;
+		literal = sent_literal(sent);
+		plan = plan_of(fx, literal, TRUE, NULL);
+		ms = plan_ms(plan);
+		for (k = 0; k < G_N_ELEMENTS(retention_tables); k++) {
+			g_autofree gchar *whole = g_strdup_printf("Seq Scan on %s ", retention_tables[k]);
+
+			if (strstr(plan, whole) != NULL) {
+				g_print("a statement of the prune of %s reads all of %s:\n%s\n", axis_history_part_name(part),
+					retention_tables[k], plan);
+				g_assert_not_reached();
+			}
+		}
+		g_assert_cmpfloat(ms, <, BOUND_RETENTION_MS);
+		if (!seen[part]) {
+			g_autofree gchar *name = g_strdup_printf("retention: a batch of %s", axis_history_part_name(part));
+
+			seen[part] = TRUE;
+			add_row(fx, name, "run 1", -1, plan, "Delete on|Index Scan|Index Only Scan|Bitmap|Seq Scan|Limit");
+		}
+		if (ms > slowest_ms) {
+			slowest_ms = ms;
+			g_free(slowest);
+			slowest = g_steal_pointer(&plan);
+		}
+	}
+	if (slowest != NULL)
+		add_row(fx, "retention: the slowest batch of run 1", "run 1", -1, slowest,
+			"Delete on|Index Scan|Index Only Scan|Bitmap|Seq Scan|Limit");
+}
+
+static void
+test_retention(Fixture *fx, gconstpointer data)
+{
+	g_autoptr(AxisHistory) history = axis_history_new(NULL);
+	gchar *defs[G_N_ELEMENTS(retention_indexes)];
+	gdouble total = 0;
+	guint run;
+	guint i;
+
+	/* The indexes are made after the rows, as the migration makes them on a
+	 * database that has them all. */
+	for (i = 0; i < G_N_ELEMENTS(retention_indexes); i++) {
+		g_autofree gchar *ask = g_strdup_printf("SELECT indexdef FROM pg_indexes WHERE schemaname = 'public'"
+			" AND indexname = '%s'", retention_indexes[i]);
+
+		defs[i] = axis_test_db_query(fx->t->db, ask);
+		g_assert_nonnull(defs[i]);
+		sql(fx, "DROP INDEX %s", retention_indexes[i]);
+	}
+	make_database(fx);
+
+	/* Half of every kind ended 400 days ago, beyond the 365 days the run below keeps. */
+	sql(fx, "UPDATE series_event SET created_at = created_at - interval '400 days' WHERE id %% 2 = 0");
+	sql(fx, "UPDATE movie_event SET created_at = created_at - interval '400 days' WHERE id %% 2 = 0");
+	sql(fx, "UPDATE series_grab SET closed_at = closed_at - interval '400 days' WHERE id %% 2 = 0");
+	sql(fx, "UPDATE movie_grab SET closed_at = closed_at - interval '400 days' WHERE id %% 2 = 0");
+	sql(fx, "UPDATE download SET finished_at = finished_at - interval '400 days' WHERE id %% 2 = 0");
+	sql(fx, "UPDATE import SET finished_at = finished_at - interval '400 days' WHERE id %% 2 = 0");
+	sql(fx, "VACUUM ANALYZE");
+
+	g_print("the indexes of 0082_history_retention.sql, each built on the database above:\n");
+	for (i = 0; i < G_N_ELEMENTS(retention_indexes); i++) {
+		g_autofree gchar *size = NULL;
+		g_autofree gchar *ask = g_strdup_printf("SELECT pg_size_pretty(pg_relation_size('%s'::regclass))",
+			retention_indexes[i]);
+		gint64 began = g_get_monotonic_time();
+		gdouble ms;
+
+		axis_test_db_exec(fx->t->db, defs[i]);
+		ms = (g_get_monotonic_time() - began) / 1000.0;
+		total += ms;
+		size = axis_test_db_query(fx->t->db, ask);
+		g_print("  %-32s %8.0f ms  %s\n", retention_indexes[i], ms, size);
+		g_free(defs[i]);
+	}
+	g_print("  %-32s %8.0f ms\n", "all of them", total);
+	sql(fx, "ANALYZE");
+	retention_counts(fx, "before the first run");
+
+	for (run = 1; run <= 3; run++) {
+		g_autoptr(GError) error = NULL;
+		g_autoptr(GPtrArray) all = NULL;
+		AxisHistoryReport report;
+		AxisHistoryKeep keep;
+		gint64 began;
+		gdouble ms;
+		guint k;
+
+		/* The defaults keep everything; the run is of a year, as an
+		 * administrator may choose. */
+		keep.events_s = keep.grabs_s = keep.downloads_s = keep.imports_s = (gint64)365 * 86400;
+		listen_begin();
+		began = g_get_monotonic_time();
+		g_assert_true(axis_history_prune(history, fx->t->pool, &keep, NULL, &report, &error));
+		g_assert_no_error(error);
+		ms = (g_get_monotonic_time() - began) / 1000.0;
+		all = listen_end();
+		g_print("retention run %u: %.0f ms, %u statements, the longest %.0f ms (the session's statement timeout is %d"
+			" ms)\n", run, ms, all->len, report.longest_ms, AXIS_DB_STATEMENT_TIMEOUT_MS);
+		for (k = 0; k < AXIS_HISTORY_N_PARTS; k++)
+			g_print("  %-14s %3u statements, %7" G_GUINT64_FORMAT " looked at, %7" G_GUINT64_FORMAT " deleted%s\n",
+				axis_history_part_name((AxisHistoryPart)k), report.statements[k], report.examined[k],
+				report.deleted[k], report.more[k] ? ", more left for the next run" : "");
+		if (run == 1) {
+			for (k = 0; k < AXIS_HISTORY_N_PARTS; k++)
+				g_assert_cmpuint(report.statements[k], <=, AXIS_HISTORY_BATCHES_PER_RUN);
+			g_assert_cmpuint(report.deleted[AXIS_HISTORY_SERIES_EVENTS], >, 0);
+			g_assert_cmpuint(report.deleted[AXIS_HISTORY_IMPORTS], >, 0);
+			g_assert_cmpuint(report.deleted[AXIS_HISTORY_SERIES_GRABS], >, 0);
+			retention_explain(fx, all);
+		}
+		retention_counts(fx, "after it");
+	}
+	print_table(fx);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -1639,7 +2160,9 @@ main(int argc, char **argv)
 	setvbuf(stdout, NULL, _IOLBF, 0);
 
 	AXIS_TEST_ADD_DB_CASE("/db/scale/fixes", Fixture, NULL, test_fixes);
+	AXIS_TEST_ADD_DB_CASE("/db/scale/second", Fixture, NULL, test_second);
 	AXIS_TEST_ADD_DB_CASE("/db/scale/report", Fixture, NULL, test_report);
+	AXIS_TEST_ADD_DB_CASE("/db/scale/retention", Fixture, NULL, test_retention);
 
 	return g_test_run();
 }

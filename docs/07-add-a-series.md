@@ -69,7 +69,8 @@ seasons** ("Monitored when announced" or "Not monitored until chosen"),
 **Details last updated** (when Axis last read the provider) and **Next
 episode**. Its controls are in one row: **Search for every wanted episode**
 searches for everything wanted; **Update details now** asks the provider for new
-episodes right away (Axis does this on a schedule anyway); **Remove this
+episodes right away (Axis does this on a schedule anyway: each series about
+every six hours, however many series you have); **Remove this
 series**, last and apart from the others, forgets the series and touches no
 file.
 

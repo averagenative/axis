@@ -139,6 +139,24 @@ typedef struct
 	gboolean    upgrade_unknown;
 } ProfileFacts;
 
+/* A stored profile (its format and definition) as the series that have it
+ * take it. */
+static void
+profile_facts_read(
+	gint          format,
+	const gchar  *definition,
+	ProfileFacts *facts
+){
+	AxisQualityProfile parsed;
+	g_autofree gchar *unusable = NULL;
+
+	memset(&parsed, 0, sizeof(parsed));
+	facts->usable = axis_quality_stored_check(format, definition, &parsed, &unusable);
+	facts->cutoff = facts->usable ? parsed.cutoff : AXIS_QUALITY_UNKNOWN;
+	facts->upgrades = facts->usable && parsed.upgrades;
+	facts->upgrade_unknown = facts->usable && parsed.upgrade_unknown;
+}
+
 /* @profiles: profile id (gint64) -> ProfileFacts: a profile's definition is
  * read once for all the series of a result that have it. */
 static AxisTvSeries *
@@ -172,15 +190,9 @@ series_from_row(
 	if (facts == NULL) {
 		ProfileFacts *read = g_new0(ProfileFacts, 1);
 		gint64 *key = g_new(gint64, 1);
-		AxisQualityProfile parsed;
-		g_autofree gchar *unusable = NULL;
 
-		memset(&parsed, 0, sizeof(parsed));
-		read->usable = axis_quality_stored_check((gint)get_int(result, row, S_PROFILE_FORMAT, 0),
-			axis_db_result_get_text(result, row, S_PROFILE_DEFINITION), &parsed, &unusable);
-		read->cutoff = read->usable ? parsed.cutoff : AXIS_QUALITY_UNKNOWN;
-		read->upgrades = read->usable && parsed.upgrades;
-		read->upgrade_unknown = read->usable && parsed.upgrade_unknown;
+		profile_facts_read((gint)get_int(result, row, S_PROFILE_FORMAT, 0),
+			axis_db_result_get_text(result, row, S_PROFILE_DEFINITION), read);
 		*key = s->profile_id;
 		g_hash_table_insert(profiles, key, read);
 		facts = read;
@@ -601,6 +613,105 @@ axis_tv_store_episodes(
 	return axis_tv_store_episodes_of(conn, AXIS_TV_EPISODES_OF_SERIES, series_ids, with_gone, episodes, error);
 }
 
+/* ── The series the scheduler looks at ──────────────────────────── */
+
+/*
+ * The series with an episode that can be due for a search, by what the
+ * database can tell without the rule (scheduled_wanted() in
+ * axis-tv-follow.c, which is then given every episode of these series and
+ * decides): an episode that is listed, monitored and aired ($1, the last day
+ * whose wait has passed), whose next search time has come ($2), and that has
+ * no file, or has one that its series' profile might replace.
+ *
+ * "Might replace" is told by the profiles, not by a second copy of the rule
+ * (axis_tv_episode_upgradable()): $3 and $4 are, for each profile that
+ * upgrades, the qualities that it does not upgrade from (those at its cutoff
+ * and above, by axis_quality_compare()).  An episode whose files are all of
+ * such a quality, none of them a conversion's (which counts as its source's
+ * quality), is settled; any other file, of a quality unknown or below the
+ * cutoff, leaves it to the rule.  A profile that is not in $3 never
+ * upgrades.
+ *
+ * It names more series than have something due (an episode in flight, held,
+ * or with a search queued is among them), never fewer.  The files are read
+ * once and joined; nothing is looked up an episode.
+ */
+static const gchar schedule_select[] =
+	"WITH ok AS MATERIALIZED (SELECT p.profile_id, p.qualities::text[] AS qualities"
+	"   FROM unnest($3::bigint[], $4::text[]) AS p(profile_id, qualities)),"
+	" conv AS (SELECT DISTINCT c.file_id FROM conversion c WHERE c.state = 'done' AND c.outcome = 'replace'),"
+	" f AS (SELECT sfe.episode_id, array_agg(coalesce(sf.quality, '')) AS qualities,"
+	"   bool_or(conv.file_id IS NOT NULL) AS converted"
+	"   FROM series_file_episode sfe JOIN series_file sf ON sf.file_id = sfe.file_id"
+	"   JOIN library_file lf ON lf.id = sf.file_id AND lf.state = 'present'"
+	"   LEFT JOIN conv ON conv.file_id = lf.id GROUP BY sfe.episode_id)"
+	" SELECT DISTINCT e.series_id FROM series_episode e JOIN series s ON s.id = e.series_id"
+	" LEFT JOIN ok ON ok.profile_id = s.quality_profile_id LEFT JOIN f ON f.episode_id = e.id"
+	" WHERE e.gone_at IS NULL AND e.monitored AND e.air_date > DATE '1970-01-01' AND e.air_date <= $1::date"
+	" AND coalesce(" US("e.next_search_at") ", 0) <= $2::bigint"
+	" AND (f.episode_id IS NULL OR (ok.profile_id IS NOT NULL"
+	"  AND (f.converted OR NOT (f.qualities <@ ok.qualities))))"
+	" ORDER BY e.series_id";
+
+gboolean
+axis_tv_store_schedule_series(
+	AxisDbConn         *conn,
+	const AxisTvRules  *rules,
+	GArray            **ids,
+	GError            **error
+){
+	g_autoptr(AxisDbResult) profiles = NULL;
+	g_autoptr(AxisDbResult) result = NULL;
+	g_autoptr(GString) upgrading = g_string_new("{");
+	g_autoptr(GString) settled = g_string_new("{");
+	g_autofree gchar *now = axis_tv_int_text(rules->now_us);
+	gchar aired[11];
+	const gchar *params[4];
+	guint i;
+
+	if (!axis_db_conn_exec(conn, "SELECT id, format, definition FROM quality_profile ORDER BY id", 0, NULL, &profiles,
+	        error))
+		return FALSE;
+	for (i = 0; i < axis_db_result_get_n_rows(profiles); i++) {
+		ProfileFacts facts;
+		gboolean first = TRUE;
+		gint q;
+
+		profile_facts_read((gint)get_int(profiles, i, 1, 0), axis_db_result_get_text(profiles, i, 2), &facts);
+		if (!facts.usable || !facts.upgrades)
+			continue;
+		g_string_append_printf(upgrading, "%s%" G_GINT64_FORMAT, upgrading->len > 1 ? "," : "",
+			get_int(profiles, i, 0, 0));
+		/* (Each profile's list is itself an array, written as one text.) */
+		g_string_append_printf(settled, "%s\"{", settled->len > 1 ? "," : "");
+		for (q = 1; q <= AXIS_QUALITY_N_LADDER; q++) {
+			if (axis_quality_compare((AxisQuality)q, facts.cutoff) < 0)
+				continue;
+			g_string_append_printf(settled, "%s%s", first ? "" : ",", axis_quality_name((AxisQuality)q));
+			first = FALSE;
+		}
+		g_string_append(settled, "}\"");
+	}
+	g_string_append_c(upgrading, '}');
+	g_string_append_c(settled, '}');
+	/* As axis_tv_episode_aired(): the day's start and the wait after it are
+	 * past, which is every day up to the day that wait ago. */
+	axis_tv_today(rules->now_us - rules->air_delay_s * G_USEC_PER_SEC, aired);
+	params[0] = aired;
+	params[1] = now;
+	params[2] = upgrading->str;
+	params[3] = settled->str;
+	if (!axis_db_conn_exec(conn, schedule_select, 4, params, &result, error))
+		return FALSE;
+	*ids = g_array_sized_new(FALSE, FALSE, sizeof(gint64), axis_db_result_get_n_rows(result));
+	for (i = 0; i < axis_db_result_get_n_rows(result); i++) {
+		gint64 id = get_int(result, i, 0, 0);
+
+		g_array_append_val(*ids, id);
+	}
+	return TRUE;
+}
+
 /* ── Every series' episodes, counted ────────────────────────────── */
 
 /*
@@ -643,8 +754,11 @@ static const gchar classes_select[] =
 	" f AS (SELECT sfe.episode_id, bool_or(sf.kept) AS kept,"
 	"   coalesce(bool_and(sf.kept_how IS NOT DISTINCT FROM '" AXIS_TV_KEPT_HOW_BROUGHT "'"
 	"    AND sf.hand_how IS NOT DISTINCT FROM 'brought') FILTER (WHERE sf.kept), false) AS kept_brought,"
+	/* (In no stated order: an episode of two files may make two classes of
+	 * the same facts, which count the same; ordering the files of every
+	 * episode sorted every file of the library.) */
 	"   string_agg(coalesce(sf.quality, '') || ':' || coalesce(conv.made, '') || ':' || coalesce(sf.resolution, '')"
-	"    || ':', E'\\x1f' ORDER BY sf.quality, conv.made, sf.resolution) AS qualities"
+	"    || ':', E'\\x1f') AS qualities"
 	"   FROM series_file_episode sfe JOIN series_file sf ON sf.file_id = sfe.file_id"
 	"   JOIN library_file lf ON lf.id = sf.file_id AND lf.state = 'present'"
 	"   LEFT JOIN conv ON conv.file_id = lf.id"
@@ -676,8 +790,7 @@ static const gchar classes_select[] =
 	"   OR ($3::text = 'upgrade' AND x.files AND x.monitored AND NOT x.kept))"
 	" FROM x GROUP BY x.series_id, x.monitored, x.air, CASE WHEN x.air = 1 THEN x.air_date END, x.grab,"
 	"  x.grab_completed, x.download, x.import_state, x.removal, x.job, x.files, x.kept, x.kept_brought, x.qualities,"
-	"  x.outcome, x.person_only"
-	" ORDER BY x.series_id";
+	"  x.outcome, x.person_only";
 
 /* A class as the episode its state is derived from.  It borrows from
  * @result and owns nothing but what files_quality() gives it. */
@@ -845,6 +958,8 @@ axis_tv_store_statement(const gchar *name)
 		return g_strdup(classes_select);
 	if (g_strcmp0(name, "episodes") == 0)
 		return g_strconcat(episodes_select, episodes_where[AXIS_TV_EPISODES_OF_SERIES], EPISODES_ORDER, NULL);
+	if (g_strcmp0(name, "schedule") == 0)
+		return g_strdup(schedule_select);
 	if (g_strcmp0(name, "series-list") == 0)
 		return g_strconcat(series_select_list, " WHERE ($1::bigint[] IS NULL OR s.id = ANY ($1::bigint[]))"
 			" ORDER BY lower(t.title), t.year, s.id", NULL);

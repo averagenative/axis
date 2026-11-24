@@ -231,18 +231,20 @@ cursor_parse(
  */
 #define STATE_PARAMS 13
 
+/* A download of the film is still at a client, and it is not its open
+ * grab's (od of STATE_FROM: the film's downloads still at a client). */
+#define OTHER_LIVE_SQL \
+	"(od.ids IS NOT NULL AND (g.download_id IS NULL OR NOT (od.ids <@ ARRAY[g.download_id])))"
+
 #define STATE_SQL \
 	"CASE" \
 	" WHEN g.id IS NOT NULL AND g.completed_at IS NULL AND d.state IS DISTINCT FROM 'completed' THEN 'downloading'" \
 	" WHEN g.id IS NOT NULL THEN CASE WHEN coalesce(idl.state, iow.state) = 'blocked' THEN 'attention'" \
 	"   ELSE 'to_import' END" \
-	" WHEN EXISTS (SELECT 1 FROM download od WHERE od.module = '" AXIS_MOVIES_MODULE_ID "'" \
-	"   AND od.title_id = m.title_id AND od.state IN ('sending', 'queued', 'downloading', 'paused')" \
-	"   AND od.id IS DISTINCT FROM g.download_id) THEN 'attention'" \
+	" WHEN " OTHER_LIVE_SQL " THEN 'attention'" \
 	" WHEN coalesce(idl.state, iow.state) = 'blocked' THEN 'attention'" \
 	" WHEN coalesce(idl.state, iow.state) IN ('waiting', 'running') THEN 'to_import'" \
-	" WHEN EXISTS (SELECT 1 FROM job j WHERE j.dedupe_key = '" AXIS_MOVIES_SEARCH_KEY_PREFIX "' || m.id::text" \
-	"   AND j.state IN ('queued', 'running')) THEN 'searching'" \
+	" WHEN sj.dedupe_key IS NOT NULL THEN 'searching'" \
 	" WHEN fl.n > 0 THEN CASE" \
 	"   WHEN m.monitored AND p.upgrades AND fl.best > 0 AND fl.best % 2 = 0 AND p.cutoff > 0" \
 	"     AND fl.best < 2 * p.cutoff THEN 'upgrade_wanted'" \
@@ -259,27 +261,57 @@ cursor_parse(
 	" WHEN s.outcome = ANY ($10::text[]) THEN 'attention'" \
 	" ELSE 'wanted' END"
 
-/* The films with what their state is worked out from; the caller adds a
- * WHERE clause.  t is meta_title. */
+/*
+ * The films with what their state is worked out from; the caller adds a
+ * WHERE clause.  t is meta_title.
+ *
+ * Nothing is looked up once a film (six look-ups a film were 160 ms for
+ * 20,000 films, at every view of the list): each kind of fact is read once
+ * for every film and joined.  What is under way is little whatever the
+ * library's size, and is read from the partial indexes that hold just it:
+ * the open grabs (at most one a film: movie_grab_one_open), the imports of
+ * their downloads, the imports that wait, run or are blocked (at most one a
+ * film: import_open_owner), the downloads still at a client and the searches
+ * queued or running.  The files and the last searches are as many as the
+ * films, read in one pass each.
+ */
 #define STATE_FROM \
 	" FROM movie m JOIN meta_title t ON t.id = m.title_id" \
 	" LEFT JOIN unnest($1::bigint[], $2::boolean[], $3::boolean[], $4::boolean[], $5::integer[], $6::boolean[])" \
 	"   AS p (id, usable, upgrades, upgrade_unknown, cutoff, cutoff_source) ON p.id = m.quality_profile_id" \
 	" LEFT JOIN library_root lr ON lr.id = m.root_id LEFT JOIN volume v ON v.id = lr.volume_id" \
-	" LEFT JOIN LATERAL (SELECT gg.id, gg.completed_at, gg.download_id FROM movie_grab gg" \
-	"   WHERE gg.movie_id = m.id AND gg.closed_at IS NULL ORDER BY gg.id DESC LIMIT 1) g ON true" \
+	" LEFT JOIN movie_grab g ON g.movie_id = m.id AND g.closed_at IS NULL" \
 	" LEFT JOIN download d ON d.id = g.download_id" \
-	" LEFT JOIN LATERAL (SELECT ii.state FROM import ii WHERE g.download_id IS NOT NULL" \
-	"   AND ii.download_id = g.download_id ORDER BY ii.id DESC LIMIT 1) idl ON true" \
-	" LEFT JOIN LATERAL (SELECT ii.state FROM import ii WHERE ii.module = '" AXIS_MOVIES_MODULE_ID "'" \
-	"   AND ii.owner_id = m.id ORDER BY ii.id DESC LIMIT 1) iow ON true" \
-	" LEFT JOIN LATERAL (SELECT count(*) AS n, coalesce(max(CASE" \
+	/* The latest import of an open grab's download. */ \
+	" LEFT JOIN (SELECT DISTINCT ON (ii.download_id) ii.download_id, ii.state FROM import ii" \
+	"   WHERE ii.download_id IN (SELECT gg.download_id FROM movie_grab gg WHERE gg.closed_at IS NULL" \
+	"    AND gg.download_id IS NOT NULL) ORDER BY ii.download_id, ii.id DESC) idl" \
+	"   ON idl.download_id = g.download_id" \
+	/* The film's own latest import, where that is one under way: the states \
+	 * read of it are these three, and an import that ended says nothing. */ \
+	" LEFT JOIN (SELECT ii.owner_id, ii.state FROM import ii WHERE ii.module = '" AXIS_MOVIES_MODULE_ID "'" \
+	"   AND ii.owner_id IS NOT NULL AND ii.state IN ('waiting', 'running', 'blocked')" \
+	"   AND NOT EXISTS (SELECT 1 FROM import nx WHERE nx.module = '" AXIS_MOVIES_MODULE_ID "'" \
+	"    AND nx.owner_id = ii.owner_id AND nx.id > ii.id)) iow ON iow.owner_id = m.id" \
+	" LEFT JOIN (SELECT f.movie_id, count(*) AS n, coalesce(max(CASE" \
 	"     WHEN array_position($7::text[], f.quality) IS NOT NULL THEN 2 * array_position($7::text[], f.quality)" \
 	"     ELSE coalesce(($9::integer[])[array_position($8::text[], f.resolution)], 0) END), 0) AS best" \
-	"   FROM movie_file f JOIN library_file lf ON lf.id = f.file_id" \
-	"   WHERE f.movie_id = m.id AND lf.state = 'present') fl ON true" \
-	" LEFT JOIN LATERAL (SELECT ss.outcome FROM movie_search ss WHERE ss.movie_id = m.id" \
-	"   AND ss.finished_at IS NOT NULL AND ss.cause <> 'list' ORDER BY ss.id DESC LIMIT 1) s ON true"
+	/* (Each film's file looked up by its id, which OFFSET 0 holds the planner \
+	 * to: joined as two tables, it walked the whole file index, every \
+	 * series' and every other file's entries among the films'.) */ \
+	"   FROM movie_file f JOIN LATERAL (SELECT 1 FROM library_file lf WHERE lf.id = f.file_id" \
+	"    AND lf.state = 'present' OFFSET 0) present ON true" \
+	"   GROUP BY f.movie_id) fl ON fl.movie_id = m.id" \
+	" LEFT JOIN (SELECT DISTINCT ON (ss.movie_id) ss.movie_id, ss.outcome FROM movie_search ss" \
+	"   WHERE ss.finished_at IS NOT NULL AND ss.cause <> 'list' ORDER BY ss.movie_id, ss.id DESC) s" \
+	"   ON s.movie_id = m.id" \
+	" LEFT JOIN (SELECT od.title_id, array_agg(od.id) AS ids FROM download od" \
+	"   WHERE od.module = '" AXIS_MOVIES_MODULE_ID "' AND od.title_id IS NOT NULL" \
+	"   AND od.state IN ('sending', 'queued', 'downloading', 'paused') GROUP BY od.title_id) od" \
+	"   ON od.title_id = m.title_id" \
+	" LEFT JOIN (SELECT DISTINCT jj.dedupe_key FROM job jj WHERE jj.dedupe_key IS NOT NULL" \
+	"   AND jj.state IN ('queued', 'running') AND jj.dedupe_key LIKE '" AXIS_MOVIES_SEARCH_KEY_PREFIX "%'" \
+	"   ) sj ON sj.dedupe_key = '" AXIS_MOVIES_SEARCH_KEY_PREFIX "' || m.id::text"
 
 /* Every outcome a search can end with (0023_movies.sql). */
 static const gchar *const outcomes[] = {
@@ -414,9 +446,7 @@ state_params_init(
 #define ATTENTION_WHY_SQL \
 	"CASE" \
 	" WHEN g.id IS NOT NULL THEN 'import'" \
-	" WHEN EXISTS (SELECT 1 FROM download od WHERE od.module = '" AXIS_MOVIES_MODULE_ID "'" \
-	"   AND od.title_id = m.title_id AND od.state IN ('sending', 'queued', 'downloading', 'paused')" \
-	"   AND od.id IS DISTINCT FROM g.download_id) THEN 'left_at_client'" \
+	" WHEN " OTHER_LIVE_SQL " THEN 'left_at_client'" \
 	" WHEN coalesce(idl.state, iow.state) = 'blocked' THEN 'import'" \
 	" WHEN m.root_id IS NULL THEN 'no_root'" \
 	" WHEN NOT coalesce(v.state = ANY ($13::text[]), false) THEN 'root_offline'" \

@@ -330,11 +330,15 @@ value_check(
 	case AXIS_SETTING_INTEGER:
 	case AXIS_SETTING_DURATION:
 	case AXIS_SETTING_BYTE_SIZE:
+		/* 0 switches it off, whatever the limits (AXIS_SETTING_ZERO_OFF). */
+		if (value->i == 0 && (info->flags & AXIS_SETTING_ZERO_OFF))
+			return TRUE;
 		if (value->i < info->minimum || (info->type != AXIS_SETTING_INTEGER && value->i < 0)) {
 			g_autofree gchar *limit = format_limit(info, MAX(info->minimum,
 				info->type == AXIS_SETTING_INTEGER ? G_MININT64 : 0));
 
-			*reason = g_strdup_printf("must be at least %s", limit);
+			*reason = g_strdup_printf((info->flags & AXIS_SETTING_ZERO_OFF) ? "must be 0 or at least %s" :
+				"must be at least %s", limit);
 			return FALSE;
 		}
 		if (info->maximum != 0 && value->i > info->maximum) {
@@ -757,6 +761,13 @@ entry_declare(
 	    (info->type != AXIS_SETTING_STRING || info->default_value != NULL)) {
 		g_set_error(error, AXIS_ERROR, AXIS_ERROR_SETTING,
 			"setting '%s' is secret, so it must be a string without a default", info->key);
+		return NULL;
+	}
+	if ((info->flags & AXIS_SETTING_ZERO_OFF) && info->type != AXIS_SETTING_INTEGER &&
+	    info->type != AXIS_SETTING_DURATION && info->type != AXIS_SETTING_BYTE_SIZE) {
+		g_set_error(error, AXIS_ERROR, AXIS_ERROR_SETTING,
+			"setting '%s' allows 0 to switch it off, so it must be a number, a duration or a size",
+			info->key);
 		return NULL;
 	}
 	if (info->type == AXIS_SETTING_CHOICE &&

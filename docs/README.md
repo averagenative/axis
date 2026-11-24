@@ -51,6 +51,7 @@ does not repeat them.
 | Pick a theme and manage accounts | [Themes and accounts](12-themes-and-accounts.md) |
 | Put Axis behind a reverse proxy | [Run behind a reverse proxy](13-run-behind-a-reverse-proxy.md) |
 | Back up and restore the database, check data checksums, and find out what is wrong when the database is the problem | [Back up, restore, and repair the database](14-back-up-restore-and-repair-the-database.md) |
+| Choose how long Axis keeps the history of movies, series, downloads, and imports | [Choose how long Axis keeps history](14-back-up-restore-and-repair-the-database.md#choose-how-long-axis-keeps-history) |
 
 ## Contribute
 

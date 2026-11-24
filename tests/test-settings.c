@@ -363,6 +363,51 @@ test_invalid_values(void)
 	g_assert_false(axis_settings_is_set(settings, "t.ratio"));
 }
 
+/* AXIS_SETTING_ZERO_OFF: 0 is taken besides the limits, which hold for
+ * everything else, and a refusal says both. */
+static void
+test_zero_switches_off(void)
+{
+	static const AxisSettingInfo zero_table[] = {
+		{ "z.keep", AXIS_SETTING_DURATION, "Keep", NULL, AXIS_SETTING_ZERO_OFF, "30d", 7 * 86400, 365 * 86400,
+		  0, 0, NULL },
+		{ "z.count", AXIS_SETTING_INTEGER, "Count", NULL, AXIS_SETTING_ZERO_OFF, "5", 3, 10, 0, 0, NULL },
+		{ "z.off", AXIS_SETTING_DURATION, "Off by default", NULL, AXIS_SETTING_ZERO_OFF, "0", 86400, 0, 0, 0,
+		  NULL },
+		{ NULL, 0, NULL, NULL, 0, NULL, 0, 0, 0, 0, NULL }
+	};
+	g_autoptr(AxisSettings) settings = axis_settings_new();
+	g_autoptr(GError) error = NULL;
+	g_autofree gchar *shown = NULL;
+
+	start_test();
+	g_assert_true(axis_settings_add_table(settings, "z", zero_table, &error));
+	g_assert_true(axis_settings_load(settings, NULL, &error));
+	g_assert_no_error(error);
+	g_assert_cmpint(axis_settings_get_duration(settings, "z.keep"), ==, 30 * 86400);
+	g_assert_cmpint(axis_settings_get_duration(settings, "z.off"), ==, 0);
+
+	g_assert_true(axis_settings_set(settings, "z.keep", "0", &error));
+	g_assert_no_error(error);
+	g_assert_cmpint(axis_settings_get_duration(settings, "z.keep"), ==, 0);
+	shown = axis_settings_format(settings, "z.keep");
+	g_assert_cmpstr(shown, ==, "0s");
+	g_assert_true(axis_settings_set(settings, "z.keep", "7d", &error));
+	g_assert_true(axis_settings_set(settings, "z.count", "0", &error));
+	g_assert_no_error(error);
+
+	g_assert_false(axis_settings_set(settings, "z.keep", "1d", &error));
+	g_assert_error(error, AXIS_ERROR, AXIS_ERROR_SETTING);
+	g_assert_nonnull(strstr(error->message, "must be 0 or at least 7d"));
+	g_clear_error(&error);
+	assert_refused(settings, "z.keep", "366d");
+	assert_refused(settings, "z.keep", "-1d");
+	assert_refused(settings, "z.count", "2");
+	assert_refused(settings, "z.count", "11");
+	g_assert_cmpint(axis_settings_get_duration(settings, "z.keep"), ==, 7 * 86400);
+	g_assert_cmpint(axis_settings_get_integer(settings, "z.count"), ==, 0);
+}
+
 /* An item of a list must be sane on its own */
 static void
 test_list_items(void)
@@ -483,8 +528,13 @@ test_bad_declarations(void)
 		{ "m.keep", AXIS_SETTING_DURATION, "x", NULL, 0, "1h", 7200, 3600, 0, 0, NULL },
 		{ NULL, 0, NULL, NULL, 0, NULL, 0, 0, 0, 0, NULL }
 	};
+	/* 0 switches off only what is a number. */
+	static const AxisSettingInfo zero_off_text[] = {
+		{ "m.name", AXIS_SETTING_STRING, "x", NULL, AXIS_SETTING_ZERO_OFF, "a", 0, 0, 0, 0, NULL },
+		{ NULL, 0, NULL, NULL, 0, NULL, 0, 0, 0, 0, NULL }
+	};
 	const AxisSettingInfo *cases[] = { bad_key, bad_default, needs_default, secret_default,
-		secret_number, no_choices, no_label, inverted };
+		secret_number, no_choices, no_label, inverted, zero_off_text };
 	g_autoptr(AxisSettings) settings = axis_settings_new();
 	g_autoptr(GError) error = NULL;
 	guint i;
@@ -1053,6 +1103,7 @@ main(int argc, char **argv)
 	g_test_add_func("/settings/types/valid-values", test_valid_values);
 	g_test_add_func("/settings/types/invalid-values", test_invalid_values);
 	g_test_add_func("/settings/types/list-items", test_list_items);
+	g_test_add_func("/settings/types/zero-switches-off", test_zero_switches_off);
 
 	g_test_add_func("/settings/declarations/duplicate-key", test_duplicate_key_refused);
 	g_test_add_func("/settings/declarations/bad", test_bad_declarations);

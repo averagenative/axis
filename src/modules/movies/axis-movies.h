@@ -1811,6 +1811,15 @@ axis_movies_run_follow(
 	GError                **error
 );
 
+/* The follow-up's prune of old searches, now and not at its hour
+ * (axis_acquire_prune_searches()): one time's batches.  For the tests. */
+gboolean
+axis_movies_prune_searches(
+	AxisMovies  *self,
+	guint       *deleted,
+	GError     **error
+);
+
 /**
  * AxisMovieScheduleReport:
  * @considered: monitored films looked at

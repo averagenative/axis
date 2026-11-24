@@ -32,6 +32,7 @@
 
 #include "modules/tv/axis-tv-private.h"
 
+#include <json-glib/json-glib.h>
 #include <string.h>
 
 #include "identify/axis-identify.h"
@@ -1107,47 +1108,90 @@ axis_tv_reject_is_person_only(const gchar *code)
 		g_strcmp0(code, "bare_number") == 0 || g_strcmp0(code, "had_before") == 0;
 }
 
+/* What every stored release of a search holds, and the search's two counts
+ * of them, in two statements however many the releases are (three
+ * statements a release before). */
 static gboolean
-candidate_stored(
-	gpointer                     data,
-	AxisDbConn                  *conn,
-	AxisAcquireWant             *want,
-	const AxisAcquireConsidered *c,
-	gint64                       candidate_id,
-	GError                     **error
+candidates_stored(
+	gpointer          data,
+	AxisDbConn       *conn,
+	AxisAcquireWant  *want,
+	gint64            search_id,
+	const GPtrArray  *considered,
+	GError          **error
 ){
-	const Held *held = c->data;
-	g_autofree gchar *id = axis_tv_int_text(candidate_id);
-	g_autofree gchar *array = NULL;
-	const gchar *params[5];
+	g_autoptr(JsonBuilder) builder = json_builder_new();
+	g_autofree gchar *search = axis_tv_int_text(search_id);
+	guint person_only = 0;
+	guint mismatched = 0;
+	guint rows = 0;
+	guint i;
 
-	/* A release no search takes by itself and a person may (Grab this one,
-	 * from a manual search): counted on its search, which is what the page
-	 * "Needs attention" reads for its line about them (a candidate's reasons
-	 * are a jsonb with no index).  Not one that was left for another reason
-	 * first and only says so beside it (Held.beside): taking it would not
-	 * fill what was searched for. */
-	if (axis_tv_reject_is_person_only(c->rejected ? c->reject_code : NULL) && (held == NULL || !held->beside)) {
-		params[0] = id;
-		if (!axis_db_conn_exec(conn, "UPDATE series_search SET n_person_only = n_person_only + 1"
-		        " WHERE id = (SELECT search_id FROM series_candidate WHERE id = $1::bigint)", 1, params, NULL, error))
+	json_builder_begin_array(builder);
+	for (i = 0; i < considered->len; i++) {
+		const AxisAcquireConsidered *c = g_ptr_array_index(considered, i);
+		const Held *held = c->data;
+		g_autofree gchar *array = NULL;
+
+		/* A release no search takes by itself and a person may (Grab this one,
+		 * from a manual search): counted on its search, which is what the page
+		 * "Needs attention" reads for its line about them (a candidate's reasons
+		 * are a jsonb with no index).  Not one that was left for another reason
+		 * first and only says so beside it (Held.beside): taking it would not
+		 * fill what was searched for. */
+		if (axis_tv_reject_is_person_only(c->rejected ? c->reject_code : NULL) && (held == NULL || !held->beside))
+			person_only++;
+		if (held == NULL || c->candidate_id <= 0)
+			continue;
+		array = id_array(held->ids);
+		json_builder_begin_object(builder);
+		json_builder_set_member_name(builder, "id");
+		json_builder_add_int_value(builder, c->candidate_id);
+		json_builder_set_member_name(builder, "ids");
+		json_builder_add_string_value(builder, array);
+		json_builder_set_member_name(builder, "holds");
+		if (held->holds != NULL)
+			json_builder_add_string_value(builder, held->holds);
+		else
+			json_builder_add_null_value(builder);
+		json_builder_set_member_name(builder, "mismatched");
+		json_builder_add_boolean_value(builder, held->mismatched);
+		json_builder_set_member_name(builder, "missing");
+		if (held->missing != NULL)
+			json_builder_add_string_value(builder, held->missing);
+		else
+			json_builder_add_null_value(builder);
+		json_builder_end_object(builder);
+		rows++;
+		if (held->mismatched)
+			mismatched++;
+	}
+	json_builder_end_array(builder);
+	if (rows > 0) {
+		g_autoptr(JsonNode) root = json_builder_get_root(builder);
+		g_autofree gchar *json = json_to_string(root, FALSE);
+		const gchar *params[1];
+
+		params[0] = json;
+		if (!axis_db_conn_exec(conn, "UPDATE series_candidate c SET episode_ids = x.ids::bigint[],"
+		        " holds = left(x.holds, 200), mismatched = x.mismatched, missing = left(x.missing, 200)"
+		        " FROM jsonb_to_recordset($1::jsonb) AS x(id bigint, ids text, holds text, mismatched boolean,"
+		        " missing text) WHERE c.id = x.id", 1, params, NULL, error))
 			return FALSE;
 	}
-	if (held == NULL)
-		return TRUE;
-	array = id_array(held->ids);
-	params[0] = id;
-	params[1] = array;
-	params[2] = held->holds;
-	params[3] = held->mismatched ? "true" : "false";
-	params[4] = held->missing;
-	if (!axis_db_conn_exec(conn, "UPDATE series_candidate SET episode_ids = $2::bigint[], holds = left($3, 200),"
-	        " mismatched = $4::boolean, missing = left($5, 200) WHERE id = $1::bigint", 5, params, NULL, error))
-		return FALSE;
-	if (!held->mismatched)
-		return TRUE;
-	return axis_db_conn_exec(conn, "UPDATE series_search SET n_mismatched = n_mismatched + 1"
-		" WHERE id = (SELECT search_id FROM series_candidate WHERE id = $1::bigint)", 1, params, NULL, error);
+	if (person_only > 0 || mismatched > 0) {
+		g_autofree gchar *n_person = g_strdup_printf("%u", person_only);
+		g_autofree gchar *n_mismatched = g_strdup_printf("%u", mismatched);
+		const gchar *params[3];
+
+		params[0] = search;
+		params[1] = n_person;
+		params[2] = n_mismatched;
+		if (!axis_db_conn_exec(conn, "UPDATE series_search SET n_person_only = n_person_only + $2::integer,"
+		        " n_mismatched = n_mismatched + $3::integer WHERE id = $1::bigint", 3, params, NULL, error))
+			return FALSE;
+	}
+	return TRUE;
 }
 
 static gboolean
@@ -1786,7 +1830,7 @@ static const AxisAcquireOwnerInfo acquire_info = {
 	prepare,
 	judge,
 	search_stored,
-	candidate_stored,
+	candidates_stored,
 	claim_check,
 	claimed,
 	event,

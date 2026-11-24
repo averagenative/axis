@@ -97,6 +97,32 @@ G_BEGIN_DECLS
 /* The scheduler queues at most this many searches of one series a run. */
 #define AXIS_TV_PER_SERIES_RUN         3
 
+/* The scheduler reads the episodes of this many series at a time: what a
+ * run holds in memory is a page, however large the library. */
+#define AXIS_TV_SCHEDULE_PAGE          50
+
+/*
+ * A series' episodes follow the metadata store once in this long (the store
+ * itself follows the provider at the provider's pace, axis-meta-refresh.c:
+ * a sync reads the store, and asks the provider only for a season that was
+ * never fetched).  A run takes as many of the series that are behind as go
+ * round all of them once in that time: their number times the run's interval
+ * over this, so 5 a run for 100 series and 209 a run for 5,000.  Never fewer
+ * than AXIS_TV_SYNC_MIN, never more than AXIS_TV_SYNC_MAX, and none begun
+ * once a run has spent AXIS_TV_SYNC_BUDGET_S on them (a provider that is
+ * slow to give a season).  After a start, or a long stop, every series is
+ * behind: they are taken at the same pace, the longest behind first, not all
+ * at once.
+ */
+#define AXIS_TV_SYNC_CYCLE_S           (6 * 3600)
+#define AXIS_TV_SYNC_MIN               5
+#define AXIS_TV_SYNC_MAX               500
+#define AXIS_TV_SYNC_BUDGET_S          120
+
+/* How many series a run of the scheduler syncs, of @n_series. */
+guint
+axis_tv_sync_batch(gint64 n_series);
+
 /* How long a page or a search waits for the metadata provider. */
 #define AXIS_TV_META_WAIT_MS           4000
 
@@ -2674,13 +2700,24 @@ axis_tv_run_follow(
 	GError                  **error
 );
 
+/* The follow-up's prune of old searches, now and not at its hour
+ * (axis_acquire_prune_searches()): one time's batches.  For the tests. */
+gboolean
+axis_tv_prune_searches(
+	AxisTv  *self,
+	guint   *deleted,
+	GError **error
+);
+
 /**
  * AxisTvScheduleReport:
  * @synced: series whose episodes followed the metadata
- * @considered: wanted episodes looked at
- * @due: of those, episodes that may be searched now
+ * @considered: wanted episodes looked at: those of the series that have an
+ *   episode that can be due (the others' are not read)
+ * @due: of those, episodes that may be searched now (every one there is)
  * @queued: searches queued (episodes and seasons)
  * @seasons: of those, season searches
+ * @series_read: series whose episodes were read
  */
 typedef struct
 {
@@ -2689,6 +2726,7 @@ typedef struct
 	guint due;
 	guint queued;
 	guint seasons;
+	guint series_read;
 } AxisTvScheduleReport;
 
 gboolean
@@ -2696,6 +2734,14 @@ axis_tv_run_schedule(
 	AxisTv                *self,
 	AxisTvScheduleReport  *report,
 	GError               **error
+);
+
+/* How many series the scheduler reads at a time (AXIS_TV_SCHEDULE_PAGE; 0:
+ * that).  For the tests, which have few series. */
+void
+axis_tv_set_schedule_page(
+	AxisTv *self,
+	guint   series
 );
 
 /* ── Series on disk that Axis does not manage ───────────────────── */

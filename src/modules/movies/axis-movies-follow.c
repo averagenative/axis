@@ -43,6 +43,15 @@ axis_movies_run_follow(
 	return axis_acquire_run_follow(self->acquire, report, error);
 }
 
+gboolean
+axis_movies_prune_searches(
+	AxisMovies  *self,
+	guint       *deleted,
+	GError     **error
+){
+	return axis_acquire_prune_searches(self->acquire, TRUE, deleted, error);
+}
+
 /* ── The scheduler ──────────────────────────────────────────────── */
 
 static gint

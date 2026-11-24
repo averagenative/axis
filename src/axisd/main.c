@@ -39,6 +39,7 @@
 #include "indexer/axis-indexer-newznab.h"
 #include "indexer/axis-indexer-sites.h"
 #include "indexer/axis-indexer-prowlarr.h"
+#include "jobs/axis-history.h"
 #include "jobs/axis-job-builtin.h"
 #include "jobs/axis-job-queue.h"
 #include "jobs/axis-job-registry.h"
@@ -105,6 +106,9 @@ static AxisDbPool *pool_left_open;
 /* The single-daemon lock, likewise: held until the process ends while those
  * threads may still run, so that no other daemon takes over beside them. */
 static AxisDaemonLock *lock_left_open;
+
+/* The same for what a still-running deletion of old history uses. */
+static AxisHistory    *history_left_open;
 
 /* The same for what a still-running storage check or scan uses. */
 static AxisStorage    *storage_left_open;
@@ -903,6 +907,7 @@ serve(
 	g_autoptr(AxisModuleRegistry) registry = axis_module_registry_new();
 	g_autoptr(AxisSettings) settings = axis_settings_new();	/* before @web_settings goes */
 	g_autoptr(AxisWebSettings) web_settings = axis_web_settings_new(settings, pool);
+	g_autoptr(AxisHistory) history = axis_history_new(settings);	/* after @jobs */
 	g_autoptr(GMainLoop) loop = g_main_loop_new(NULL, FALSE);
 	g_autoptr(AxisWorkerTokens) worker_tokens = axis_worker_tokens_new();	/* after @auth, @worker_api, @workers_ui */
 	g_autoptr(AxisJobRegistry) job_registry = NULL;
@@ -963,6 +968,9 @@ serve(
 	memset(&serving, 0, sizeof(serving));
 
 	if (!axis_module_registry_register(registry, axis_job_builtin_get_module(), settings, error))
+		return 1;
+	/* How long the history of movies, series, downloads and imports is kept. */
+	if (!axis_module_registry_register(registry, axis_history_get_module(), history, error))
 		return 1;
 	/* The Settings and Modules pages. */
 	if (!axis_module_registry_register(registry, axis_web_settings_get_module(), web_settings,
@@ -1447,6 +1455,8 @@ serve(
 	/* Requests to indexer sources in flight are cancelled. */
 	axis_indexers_stop(indexers);
 	if (*pool_in_use) {
+		/* A deletion of old history still running uses this. */
+		history_left_open = g_steal_pointer(&history);
 		/* A conversion's check or placement still running uses these. */
 		conversions_ui_left_open = g_steal_pointer(&conversions_ui);
 		conversions_left_open = g_steal_pointer(&conversions);
