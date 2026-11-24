@@ -346,6 +346,8 @@ AXISD_DEBUG          := $(OUTDIR)/axisd.debug
 AXISD_STRIPPED       := $(OUTDIR)/axisd-stripped
 AXIS_WORKER_DEBUG    := $(OUTDIR)/axis-worker.debug
 AXIS_WORKER_STRIPPED := $(OUTDIR)/axis-worker-stripped
+AXIS_PORTAL_DEBUG    := $(OUTDIR)/axis-portal.debug
+AXIS_PORTAL_STRIPPED := $(OUTDIR)/axis-portal-stripped
 
 $(OUTDIR)/%.debug: $(OUTDIR)/%
 	$(ECHO) "  DEBUG   $@"
@@ -360,7 +362,8 @@ $(OUTDIR)/%-stripped: $(OUTDIR)/% $(OUTDIR)/%.debug
 release:
 	$(Q)$(MAKE) --no-print-directory RELEASE=1 release-files
 
-release-files: $(AXISD_STRIPPED) $(AXISD_DEBUG) $(AXIS_WORKER_STRIPPED) $(AXIS_WORKER_DEBUG)
+release-files: $(AXISD_STRIPPED) $(AXISD_DEBUG) $(AXIS_WORKER_STRIPPED) $(AXIS_WORKER_DEBUG) \
+	$(AXIS_PORTAL_STRIPPED) $(AXIS_PORTAL_DEBUG)
 
 .PHONY: install install-files
 install:
@@ -372,7 +375,10 @@ install-files: release-files
 	install -D -m 0755 $(AXIS_WORKER_STRIPPED) $(DESTDIR)$(PREFIX)/bin/axis-worker
 	install -D -m 0644 $(AXIS_WORKER_DEBUG) $(DESTDIR)$(PREFIX)/lib/debug$(PREFIX)/bin/axis-worker.debug
 	install -D -m 0644 data/axis.conf.example $(DESTDIR)$(PREFIX)/share/axis/axis.conf.example
+	install -D -m 0755 $(AXIS_PORTAL_STRIPPED) $(DESTDIR)$(PREFIX)/bin/axis-portal
+	install -D -m 0644 $(AXIS_PORTAL_DEBUG) $(DESTDIR)$(PREFIX)/lib/debug$(PREFIX)/bin/axis-portal.debug
 	install -D -m 0644 data/axis-worker.conf.example $(DESTDIR)$(PREFIX)/share/axis/axis-worker.conf.example
+	install -D -m 0644 data/axis-portal.conf.example $(DESTDIR)$(PREFIX)/share/axis/axis-portal.conf.example
 
 # The container image.  The build context is this directory minus
 # .containerignore, so the submodule must be checked out; the commit is
@@ -554,10 +560,19 @@ check-made-up:
 	$(Q)python3 -I $(TESTDIR)/tools/check-made-up.py --self-test
 	$(Q)python3 -I $(TESTDIR)/tools/check-made-up.py
 
+# The documents and the program agree on whether the request portal has been
+# reviewed for the internet (tests/tools/check-portal-review.py says where
+# and how).  No network, no build needed.
+.PHONY: check-portal-review
+check-portal-review:
+	$(ECHO) "  CHECK   the request portal's review statement"
+	$(Q)python3 -I $(TESTDIR)/tools/check-portal-review.py --self-test
+	$(Q)python3 -I $(TESTDIR)/tools/check-portal-review.py
+
 # The gate: everything, under both sanitizers.  The fuzz targets are only
 # compiled here; `make fuzz` runs them.
 .PHONY: check
-check: check-made-up
+check: check-made-up check-portal-review
 	$(Q)$(MAKE) --no-print-directory DEBUG=1 ASAN=1 UBSAN=1 test
 	$(Q)if command -v $(FUZZ_CC) >/dev/null 2>&1; then \
 		$(MAKE) --no-print-directory fuzz-build; \

@@ -1,4 +1,4 @@
-# Containerfile - the Axis image: axisd, axis-worker, ffmpeg, ffprobe and yt-dlp
+# Containerfile - the Axis image: axisd, axis-worker, axis-portal, ffmpeg, ffprobe and yt-dlp
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # Build from the repository root, with the submodule checked out:
@@ -13,7 +13,7 @@
 # Stages:
 #   build    compilers and -dev packages; builds the hardened release, runs
 #            the unit tests that need no database, installs into /stage
-#   debug    only axisd.debug and axis-worker.debug, for symbolising crash
+#   debug    only axisd.debug, axis-worker.debug and axis-portal.debug, for symbolising crash
 #            reports: `make container-debug` writes them to
 #            build/container-debug/
 #   ytdlp    fetches yt-dlp, the program the YouTube downloader runs, and
@@ -22,7 +22,12 @@
 #            and yt-dlp with the Python and Node.js it needs; nothing else.
 #            This is the last stage, so it is what a plain build produces.
 #            axisd is the entrypoint; the same image runs a worker with
-#            `--entrypoint /usr/bin/axis-worker` (see deploy/README.md).
+#            `--entrypoint /usr/bin/axis-worker` and the request portal with
+#            `--entrypoint /usr/bin/axis-portal` (see deploy/README.md).
+#            There is no smaller image for the portal: one image is built,
+#            published and kept current, and the portal's container is
+#            bounded by how it is run (read-only, no capability, no new
+#            privileges, no volume), not by what its file system leaves out.
 #
 # The network access is to this base image, to Debian's package archive,
 # and, in the ytdlp stage alone, to yt-dlp's own release location on GitHub.
@@ -119,6 +124,7 @@ RUN set -e; \
 FROM scratch AS debug
 COPY --from=build /stage/usr/lib/debug/usr/bin/axisd.debug /axisd.debug
 COPY --from=build /stage/usr/lib/debug/usr/bin/axis-worker.debug /axis-worker.debug
+COPY --from=build /stage/usr/lib/debug/usr/bin/axis-portal.debug /axis-portal.debug
 
 
 FROM ${DEBIAN_IMAGE} AS ytdlp
@@ -208,6 +214,13 @@ COPY --from=build /stage/usr/bin/axisd /usr/bin/axisd
 COPY --from=build /stage/usr/bin/axis-worker /usr/bin/axis-worker
 COPY --from=build /stage/usr/share/axis/axis.conf.example /usr/share/axis/axis.conf.example
 COPY --from=build /stage/usr/share/axis/axis-worker.conf.example /usr/share/axis/axis-worker.conf.example
+# axis-portal, the request portal (add-request-portal): the same image with
+# another entrypoint, as the worker is.  It is linked with nothing of the
+# database, needs none of the variables set below and no volume, and writes
+# no file: it runs read-only, with no capability and no writable directory
+# (deploy/README.md, "The request portal").
+COPY --from=build /stage/usr/bin/axis-portal /usr/bin/axis-portal
+COPY --from=build /stage/usr/share/axis/axis-portal.conf.example /usr/share/axis/axis-portal.conf.example
 # yt-dlp, on the PATH Axis gives its tools, and the version the build took
 # (src/youtube/axis-youtube.h: AXIS_YOUTUBE_VERSION_FILE).  Owned by root and
 # not writable by the daemon: Axis never updates it.
