@@ -113,11 +113,11 @@ What the file adds:
 
 | Piece | What it is |
 | --- | --- |
-| `portal` | `axis-portal` from the same image, read-only, with no capability, no volume and no secret but its token |
+| `portal` | `axis-portal` from the same image, read-only, with no capability, no volume, no secret but its token, and no IPv6 |
 | `axis-portal` (network) | The daemon (`172.30.1.2`) and the portal (`172.30.1.3`), and nobody else. Internal: it has no way out |
 | `axis-portal-proxy` (network) | Traefik (`172.30.2.2`) and the portal (`172.30.2.3`), and nobody else. Internal too |
 | On `axis` | The portal API on port 7801, on the daemon's address on `axis-portal` alone; the main port on the daemon's address on `axis-proxy` alone; `AXIS_PORTAL_PEERS` with the portal's two addresses |
-| On Traefik | The router `axis-from-portal`, which answers the portal's address with 403 whatever it asks for |
+| On Traefik | The router `axis-from-portal`, among the labels of the `traefik` service itself, which answers the portal's address, and every IPv6 link-local address, with 403 whatever it asks for |
 
 The portal is not on `axis-proxy` or on `private`, and both of its networks
 are internal, so its container has no route to PostgreSQL, to the daemon's
@@ -135,13 +135,34 @@ closes that path twice:
   at a high priority, with an `ipAllowList` middleware that admits nobody.
   Traefik has no middleware that refuses an address, which is why the
   example is built this way. The portal never needs to ask Traefik for
-  anything.
+  anything. The router's labels are on the `traefik` service, not on the
+  `portal` service: Traefik drops the routers of a container that is stopped
+  or not healthy, and whoever holds the portal's container decides whether
+  it is healthy.
 - `AXIS_PORTAL_PEERS` on `axis` holds the portal's address on both
   networks. Axis answers the portal API to `172.30.1.3` alone, and refuses a
-  login to Axis itself from either address, also when Traefik forwards for
-  it. See
+  login to Axis itself when the connection comes from either address or
+  when `X-Forwarded-For` names either address anywhere. See
   [The request portal](../../README.md#the-request-portal) in the
   deployment guide.
+
+Both name the portal by its IPv4 addresses, so the portal's container must
+have no other address. A container's interface also gives itself an IPv6
+link-local address (`fe80::...`). Before these lines were added, the portal's
+container was seen to reach Traefik over that address: Traefik did not
+recognize it, Axis recorded Traefik's own address as the client, and the
+administrator's password opened a session. The file closes that in three
+places:
+
+- The `portal` service has IPv6 switched off (`sysctls`,
+  `net.ipv6.conf.all.disable_ipv6` and `default`), so its container has no
+  IPv6 address but loopback's. The container cannot switch it on again,
+  because that needs a capability it does not have. Do not remove the two
+  lines, and do not give the portal's networks an IPv6 subnet.
+- The router `axis-from-portal` also refuses every IPv6 link-local client
+  (`fe80::/10`).
+- While `AXIS_PORTAL_PEERS` is set, Axis takes no login that came from, or
+  by way of, an IPv6 link-local address.
 
 Every container on the portal's two networks has a fixed address, and so has
 Axis on `axis-proxy`. A container without one could be given another's
@@ -220,9 +241,20 @@ name.
 `tests/check-examples.sh traefik` checks the path through Traefik: from
 inside the portal's container it asks Traefik (`https://172.30.2.2`) for the
 host name of Axis, and expects 403 for the login page, the setup page, the
-worker API and a probe. If you change the addresses, the router
-`axis-from-portal` must name the portal's address on `axis-portal-proxy`, or
-it applies to nobody.
+worker API and a probe. It also expects that the portal's container has no
+IPv6 address and can make no IPv6 connection to Traefik, and that Traefik
+still refuses the portal's address after the portal's container is stopped.
+If you change the addresses, the router `axis-from-portal` must name the
+portal's address on `axis-portal-proxy`, or it applies to nobody.
+
+Right after a start, Axis has not yet looked up the name `traefik`
+(`AXIS_TRUSTED_PROXIES`). Until it has, usually for less than a second, a
+login through Traefik is refused as a wrong password is: with the portal
+configured, Axis takes no login that arrives with `X-Forwarded-For` from an
+address it cannot yet tell from its proxy. The log of Axis says "trusted
+proxy name traefik resolves to ..." when the wait is over. If the name
+never resolves, the log says so, and you can still log in to Axis directly,
+without the proxy.
 
 If nobody can log in at the portal, read the log of Axis. A line "a
 connection from ... was refused before its token was looked at" names the
@@ -247,16 +279,29 @@ compose.portal.yaml up -d --force-recreate portal`, and then revoke the
 first token. Everyone who is logged in to the portal logs in again.
 
 With Podman, the notes under [Podman](#podman) apply to the portal too.
-Through a published port of rootless Podman, Traefik sees one of its own
-addresses for every client, and which one can change each time Traefik
-starts. When it is Traefik's address on `axis-proxy`, the portal counts
-every visitor as one address for its login throttle. When it is Traefik's
-address on `axis-portal-proxy`, the portal is told that the visitor is its
-own proxy, and answers 503 to everyone who comes through the published
-port: its log says "the trusted proxy ... did not say who the client is".
-Starting Traefik again can change which address it is. Rootless Podman with
-published ports is therefore not a way to run the portal for other people;
-the checks reach the portal from a container on Traefik's network instead.
+
+**Do not run the portal for other people with rootless Podman and published
+ports. Use Docker or rootful Podman for it.** With rootless Podman, a
+connection through a published port reaches Traefik from one of Traefik's
+own addresses, and to that same address. With the portal's file, Traefik has
+two addresses, and Podman picks one each time the Traefik container starts
+(measured with Podman 5.8: the address on the internal network in two starts
+of five). No setting in a Compose file chooses it.
+
+- When Podman picks Traefik's address on `axis-proxy`, the portal works,
+  and counts every visitor as one address for its login throttle.
+- When Podman picks Traefik's address on `axis-portal-proxy`, the portal is
+  told that the visitor is its own proxy, and answers 503 to everyone who
+  comes through the published port. Its log says "the trusted proxy ... did
+  not say who the client is". The portal stays that way until the Traefik
+  container starts again.
+
+Axis itself is reached in both cases. The checks therefore reach the portal
+from a container on Traefik's network, and print what the published port
+answered without judging it. Binding Traefik's entry points to its address
+on `axis-proxy` does not help with rootless Podman: when Podman picks the
+other address, every connection through a published port is reset (measured
+with a listener bound to one of two addresses: three starts of five).
 
 Not run for this example: Docker, a certificate from a real certificate
 authority, and the Kubernetes `ingressroute.yaml` with the portal.

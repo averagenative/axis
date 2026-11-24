@@ -102,6 +102,17 @@ port stopped answering. Two things answer the open port:
   not expire, and a restart does not end it.
 - A requester cannot log in to Axis at all.
 
+The first of the two names the portal by its IPv4 address, so the portal's
+container must have no other address. `axis-portal.container` switches IPv6
+off in the container (`Sysctl=net.ipv6.conf.all.disable_ipv6=1` and
+`default`): without those lines, each of its interfaces gives itself an
+IPv6 link-local address (`fe80::...`). The container cannot switch IPv6 on
+again, because that needs a capability it does not have. Do not remove the
+two lines, and do not give the network `axis-portal` an IPv6 subnet. If the
+container had such an address after all, Axis would still take no login
+that came from it: while `AXIS_PORTAL_PEERS` is set, Axis refuses a login
+from an IPv6 link-local address.
+
 See [If the portal is taken over](../../README.md#if-the-portal-is-taken-over).
 
 This example has no reverse proxy. The portal publishes its port on

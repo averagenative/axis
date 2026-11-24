@@ -871,10 +871,36 @@ configuration file) means two things at the same time:
   everyone. Axis says so in its log when it starts, and the **Request
   portal** page says so too.
 - Nobody logs in to Axis itself from one of these addresses. Axis refuses
-  the login when the connection comes from a listed address, and when a
-  trusted proxy names a listed address as the client. The answer is the one
-  for a wrong password. See
+  the login when the connection comes from a listed address, when a trusted
+  proxy names a listed address as the client, and when `X-Forwarded-For`
+  names a listed address anywhere, whoever sent the header. The answer is
+  the one for a wrong password. See
   [If the portal is taken over](#if-the-portal-is-taken-over).
+
+Axis reads every address in `X-Forwarded-For` for this rule, not only the
+client that its trusted proxies arrive at. A sender can add addresses in
+front of the one that its proxy writes, and can remove none. So a login
+that the portal's container sends through a proxy carries the portal's
+address whatever else it carries, also through a proxy that adds to the
+header instead of replacing it. The only login that an invented address can
+stop is the sender's own.
+
+Two more refusals belong to the same rule. Both apply only while
+`AXIS_PORTAL_PEERS` is set:
+
+- A login that came from, or by way of, an IPv6 link-local address
+  (`fe80::/10`) is refused. An interface gives itself such an address, the
+  portal's container has one unless IPv6 is switched off in it, and no list
+  can name it. A link-local address is never the browser of an
+  administrator who reaches Axis through a proxy from elsewhere. If you
+  reach Axis directly over a link-local address, use another address.
+- While a host name in `AXIS_TRUSTED_PROXIES` has no address (Axis has not
+  looked it up yet, or the lookup fails), a login that arrives with
+  `X-Forwarded-For` from an address that is not a trusted proxy is refused.
+  That address can be the proxy, and Axis cannot check whom it forwards
+  for. After a start this lasts until the first lookup is done, usually
+  less than a second. A login without the header, directly to Axis, is not
+  affected.
 
 Write the portal's own addresses, on every network that the portal has, and
 nothing wider:
@@ -882,10 +908,19 @@ nothing wider:
 - A range is as wide as you write it. One IPv6 address is one address, not
   its /64. An IPv4-mapped IPv6 address counts as its IPv4 address. If the
   portal has an IPv4 and an IPv6 address, list both.
+- An IPv6 link-local address cannot be listed in a useful way, because the
+  portal gets a new one with each new interface. Switch IPv6 off in the
+  portal's container instead, as the Compose and Quadlet examples do
+  (`net.ipv6.conf.all.disable_ipv6=1` and
+  `net.ipv6.conf.default.disable_ipv6=1`), and give the portal's networks no
+  IPv6 subnet. On a dual-stack Kubernetes cluster, the portal's pods need a
+  range of their own in each family, and both ranges belong in the list.
 - Never list an address that is also in `AXIS_TRUSTED_PROXIES`. A login that
   arrives from an address in both lists is refused, whoever it is forwarded
-  for. Axis warns about the overlap in its log when it starts and under
-  **Needs attention**.
+  for. Axis warns about the overlap in its log when it starts, if the
+  trusted proxies are written as addresses. If they are written as host
+  names, Axis cannot know at the start, and says it under **Needs
+  attention** once the names have their addresses.
 - Nothing is learned and nothing expires. The list holds until you change
   the setting and restart Axis.
 
@@ -1052,29 +1087,41 @@ Two rules follow for you:
   login accepts requesters only.
 - **Nobody logs in to Axis from the portal's addresses.** Axis refuses a
   login at its own login page, and the first setup, when the connection
-  comes from an address in `AXIS_PORTAL_PEERS` or a trusted proxy names such
-  an address as the client. It answers as it answers a wrong password,
+  comes from an address in `AXIS_PORTAL_PEERS`, or `X-Forwarded-For` names
+  such an address anywhere. It answers as it answers a wrong password,
   checks no password, and counts no failure. A session that exists is not
   affected. So an administrator's password that reached a portal in the
   wrong hands cannot be used from where the portal is. The rule does not
   depend on what the portal does, and a restart of Axis does not end it.
+
+The answer is that of a wrong password, but the portal's holder can still
+tell that the address is refused: a refused login is answered sooner than a
+checked one, because no password is checked, and a refused setup never turns
+into "Too many failed attempts" as wrong setup tokens do. Neither says
+anything about a password or a token.
 
 #### If Axis refuses your own login after you set the portal up
 
 If your browser reaches Axis from an address in `AXIS_PORTAL_PEERS`, Axis
 refuses your login too, with the message for a wrong password. This happens
 when the list is wider than the portal, or when the portal and your browser
-reach Axis from the same address, for example through one gateway.
+reach Axis from the same address, for example through one gateway. The same
+answer has two more causes, both described under
+[What runs where](#what-runs-where): your login reached Axis from or by way
+of an IPv6 link-local address, or it arrived through a reverse proxy whose
+host name in `AXIS_TRUSTED_PROXIES` has no address at the moment.
 
 To find out, look at the log of Axis for a line that begins with
-`audit: login refused:` and names the address and the setting. Axis writes
-one such line, and then one a minute at most. The **Request portal** page
-shows when Axis last refused a login for this reason, if you still have a
-session.
+`audit: login refused:`. The line says which of these it was, and names the
+address and the setting. Axis writes one such line, and then one a minute at
+most. The **Request portal** page shows when Axis last refused a login for
+one of these reasons, if you still have a session.
 
 To get back in, do one of these:
 
-- Reach Axis from an address that is not in the list.
+- Reach Axis from an address that is not in the list, and not over a
+  link-local address. If the log names the proxy's host name, wait a few
+  seconds and try again, or reach Axis directly, without the proxy.
 - Correct `AXIS_PORTAL_PEERS` (or `portal_peers` in the configuration file)
   so that it holds the portal's own addresses only, and restart Axis. The
   setting is in the configuration, so you never need to change the database.
@@ -1099,22 +1146,37 @@ limit of failed logins in an hour or its limit of requests in a day. The
   correct password to Traefik with the host name of Axis: Traefik answers
   403 and no session is made. A login that Traefik does forward, for an
   address that the check adds to `AXIS_PORTAL_PEERS`, is refused by Axis.
+  The portal's container has no IPv6 address but loopback's, and cannot
+  make an IPv6 connection to Traefik. With the portal's container stopped,
+  Traefik still refuses the portal's address.
+- Before IPv6 was switched off in the portal's container, the same check
+  showed the reason: over an IPv6 link-local address, from the portal's
+  container, the administrator's password opened a session through Traefik,
+  and Axis recorded Traefik's own address as the client. With IPv6 left on
+  and the other two barriers in place, Traefik answered that connection 403.
+  That the daemon refuses such a login is shown by its tests only.
 - It starts the Quadlet example with the portal too, without a reverse
   proxy: it sends one request as the proxy would, and tries the database
   from the portal's container. From the portal's container it posts the
   administrator's correct password to the daemon's main port, which is open
   there: Axis answers as for a wrong password, makes no session, and writes
-  the reason to its log.
+  the reason to its log. The portal's container has no IPv6 address there
+  either.
 - These checks ran with rootless Podman. With rootless Podman, a request
   through a published port arrives in the container from one of the
-  container's own addresses. A container on two networks therefore sees
-  either address, and which one can change at each start. Two things follow.
-  The Quadlet example cannot bind the daemon's main port to one address,
-  because the published port then stops answering when Podman picks the
-  other. And in the Traefik example, the portal answers 503 to visits
-  through the published port when Podman picks Traefik's address on the
-  portal's network: the portal is then told that the visitor is its own
-  proxy. Docker and a system-wide Podman were not tried.
+  container's own addresses, and to that same address. For a container on
+  two networks, Podman picks the address each time the container starts
+  (measured with Podman 5.8: either address, in two and three starts of
+  five), and no setting in a Compose file or a Quadlet unit chooses it. Two
+  things follow. The Quadlet example cannot bind the daemon's main port to
+  one address, because connections through the published port are then
+  reset when Podman picks the other. And in the Traefik example, the portal
+  answers 503 to every visit through the published port when Podman picks
+  Traefik's address on the portal's network, until the Traefik container
+  starts again: the portal is then told that the visitor is its own proxy.
+  So do not run the Traefik example's portal for other people with rootless
+  Podman and published ports. Docker and a system-wide Podman were not
+  tried.
 - The Kubernetes manifests of the portal are only rendered
   (`kubectl kustomize`). They have not been applied to a cluster, their
   NetworkPolicy has not been exercised, and the annotations that give the

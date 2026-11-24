@@ -84,7 +84,7 @@ Password checks that the portal API asks for SHALL use at most one of the daemon
 - **THEN** further ones are answered 503 and no password hash is started for them
 
 ### Requirement: An address that speaks as the portal is not let in as a person
-The portal's addresses SHALL be one static setting of the daemon, `server.portal_peers` (`AXIS_PORTAL_PEERS`): a list of IP addresses and CIDR ranges, empty by default, in which a host name SHALL be refused at start. A range SHALL be as wide as it is written (an IPv6 address SHALL NOT be widened to its /64), and an IPv4-mapped IPv6 address SHALL count as its IPv4 address. The daemon SHALL refuse a login at the engine's own interface, and the first setup, when the address of the connection is in the list or when the client's address, as the main listener resolves it through its trusted proxies, is in the list, whatever forwarding headers the connection carries. The refusal SHALL be the answer of a wrong password (of a wrong setup token), without checking a password and without counting a failure against anyone. A session that already exists SHALL NOT be affected. Nothing SHALL be learnt from what a portal does and nothing SHALL expire: neither a portal that stops calling nor a restart of the daemon SHALL end the rule. The daemon SHALL write a line to its log that names the address and the setting, at once for the first refusal and then at most once a minute with the number it left out, and the page "Request portal" SHALL show when a login was last refused for this reason. When an address is both in this list and among the trusted proxies, the daemon SHALL warn at start and SHALL show a notice under "Worth a look" that says what to change.
+The portal's addresses SHALL be one static setting of the daemon, `server.portal_peers` (`AXIS_PORTAL_PEERS`): a list of IP addresses and CIDR ranges, empty by default, in which a host name SHALL be refused at start. A range SHALL be as wide as it is written (an IPv6 address SHALL NOT be widened to its /64), and an IPv4-mapped IPv6 address SHALL count as its IPv4 address. The daemon SHALL refuse a login at the engine's own interface, and the first setup, when the address of the connection is in the list, when the client's address, as the main listener resolves it through its trusted proxies, is in the list, or when any address in the request's `X-Forwarded-For` is in the list, whoever sent that header and wherever in it the address stands. While the list is not empty, the daemon SHALL also refuse a login and the first setup when one of those addresses is an IPv6 link-local address (`fe80::/10`, with or without a zone), and when the request carries `X-Forwarded-For`, its connection is not from a trusted proxy, and a host name among the trusted proxies stands for no address (not looked up yet, or failing past its grace). While the list is empty, none of this SHALL apply. An address taken from a header SHALL reach the log only as the daemon writes it again, never as the header's own text. The refusal SHALL be the answer of a wrong password (of a wrong setup token), without checking a password and without counting a failure against anyone. A session that already exists SHALL NOT be affected. Nothing SHALL be learnt from what a portal does and nothing SHALL expire: neither a portal that stops calling nor a restart of the daemon SHALL end the rule. The daemon SHALL write a line to its log that names the address and the setting, at once for the first refusal and then at most once a minute with the number it left out, and the page "Request portal" SHALL show when a login was last refused for this reason. When an address is both in this list and among the trusted proxies, the daemon SHALL warn at start and SHALL show a notice under "Worth a look" that says what to change.
 
 #### Scenario: A login from the portal's address
 - **WHEN** `server.portal_peers` holds an address, no portal has called yet, and a login with an administrator's right password arrives at the engine's login page on a connection from that address
@@ -102,6 +102,30 @@ The portal's addresses SHALL be one static setting of the daemon, `server.portal
 - **WHEN** an address is both in the list and a trusted proxy, and a login arrives from it with `X-Forwarded-For` naming an address that is in neither
 - **THEN** it is refused as a wrong password would be
 
+#### Scenario: A proxy that adds to X-Forwarded-For
+- **WHEN** an address is both in the list and a trusted proxy, it sends a login with `X-Forwarded-For` naming an address that is in neither to a second trusted proxy, and that proxy adds the first one's address to the header
+- **THEN** the login is refused as a wrong password would be, although the client the trusted proxies arrive at is in neither list, and the log says that `X-Forwarded-For` names one of the portal's addresses
+
+#### Scenario: An address in X-Forwarded-For beyond the client
+- **WHEN** a login arrives from a trusted proxy with an `X-Forwarded-For` in which the client the trusted proxies arrive at is nobody's, and an address in front of it, which the walk never reaches, is in the list
+- **THEN** it is refused as a wrong password would be
+
+#### Scenario: X-Forwarded-For from a sender that is not trusted
+- **WHEN** no proxy is trusted and a login arrives with `X-Forwarded-For` naming an address in the list
+- **THEN** it is refused as a wrong password would be
+
+#### Scenario: An IPv6 link-local address
+- **WHEN** the list is not empty and a login arrives from a trusted proxy with `X-Forwarded-For: fe80::9c2d:11ff:fe22:57e8%eth1`
+- **THEN** it is refused as a wrong password would be, the log names `fe80::9c2d:11ff:fe22:57e8` as an IPv6 link-local address, and the zone's text is not in the log
+
+#### Scenario: A forwarded login while the proxy's name has no address
+- **WHEN** the list is not empty, `server.trusted_proxies` names a host that has not been looked up yet, and a login with an administrator's right password arrives with `X-Forwarded-For` from an address that is not trusted
+- **THEN** it is refused as a wrong password would be and the log says why; the same login without the header succeeds; and once the name has its address, the login through the proxy succeeds
+
+#### Scenario: No portal, no rule
+- **WHEN** the list is empty
+- **THEN** no login is refused for an address: not from an IPv6 link-local address, and not with a forwarding header while a proxy's name has no address
+
 #### Scenario: Nothing is learnt and nothing expires
 - **WHEN** two days pass in which no portal calls the daemon, or the daemon restarts
 - **THEN** a login from an address in the list is refused as before, and one from an address outside it is checked as before
@@ -116,8 +140,8 @@ The portal's addresses SHALL be one static setting of the daemon, `server.portal
 
 #### Scenario: The portal's addresses and the trusted proxies overlap
 - **WHEN** an address is in `server.portal_peers` and among `server.trusted_proxies`
-- **THEN** the daemon warns at start, and a notice under "Worth a look" names both entries and says what to change
+- **THEN** the daemon warns at start when the trusted proxy is written as an address or a range, and a notice under "Worth a look" names both entries and says what to change, also for a trusted proxy written as a host name once the name has its address
 
 #### Scenario: An administrator who is refused finds out why
-- **WHEN** an administrator's own login is refused because their browser arrives from an address in the list
-- **THEN** the daemon's log has a line that names the address and the setting, and the guide says how to get back in by changing a line of configuration and restarting, without touching the database
+- **WHEN** an administrator's own login is refused because their browser arrives from an address in the list, from or by way of an IPv6 link-local address, or through a proxy whose name has no address yet
+- **THEN** the daemon's log has a line that says which it was and names the address and the setting, and the guide says how to get back in by changing a line of configuration and restarting, without touching the database

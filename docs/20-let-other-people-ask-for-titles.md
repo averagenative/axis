@@ -293,7 +293,7 @@ A requester cannot change a password in the portal. You set it on the
   portal's addresses in one setting, `AXIS_PORTAL_PEERS`. Axis answers the
   portal's interface to those addresses only, and refuses a login at its own
   login page from them, whether the connection comes from such an address or
-  your reverse proxy forwards for one. Axis answers as for a wrong password.
+  a forwarding header names one. Axis answers as for a wrong password.
   A session that you already have keeps working. The rule does not expire,
   and a restart of Axis does not end it.
 
@@ -307,9 +307,17 @@ The cause: your browser reaches Axis from an address that is in
 addresses, or the portal and your browser reach Axis from one address, for
 example through the same gateway.
 
+Two other causes give the same answer while the portal is set up:
+
+- Your login reached Axis from, or by way of, an IPv6 link-local address
+  (one that begins with `fe80:`). Use another address of Axis.
+- Axis started a moment ago and has not yet found the address of its
+  reverse proxy's host name. Wait a few seconds, and try again.
+
 To check, read the log of Axis. Look for a line that begins with
-`audit: login refused:`. The line names the address and the setting. Axis
-writes one such line, and after that one a minute at most.
+`audit: login refused:`. The line says which cause it was, and names the
+address and the setting. Axis writes one such line, and after that one a
+minute at most.
 
 To get back in:
 
