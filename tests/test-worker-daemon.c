@@ -38,17 +38,7 @@ static gboolean have_ffmpeg;
 static guint16
 pick_free_port(void)
 {
-	g_autoptr(GError) error = NULL;
-	g_autoptr(GSocket) socket = g_socket_new(G_SOCKET_FAMILY_IPV4, G_SOCKET_TYPE_STREAM, G_SOCKET_PROTOCOL_DEFAULT,
-		&error);
-	g_autoptr(GSocketAddress) address = g_inet_socket_address_new_from_string("127.0.0.1", 0);
-	g_autoptr(GSocketAddress) bound = NULL;
-
-	g_assert_no_error(error);
-	g_assert_true(g_socket_bind(socket, address, FALSE, &error));
-	bound = g_socket_get_local_address(socket, &error);
-	g_assert_no_error(error);
-	return g_inet_socket_address_get_port(G_INET_SOCKET_ADDRESS(bound));
+	return axis_test_free_port();
 }
 
 static guint

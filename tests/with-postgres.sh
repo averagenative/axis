@@ -13,9 +13,18 @@
 #   AXIS_SKIP_DB_TESTS=1     start nothing; the database tests skip
 #   AXIS_TEST_DATABASE_URL   already set: use that server, start nothing
 #   AXIS_TEST_PG_IMAGE       the image (default postgres:17-alpine)
+#   AXIS_TEST_PG_ON_DISK=1   keep the server's data on disk, in the
+#                            container, instead of in memory
 #
+# The server's data is in memory (a tmpfs in the container; about 1 GB while
+# sixteen test programs run).  Every test makes a database, fills it and
+# drops it: on disk, sixteen programs doing that at once wrote 100 MB a
+# second, waited for the disk more than they ran, and their tests failed on
+# one deadline after another.
 # The password is random per run.  The server runs with fsync off: its
-# data is thrown away anyway.
+# data is thrown away anyway.  It takes 1000 connections: the test programs
+# run many at a time (TEST_JOBS), each with pools of its own and the
+# daemons it starts with theirs.
 
 set -u
 
@@ -79,6 +88,13 @@ if [ "$runtime" = podman ]; then
 	extra="--timeout=7200"
 fi
 
+# The data directory: a tmpfs, at a path of our own so that it is the same
+# for every version of the image (PGDATA names it).
+if [ "${AXIS_TEST_PG_ON_DISK:-}" != 1 ]; then
+	extra="$extra --env PGDATA=/var/lib/postgresql/axis-test-data"
+	extra="$extra --tmpfs /var/lib/postgresql/axis-test-data"
+fi
+
 started=1
 # shellcheck disable=SC2086
 if ! $runtime run --detach --rm $extra --name "$name" \
@@ -87,7 +103,7 @@ if ! $runtime run --detach --rm $extra --name "$name" \
 	--env POSTGRES_PASSWORD="$password" \
 	"$image" \
 	-c fsync=off -c synchronous_commit=off -c full_page_writes=off \
-	-c max_connections=200 >/dev/null; then
+	-c max_connections=1000 >/dev/null; then
 	started=0
 	echo "with-postgres: could not start $image with $runtime" >&2
 	exit 1

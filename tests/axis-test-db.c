@@ -5,8 +5,11 @@
 
 #include "axis-test-db.h"
 
+#include <arpa/inet.h>
 #include <libpq-fe.h>
+#include <netinet/in.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <unistd.h>
 
 struct _AxisTestDb
@@ -441,4 +444,46 @@ axis_test_log_find(
 
 	g_pattern_spec_free(spec);
 	return found;
+}
+
+/* Whether 127.0.0.1:@port (0: any, which is put in @port) can be bound now. */
+static gboolean
+port_is_free(guint16 *port)
+{
+	struct sockaddr_in sin;
+	socklen_t length = sizeof sin;
+	gboolean free;
+	int fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+
+	if (fd < 0)
+		return FALSE;
+	memset(&sin, 0, sizeof sin);
+	sin.sin_family = AF_INET;
+	sin.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+	sin.sin_port = htons(*port);
+	free = bind(fd, (struct sockaddr *)&sin, sizeof sin) == 0
+		&& getsockname(fd, (struct sockaddr *)&sin, &length) == 0;
+	if (free)
+		*port = ntohs(sin.sin_port);
+	close(fd);
+
+	return free;
+}
+
+guint16
+axis_test_free_port(void)
+{
+	guint16 port = 0;
+	guint tries;
+
+	for (tries = 0; tries < 200; tries++) {
+		port = (guint16)g_random_int_range(20000, 32000);
+		if (port_is_free(&port))
+			return port;
+	}
+
+	/* Nothing free there, 200 times over: whatever the kernel gives. */
+	port = 0;
+	g_assert_true(port_is_free(&port));
+	return port;
 }

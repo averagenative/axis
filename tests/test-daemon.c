@@ -59,7 +59,9 @@ struct _Fixture
 	gchar       *tmp_path;	/* a file to remove at teardown */
 	AxisTestDb  *db;		/* the test's database, if it has one */
 	Proxy       *proxy;		/* between axisd and the database, if any */
-	GString     *early_stderr;	/* stderr read while the child ran */
+	gchar       *stderr_path;	/* the file the daemon's stderr goes to (inside @scratch) */
+	gsize        stderr_seen;	/* how much of it read_stderr_until() has gone through */
+	guint        n_spawned;
 	gchar       *scratch;	/* a directory of the test's own */
 	gchar       *data_dir;	/* AXIS_DATA_DIR of every daemon started (inside @scratch) */
 };
@@ -92,8 +94,7 @@ fixture_teardown(Fixture *fx, gconstpointer data)
 		proxy_free(fx->proxy);
 	axis_test_db_free(fx->db);
 	g_free(fx->stderr_text);
-	if (fx->early_stderr != NULL)
-		g_string_free(fx->early_stderr, TRUE);
+	g_free(fx->stderr_path);
 	g_free(fx->data_dir);
 	axis_test_storage_dir_free(fx->scratch);
 }
@@ -138,41 +139,16 @@ socket_port(GSocket *socket)
 }
 
 /*
- * A port for a daemon this test starts: free now, picked at random below
- * the kernel's range of ephemeral ports (32768 and up on Linux), so that
- * it is not the port another program's own pick of a free port (a sibling
- * test's daemon, run at the same time) is likely to get.  The daemon binds
- * it a moment later; the requests below check that what answers is that
+ * A port for a daemon this test starts: free now, and not one another
+ * program's own pick of a free port (a sibling test's daemon, run at the
+ * same time) is likely to get (axis_test_free_port()).  The daemon binds it
+ * a moment later; the requests below check that what answers is that
  * daemon (AXIS_WEB_HEALTH_PROCESS_HEADER).
  */
 static guint16
 pick_free_port(void)
 {
-	guint tries;
-
-	for (tries = 0; tries < 200; tries++) {
-		guint16 port = (guint16)g_random_int_range(20000, 32000);
-		GSocket *socket = g_socket_new(G_SOCKET_FAMILY_IPV4, G_SOCKET_TYPE_STREAM, G_SOCKET_PROTOCOL_DEFAULT, NULL);
-		GSocketAddress *address = g_inet_socket_address_new_from_string("127.0.0.1", port);
-		gboolean free = socket != NULL && g_socket_bind(socket, address, FALSE, NULL);
-
-		g_object_unref(address);
-		if (socket != NULL) {
-			g_socket_close(socket, NULL);
-			g_object_unref(socket);
-		}
-		if (free)
-			return port;
-	}
-
-	{
-		GSocket *socket = bind_ephemeral();
-		guint16 port = socket_port(socket);
-
-		g_socket_close(socket, NULL);
-		g_object_unref(socket);
-		return port;
-	}
+	return axis_test_free_port();
 }
 
 /* What a test must not inherit from the environment it runs in. */
@@ -210,7 +186,16 @@ spawn_axisd_env(
 	guint n = 0;
 	guint i;
 
-	launcher = g_subprocess_launcher_new(G_SUBPROCESS_FLAGS_STDERR_PIPE | G_SUBPROCESS_FLAGS_STDOUT_SILENCE);
+	/* Its stderr goes to a file, not to a pipe: a pipe holds only so much
+	 * (64 KiB, and two pages once the user's programs together have many
+	 * pipes open, as when the test programs run side by side), and a daemon
+	 * whose log filled it would stand still in write() until the test read
+	 * it, which it does when the daemon has ended. */
+	launcher = g_subprocess_launcher_new(G_SUBPROCESS_FLAGS_STDOUT_SILENCE);
+	g_free(fx->stderr_path);
+	fx->stderr_path = g_strdup_printf("%s/axisd-%u.log", fx->scratch, fx->n_spawned++);
+	fx->stderr_seen = 0;
+	g_subprocess_launcher_set_stderr_file_path(launcher, fx->stderr_path);
 	for (i = 0; clean[i] != NULL; i++)
 		g_subprocess_launcher_unsetenv(launcher, clean[i]);
 	g_subprocess_launcher_setenv(launcher, "AXIS_DATA_DIR", fx->data_dir, TRUE);
@@ -275,26 +260,20 @@ on_wait_timeout(gpointer user_data)
 	return G_SOURCE_REMOVE;
 }
 
+/* The child ended: all it wrote to stderr is in its file. */
 static void
-on_communicate_done(
+on_child_exited(
 	GObject      *source,
 	GAsyncResult *result,
 	gpointer      user_data
 ){
 	Fixture *fx = user_data;
-	GError *error = NULL;
-	gchar *err_text = NULL;
 
-	g_subprocess_communicate_utf8_finish(G_SUBPROCESS(source), result,
-		NULL, &err_text, &error);
-	g_clear_error(&error);
+	g_subprocess_wait_finish(G_SUBPROCESS(source), result, NULL);
 	g_free(fx->stderr_text);
-	/* What a test read while the child ran comes first. */
-	fx->stderr_text = g_strconcat(fx->early_stderr != NULL ? fx->early_stderr->str : "",
-		err_text != NULL ? err_text : "", NULL);
-	g_free(err_text);
-	if (fx->early_stderr != NULL)
-		g_string_truncate(fx->early_stderr, 0);
+	fx->stderr_text = NULL;
+	if (!g_file_get_contents(fx->stderr_path, &fx->stderr_text, NULL, NULL))
+		fx->stderr_text = g_strdup("");
 	g_main_loop_quit(fx->loop);
 }
 
@@ -306,8 +285,7 @@ wait_for_exit(Fixture *fx)
 	guint timeout_id;
 
 	fx->loop = g_main_loop_new(NULL, FALSE);
-	g_subprocess_communicate_utf8_async(fx->proc, NULL, NULL,
-		on_communicate_done, fx);
+	g_subprocess_wait_async(fx->proc, NULL, on_child_exited, fx);
 	timeout_id = g_timeout_add_seconds(EXIT_TIMEOUT_SECONDS, on_wait_timeout, fx);
 	g_main_loop_run(fx->loop);
 	if (!fx->timed_out)
@@ -1580,36 +1558,45 @@ test_jobs_settings_invalid(Fixture *fx, gconstpointer data)
 /* ── Accounts and sessions through the real daemon ──────────────── */
 
 /*
- * Reads the child's stderr, line by line, until a line contains @needle;
- * returns that line, or NULL at end of file.  Everything read is kept for
- * stderr_text.  It reads one byte at a time, so nothing beyond the line is
- * taken from the pipe (wait_for_exit() reads the rest).
+ * Reads the child's stderr (its file), line by line, from where the last
+ * call stopped, until a line contains @needle; returns that line, or NULL
+ * when the child has ended without writing one.  It waits for as long as
+ * the child runs.
  */
 static gchar *
 read_stderr_until(
 	Fixture     *fx,
 	const gchar *needle
 ){
-	GInputStream *pipe = g_subprocess_get_stderr_pipe(fx->proc);
-	GString *line = g_string_new(NULL);
-	gchar c;
+	gboolean ended = FALSE;
 
-	if (fx->early_stderr == NULL)
-		fx->early_stderr = g_string_new(NULL);
+	for (;;) {
+		g_autofree gchar *text = NULL;
+		gsize length = 0;
+		const gchar *end;
 
-	while (g_input_stream_read(pipe, &c, 1, NULL, NULL) == 1) {
-		g_string_append_c(fx->early_stderr, c);
-		if (c != '\n') {
-			g_string_append_c(line, c);
-			continue;
+		if (!g_file_get_contents(fx->stderr_path, &text, &length, NULL))
+			length = 0;
+		while (fx->stderr_seen < length &&
+		       (end = memchr(text + fx->stderr_seen, '\n', length - fx->stderr_seen)) != NULL) {
+			gchar *line = g_strndup(text + fx->stderr_seen, (gsize)(end - (text + fx->stderr_seen)));
+
+			fx->stderr_seen = (gsize)(end - text) + 1;
+			if (strstr(line, needle) != NULL)
+				return line;
+			g_free(line);
 		}
-		if (strstr(line->str, needle) != NULL)
-			return g_string_free(line, FALSE);
-		g_string_truncate(line, 0);
+		if (ended)
+			return NULL;
+		/* GSubprocess forgets the child's id once it has seen it end,
+		 * which it does on the main context: one more look at the file
+		 * then, for what the child wrote last. */
+		g_main_context_iteration(NULL, FALSE);
+		if (g_subprocess_get_identifier(fx->proc) == NULL)
+			ended = TRUE;
+		else
+			g_usleep(20 * 1000);
 	}
-
-	g_string_free(line, TRUE);
-	return NULL;
 }
 
 typedef struct

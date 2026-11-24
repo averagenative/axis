@@ -69,20 +69,7 @@ fixture_teardown(Fixture *fx, gconstpointer data)
 static gchar *
 free_port(void)
 {
-	g_autoptr(GError) error = NULL;
-	g_autoptr(GSocket) socket = g_socket_new(G_SOCKET_FAMILY_IPV4, G_SOCKET_TYPE_STREAM, G_SOCKET_PROTOCOL_DEFAULT,
-		&error);
-	g_autoptr(GSocketAddress) address = g_inet_socket_address_new_from_string("127.0.0.1", 0);
-	g_autoptr(GSocketAddress) bound = NULL;
-	guint16 port;
-
-	g_assert_no_error(error);
-	g_assert_true(g_socket_bind(socket, address, FALSE, &error));
-	bound = g_socket_get_local_address(socket, &error);
-	g_assert_no_error(error);
-	port = g_inet_socket_address_get_port(G_INET_SOCKET_ADDRESS(bound));
-	g_socket_close(socket, NULL);
-	return g_strdup_printf("%u", (guint)port);
+	return g_strdup_printf("%u", (guint)axis_test_free_port());
 }
 
 /* axisd on the test's database (through @url, unless NULL), on @port with
