@@ -790,7 +790,9 @@ test_jobs_on_the_queue(Fixture *fx, gconstpointer data)
 	assert_query(fx, "SELECT count(*) FROM job_schedule WHERE name IN ('probe.due', 'probe.stale')", "2");
 	g_assert_true(axis_probe_enqueue_due(fx->probe, FALSE, &enqueued, &error));
 	g_assert_no_error(error);
-	g_assert_cmpuint(enqueued, ==, 3);
+	/* The queue just started may have run the "probe.due" schedule first
+	 * and enqueued them already: either way there are three, once each. */
+	g_assert_cmpuint(enqueued, <=, 3);
 	assert_query(fx, "SELECT count(*) FROM job WHERE kind = 'probe.file' AND queue = 'probe' AND max_attempts = 8",
 	             "3");
 
