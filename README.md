@@ -1,5 +1,7 @@
 # Axis
 
+[![checks](https://github.com/averagenative/axis/actions/workflows/checks.yml/badge.svg?branch=main)](https://github.com/averagenative/axis/actions/workflows/checks.yml)
+
 Axis is one media engine, written in C, that looks after a media collection on
 a server you run yourself. It does the work that is usually spread over
 several separate managers (Radarr, Sonarr and the scripts around them): it
@@ -221,6 +223,27 @@ programs run. To keep the data on disk, set `AXIS_TEST_PG_ON_DISK=1`, and
 expect the tests to wait for the disk. To test against a PostgreSQL server
 of your own, set `AXIS_TEST_DATABASE_URL`. `make check` never touches a GPU: `make
 check-hwenc` runs the hardware encoder tests when you ask for them.
+
+### The checks on GitHub
+
+Every push to `main` runs the same four gates on GitHub, each in a job of
+its own, by the workflow
+[`.github/workflows/checks.yml`](.github/workflows/checks.yml). The badge at
+the top of this page shows the result for the newest commit on `main`. A
+commit whose run has four green jobs is ready to deploy.
+
+The workflow doesn't run on pull requests, because a pull request from a
+fork is code that nobody has read yet. Before you open one, run the same
+four commands yourself:
+
+```sh
+make -j16 check
+make -j16 fuzz FUZZ_SECONDS=20
+make check-container
+make container && make check-examples
+```
+
+`make check-examples` uses the image that `make container` builds.
 
 ## How the project is organized
 
