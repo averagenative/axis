@@ -742,6 +742,22 @@ build_state(
 	return state;
 }
 
+/* Makes @state that of a request without a session: its address and scheme
+ * stay, everything of an account goes. */
+static void
+forget_session(AxisAuthState *state)
+{
+	state->user_id = 0;
+	state->role = AXIS_USER_ROLE_USER;
+	g_clear_pointer(&state->username, g_free);
+	g_clear_pointer(&state->theme, g_free);
+	g_clear_pointer(&state->add_defaults, g_free);
+	g_clear_pointer(&state->token, axis_secret_free);
+	g_clear_pointer(&state->token_hash, g_free);
+	g_clear_pointer(&state->public_id, g_free);
+	g_clear_pointer(&state->csrf, axis_secret_free);
+}
+
 /* The token of "Bearer <token>": the scheme in any case, one space, and the
  * rest exactly; %NULL for anything else (two headers are joined by a comma,
  * which no token has). */
@@ -900,11 +916,16 @@ auth_middleware(
 	}
 
 	state = build_state(self, request, TRUE);
+	/* The third of the requester role's barriers (the login and the session
+	 * lookup are the others): whatever identified the request as a
+	 * requester's, it goes on as a request without a session, on every path,
+	 * public ones too, so that no page or handler ever sees one. */
+	if (state->user_id != 0 && state->role == AXIS_USER_ROLE_REQUESTER)
+		forget_session(state);
 	g_object_set_data_full(G_OBJECT(request), STATE_KEY, state, state_free);
 
-	/* Default deny: only the public paths go further without a session, and
-	 * a requester's is none. */
-	if ((state->user_id == 0 || state->role == AXIS_USER_ROLE_REQUESTER) && !axis_web_auth_is_public_path(path)) {
+	/* Default deny: only the public paths go further without a session. */
+	if (state->user_id == 0 && !axis_web_auth_is_public_path(path)) {
 		htmx_context_set_response(context, unauthenticated(self, request));
 		return;
 	}

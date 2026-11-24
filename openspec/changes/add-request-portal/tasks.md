@@ -112,87 +112,90 @@ Gate:
 
 Build:
 
-- [ ] 2.1 Confirm first what "Believed and not confirmed" says about a second listener, and record the answer in `design.md`.
-- [ ] 2.2 Migration `NNNN_portal_api.sql` (the next free number in `data/migrations/` when it is written; 0083 is P1's): the role `requester` in the check constraint of `app_user`, `portal_token`, `kind` on `web_session` (`web` for every existing row).
-- [ ] 2.3 The requester role in the user store, the Users page, the engine's login, the session lookup and the middleware; the password rules for a requester.
-- [ ] 2.4 The portal listener (`server.portal_listen_port`, `AXIS_PORTAL_LISTEN_PORT`), with a router that holds the operations only, under the connection limits.
-- [ ] 2.5 The portal gate and the token store, beside the worker's; the page "Request portal".
-- [ ] 2.6 Portal sessions: the kind, the proof, its expiry and revocation, the Users page's list.
-- [ ] 2.7 The eleven operations in `src/api/`, with one bounded reader for their bodies and one writer for their answers.
-- [ ] 2.8 The daemon's limits: the hourly login ceiling, the search budget and cache, the portal's daily ceiling, the reserved hashing place, the device value in `login`.
-- [ ] 2.9 A fuzz target for the reader of operation bodies, `tests/fuzz/fuzz-portal-body.c`.
-- [ ] 2.10 The known limits of this slice in `openspec/project.md`.
+- [x] 2.0 Before the slice (recorded in `design.md`, "As built in P1"): the adult mark is stored. Migration `0084_title_adult.sql` (`meta_title.adult`), set wherever a provider's answer carries it; the engine's ask path refuses a marked title for anyone but an administrator, with the answer of a title that does not exist. Tests: `/requests/model/adult-title` (the mark, the refusal, no following, the mark not cleared), `/web/requests/adult-title` (the engine's own Request route), and the `title`, `art`, `request` and `search` operations in `/portal/api/fields/answers`.
+- [x] 2.1 Confirm first what "Believed and not confirmed" says about a second listener, and record the answer in `design.md`. Confirmed for two servers on one main loop; the local port of a request is not needed. Recorded under "Believed and not confirmed".
+- [x] 2.2 Migration `0085_portal_api.sql` (0084 is the adult mark's): the role `requester` in the check constraint of `app_user`, `portal_token`, `kind` on `web_session` (`web` for every existing row). Tested in `tests/test-db-migrate.c`, in `/db/migrate/requests-on-accounts`, on a database with accounts, a title and a session.
+- [x] 2.3 The requester role in the user store, the Users page, the engine's login, the session lookup and the middleware; the password rules for a requester.
+- [x] 2.4 The portal listener (`server.portal_listen_port`, `AXIS_PORTAL_LISTEN_PORT`), with a router that holds the operations only, under the connection limits. The server, its gate, its router and its limits are tested in `tests/test-portal-api.c`; the daemon's own start of it from the configuration in `tests/test-daemon.c` (2.20).
+- [x] 2.5 The portal gate and the token store, beside the worker's; the page "Request portal" (`/admin/portal`, a page of the Requests module, under System).
+- [x] 2.6 Portal sessions: the kind, the proof, its expiry and revocation, the Users page's list (a count for each account and "End N portal sessions"; not a row for each session).
+- [x] 2.7 The eleven operations in `src/api/`, with one bounded reader for their bodies and one writer for their answers (`axis-portal-proto.c`).
+- [x] 2.8 The daemon's limits: the hourly login ceiling, the search budget and cache, the portal's daily ceiling, the reserved hashing place, the device value in `login`.
+- [x] 2.9 A fuzz target for the reader of operation bodies, `tests/fuzz/fuzz-portal-body.c` (also the writer of answers). Compiled; `make fuzz` was not run by the author.
+- [x] 2.10 The known limits of this slice in `openspec/project.md` ("The portal API").
+
+The test paths below are the plan's. `tests/test-portal-api.c` has 17 cases, and one case covers several scenarios; where a scenario's test has another path, the task names it.
 
 Tests, `portal` specification:
 
-- [ ] 2.20 `/portal/api/listener/off-by-default`: Off by default.
-- [ ] 2.21 `/portal/api/listener/only-the-api`: Only the API on the portal listener.
-- [ ] 2.22 `/portal/api/listener/not-on-main`: Not on the main listener.
-- [ ] 2.23 `/portal/api/token/valid`: A valid token.
-- [ ] 2.24 `/portal/api/token/revoked`: A revoked token.
-- [ ] 2.25 `/web/portal/token-shown-once`: Shown once, stored as a hash.
-- [ ] 2.26 `/portal/api/token/replacing`: Replacing a token.
-- [ ] 2.27 `/portal/api/token/workers-token`: A worker's token.
-- [ ] 2.28 `/portal/api/token/elsewhere`: A portal token elsewhere.
-- [ ] 2.29 `/portal/api/token/session-refused`: A session on the portal API.
-- [ ] 2.30 `/portal/api/token/in-the-address`: A token in the address.
-- [ ] 2.31 `/portal/api/token/wrong-throttled`: Wrong tokens are throttled.
-- [ ] 2.32 `/portal/api/scope/not-an-operation`: Not an operation.
-- [ ] 2.33 `/portal/api/scope/every-other-route`: Every other route of the daemon (walks the route table on both listeners; fails when a route is added that opens to the token).
-- [ ] 2.34 `/portal/api/scope/a-browser`: A browser.
-- [ ] 2.35 `/portal/api/scope/methods-and-bodies`: Methods and bodies.
-- [ ] 2.36 `/portal/api/scope/member-not-defined`: A member that is not defined (every operation, every member name the engine's forms use).
-- [ ] 2.37 `/portal/api/login/requester`: A requester logs in.
-- [ ] 2.38 `/portal/api/login/uniform-failures`: Uniform failures (status, body, and one hash each, counted).
-- [ ] 2.39 `/portal/api/login/administrator-opens-nothing`: An administrator's password opens nothing here.
-- [ ] 2.40 `/web/auth/requester-password-rules`: Password rules for a requester.
-- [ ] 2.41 `/portal/api/proof/token-without-proof`: The token without a proof.
-- [ ] 2.42 `/portal/api/proof/naming-a-person`: Naming a person does nothing.
-- [ ] 2.43 `/portal/api/proof/anothers-request`: Another person's request.
-- [ ] 2.44 `/portal/api/proof/made-up`: A made-up proof.
-- [ ] 2.45 `/portal/api/proof/disabled-at-once`: Disabled at once.
-- [ ] 2.46 `/portal/api/proof/password-or-role-change`: A password or role change ends proofs.
-- [ ] 2.47 `/portal/api/proof/logout`: Logout.
-- [ ] 2.48 `/portal/api/proof/not-an-engine-session`: Not a session of the engine.
-- [ ] 2.49 `/portal/api/proof/stored-as-hash`: Stored as a hash.
-- [ ] 2.50 `/portal/api/fields/search-result`: A search result's members (the member names of every operation's answer are compared with a list in the test).
-- [ ] 2.51 `/portal/api/fields/nothing-of-inner-workings`: Nothing of the library's inner workings (a library with marked file, release, indexer, client, profile and folder names; no answer holds a mark).
-- [ ] 2.52 `/portal/api/fields/who-asked-setting`: Who asked follows the setting.
-- [ ] 2.53 `/portal/api/fields/only-the-callers`: Only the caller's requests.
-- [ ] 2.54 `/portal/api/art/by-title`: A poster by title.
-- [ ] 2.55 `/portal/api/art/no-address`: No address is taken.
-- [ ] 2.56 `/portal/api/art/not-held`: Not held.
-- [ ] 2.57 `/portal/api/search/a-search`: A search.
-- [ ] 2.58 `/portal/api/search/asked-once`: Asked once.
-- [ ] 2.59 `/portal/api/search/provider-unreachable`: The provider is unreachable.
-- [ ] 2.60 `/portal/api/search/too-long`: Too long.
-- [ ] 2.61 `/portal/api/search/browse-asks-nobody`: Browse asks nobody.
-- [ ] 2.62 `/portal/api/limits/one-password`: Guessing one password.
-- [ ] 2.63 `/portal/api/limits/across-names`: Guessing across names.
-- [ ] 2.64 `/portal/api/limits/reported-addresses`: Reported addresses clear nothing.
-- [ ] 2.65 `/portal/api/limits/search-budget`: The search budget.
-- [ ] 2.66 `/portal/api/limits/daily-ceiling`: The portal's daily ceiling.
-- [ ] 2.67 `/portal/api/limits/quota-not-the-clients`: Quota does not depend on the client.
-- [ ] 2.68 `/portal/api/device/owner-gets-in` and `/portal/api/device/altered`: the daemon's half of "A remembered browser is not locked out by a stranger".
+- [x] 2.20 `/portal/api/listener/off-by-default`: Off by default. In `tests/test-daemon.c`, with the real daemon: without the port it listens on its main port only (nothing listens on the other), and the main port answers the portal API's paths 404; with `AXIS_PORTAL_LISTEN_PORT` the second port answers the portal API (401 without a token) and 404 for `/`, `/login`, `/setup`, `/healthz`, a static file and the worker API. That daemon has no portal token, so "with a valid portal token" on the main listener is `/portal/api/listener/only-the-api`'s.
+- [x] 2.21 `/portal/api/listener/only-the-api`: Only the API on the portal listener (thirteen paths, GET, POST and HEAD, with the token and with an administrator's session).
+- [x] 2.22 `/portal/api/listener/not-on-main`: Not on the main listener (in `/portal/api/listener/only-the-api`: every operation, with the token, with an administrator's session, with both; a login there makes no session).
+- [x] 2.23 `/portal/api/token/valid`: A valid token (in `/portal/api/token/gate`).
+- [x] 2.24 `/portal/api/token/revoked`: A revoked token (in `/portal/api/token/gate` and `/web/portal/token-shown-once`).
+- [x] 2.25 `/web/portal/token-shown-once`: Shown once, stored as a hash (also: administrators only, four at most, revoked on the page, not in the log).
+- [x] 2.26 `/portal/api/token/replacing`: Replacing a token (in `/portal/api/token/gate`).
+- [x] 2.27 `/portal/api/token/workers-token`: A worker's token (in `/portal/api/token/gate`).
+- [x] 2.28 `/portal/api/token/elsewhere`: A portal token elsewhere (in `/portal/api/token/gate` and `/portal/api/scope/every-other-route`).
+- [x] 2.29 `/portal/api/token/session-refused`: A session on the portal API (in `/portal/api/token/gate`).
+- [x] 2.30 `/portal/api/token/in-the-address`: A token in the address (in `/portal/api/token/gate`).
+- [x] 2.31 `/portal/api/token/wrong-throttled`: Wrong tokens are throttled.
+- [x] 2.32 `/portal/api/scope/not-an-operation`: Not an operation (in `/portal/api/token/gate`).
+- [x] 2.33 `/portal/api/scope/every-other-route`: Every other route of the daemon (walks the route table on both listeners; fails when a route is added that opens to the token). The routes are those the test's daemon registers: the shell's, the accounts', and the modules of the requests' fixture; not every module of `axisd`.
+- [x] 2.34 `/portal/api/scope/a-browser`: A browser (in `/portal/api/token/gate`).
+- [x] 2.35 `/portal/api/scope/methods-and-bodies`: Methods and bodies (in `/portal/api/token/gate`).
+- [x] 2.36 `/portal/api/scope/member-not-defined`: A member that is not defined (every operation, 31 member names, each as a text and as a number; also wrong types, ranges and places).
+- [x] 2.37 `/portal/api/login/requester`: A requester logs in (in `/portal/api/login/uniform-failures`).
+- [x] 2.38 `/portal/api/login/uniform-failures`: Uniform failures (status, body, and one hash each, counted; also a name that cannot be one).
+- [x] 2.39 `/portal/api/login/administrator-opens-nothing`: An administrator's password opens nothing here (in `/portal/api/login/uniform-failures`).
+- [x] 2.40 `/web/auth/requester-password-rules`: Password rules for a requester (in `/portal/api/proof/account-changes`: on creating the account and on setting its password).
+- [x] 2.41 `/portal/api/proof/token-without-proof`: The token without a proof (in `/portal/api/proof/anothers-request`: nine operations, one body).
+- [x] 2.42 `/portal/api/proof/naming-a-person`: Naming a person does nothing (in `/portal/api/proof/anothers-request`).
+- [x] 2.43 `/portal/api/proof/anothers-request`: Another person's request (also as its follower).
+- [x] 2.44 `/portal/api/proof/made-up`: A made-up proof (in `/portal/api/proof/anothers-request`).
+- [x] 2.45 `/portal/api/proof/disabled-at-once`: Disabled at once (in `/portal/api/proof/account-changes`).
+- [x] 2.46 `/portal/api/proof/password-or-role-change`: A password or role change ends proofs (in `/portal/api/proof/account-changes`).
+- [x] 2.47 `/portal/api/proof/logout`: Logout (in `/portal/api/proof/anothers-request`).
+- [x] 2.48 `/portal/api/proof/not-an-engine-session`: Not a session of the engine (in `/portal/api/login/uniform-failures`).
+- [x] 2.49 `/portal/api/proof/stored-as-hash`: Stored as a hash (in `/portal/api/login/uniform-failures`).
+- [x] 2.50 `/portal/api/fields/search-result`: A search result's members (in `/portal/api/fields/answers`; the member names of the answers of `hello`, `login`, `whoami`, `search`, `browse`, `title`, `request` and of a title, a season, a request and a quota are compared with lists in the tests).
+- [x] 2.51 `/portal/api/fields/nothing-of-inner-workings`: Nothing of the library's inner workings (in `/portal/api/fields/answers`: a marked folder name, a marked profile name, a file's name and path, the provider's name; no indexer or download client is set up in the fixture, and the grab's release name is not searched for by name).
+- [x] 2.52 `/portal/api/fields/who-asked-setting`: Who asked follows the setting (in `/portal/api/fields/answers`).
+- [x] 2.53 `/portal/api/fields/only-the-callers`: Only the caller's requests (in `/portal/api/proof/anothers-request`).
+- [x] 2.54 `/portal/api/art/by-title`: A poster by title (in `/portal/api/fields/answers`).
+- [x] 2.55 `/portal/api/art/no-address`: No address is taken (in `/portal/api/scope/member-not-defined`).
+- [x] 2.56 `/portal/api/art/not-held`: Not held (in `/portal/api/fields/answers`).
+- [x] 2.57 `/portal/api/search/a-search`: A search (in `/portal/api/fields/answers`).
+- [x] 2.58 `/portal/api/search/asked-once`: Asked once (in `/portal/api/fields/answers`).
+- [x] 2.59 `/portal/api/search/provider-unreachable`: The provider is unreachable.
+- [x] 2.60 `/portal/api/search/too-long`: Too long (in `/portal/api/fields/answers`).
+- [x] 2.61 `/portal/api/search/browse-asks-nobody`: Browse asks nobody (in `/portal/api/fields/answers`; the fixture's provider offers no lists, so the answer holds no title).
+- [x] 2.62 `/portal/api/limits/one-password`: Guessing one password.
+- [x] 2.63 `/portal/api/limits/across-names`: Guessing across names.
+- [x] 2.64 `/portal/api/limits/reported-addresses`: Reported addresses clear nothing (in `/portal/api/limits/one-password`).
+- [x] 2.65 `/portal/api/limits/search-budget`: The search budget.
+- [x] 2.66 `/portal/api/limits/daily-ceiling`: The portal's daily ceiling (and `/requests/quota/portal-ceiling` in `tests/test-requests.c`).
+- [x] 2.67 `/portal/api/limits/quota-not-the-clients`: Quota does not depend on the client (in `/portal/api/limits/daily-ceiling`).
+- [x] 2.68 `/portal/api/device/owner-gets-in` and `/portal/api/device/altered`: the daemon's half of "A remembered browser is not locked out by a stranger" (in `/portal/api/limits/one-password`).
 
 Tests, `web-auth` specification:
 
-- [ ] 2.70 `/web/auth/requester-at-engine-login`: A requester at the engine's login.
-- [ ] 2.71 `/web/auth/requester-created`: Created by an administrator.
-- [ ] 2.72 `/web/auth/no-session-for-requester`: No session for a requester (every route of the main listener).
-- [ ] 2.73 `/web/auth/role-change-ends-sessions`: A role change ends sessions.
-- [ ] 2.74 `/web/auth/last-admin-not-requester`: The last administrator.
-- [ ] 2.75 `/portal/api/class/default-deny`: Default deny holds.
-- [ ] 2.76 `/portal/api/class/throttled`: Throttled.
-- [ ] 2.77 `/portal/api/class/new-route-closed`: A new route is closed to the token.
-- [ ] 2.78 `/portal/api/sessions/kinds-do-not-cross`: Kinds do not cross.
-- [ ] 2.79 `/web/auth/portal-sessions-ended`: Ended by an administrator.
-- [ ] 2.80 `/portal/api/hashing/admin-during-flood`: An administrator logs in during a flood.
-- [ ] 2.81 `/portal/api/hashing/queue-bounded`: The portal's queue is bounded.
+- [x] 2.70 `/web/auth/requester-at-engine-login`: A requester at the engine's login (in `/portal/api/proof/account-changes`).
+- [x] 2.71 `/web/auth/requester-created`: Created by an administrator (in `/portal/api/proof/account-changes`).
+- [x] 2.72 `/web/auth/no-session-for-requester`: No session for a requester (every route of the test's main listener). The session lookup refuses it and ends it, so in the suite the other two barriers are not reached; by hand, with the lookup's rule switched off the case's walk still passed, with the identity check off too it still passed, and with the middleware's and the route check's off as well it failed. Doing so found that the third barrier let a requester's name onto a public page, which is fixed: the middleware now forgets a requester's session on every path.
+- [x] 2.73 `/web/auth/role-change-ends-sessions`: A role change ends sessions (in `/portal/api/proof/account-changes`).
+- [x] 2.74 `/web/auth/last-admin-not-requester`: The last administrator (in `/portal/api/proof/account-changes`).
+- [x] 2.75 `/portal/api/class/default-deny`: Default deny holds (in `/portal/api/token/gate`).
+- [x] 2.76 `/portal/api/class/throttled`: Throttled (`/portal/api/token/wrong-throttled`).
+- [x] 2.77 `/portal/api/class/new-route-closed`: A new route is closed to the token (in `/portal/api/scope/every-other-route`).
+- [x] 2.78 `/portal/api/sessions/kinds-do-not-cross`: Kinds do not cross (in `/portal/api/login/uniform-failures`).
+- [x] 2.79 `/web/auth/portal-sessions-ended`: Ended by an administrator (in `/portal/api/proof/account-changes`).
+- [ ] 2.80 `/portal/api/hashing/admin-during-flood`: An administrator logs in during a flood. In part, in `/portal/api/hashing/queue-bounded`: the login succeeds while portal logins are queued; that it did not wait behind them follows from the one hashing place the portal has, and is not measured.
+- [x] 2.81 `/portal/api/hashing/queue-bounded`: The portal's queue is bounded.
 
 Gate:
 
-- [ ] 2.90 Independent review of P2: the gate's order, the role's three barriers, the proof, the object-level checks, the answers' members. Record it in `design.md`; fix each finding with a test.
+- [ ] 2.90 Independent review of P2: the gate's order, the role's three barriers, the proof, the object-level checks, the answers' members. Record it in `design.md`; fix each finding with a test. Not arranged by the author. The four gates (`make check`, `make fuzz`, `make check-container`, `make check-examples`) were not run by the author either; only the test programs the slice touches were, under both sanitizers.
 
 ## 3. P3: the axis-portal program
 

@@ -448,7 +448,10 @@ axis_web_auth_portal_logout(
 		return FALSE;
 	session = axis_session_store_lookup_kind(self->sessions, AXIS_SESSION_PORTAL, proof, axis_web_auth_now(self),
 		&user);
-	if (session == NULL || user == NULL)
+	/* Only a portal session of a requester is ended here, whatever the store
+	 * is given: never a session of the engine's interface. */
+	if (session == NULL || user == NULL || session->kind != AXIS_SESSION_PORTAL ||
+	    user->role != AXIS_USER_ROLE_REQUESTER)
 		return FALSE;
 	hash = g_strdup(session->token_hash);
 	axis_web_auth_audit("portal logout: user=%s", user->username);
