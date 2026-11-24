@@ -1435,11 +1435,40 @@ test_nothing_typed_is_logged(Fixture *fx, gconstpointer data)
 	g_assert_cmpuint(axis_test_log_count(G_LOG_LEVEL_MESSAGE, "*audit: request * declined by=root*"), ==, 1);
 }
 
+/*
+ * A title its provider marks as adult, stored by a lookup that no search's
+ * filter saw: an ordinary user's Request post for it by its number is answered
+ * as one for a title that does not exist, and makes nothing.
+ */
+static void
+test_adult_title(Fixture *fx, gconstpointer data)
+{
+	gint64 annex = film(fx, AXIS_TEST_REQUESTS_ANNEX);
+	gint64 orchard = film(fx, AXIS_TEST_REQUESTS_ORCHARD);
+	g_autofree gchar *page_path = title_path(orchard);
+	g_autofree gchar *marked = g_strdup_printf("title=%" G_GINT64_FORMAT "&kind=movie", annex);
+	AxisTestReply reply;
+	AxisTestReply unknown;
+
+	g_assert_cmpint(N("SELECT adult::integer FROM meta_title WHERE id = %" G_GINT64_FORMAT, annex), ==, 1);
+	reply = post_as(fx, fx->robin, page_path, "/requests", marked);
+	unknown = post_as(fx, fx->robin, page_path, "/requests", "title=987654&kind=movie");
+	g_assert_cmpuint(reply.status, ==, 404);
+	g_assert_cmpuint(unknown.status, ==, 404);
+	g_assert_cmpuint(reply.length, ==, unknown.length);
+	assert_lacks(reply.body, "Velvet Annex");
+	axis_test_reply_clear(&reply);
+	axis_test_reply_clear(&unknown);
+	g_assert_cmpint(N("SELECT count(*) FROM request"), ==, 0);
+	g_assert_cmpint(N("SELECT count(*) FROM request_follower"), ==, 0);
+}
+
 int
 main(int argc, char **argv)
 {
 	g_test_init(&argc, &argv, NULL);
 
+	AXIS_TEST_ADD_DB_CASE("/web/requests/adult-title", Fixture, NULL, test_adult_title);
 	AXIS_TEST_ADD_DB_CASE("/web/requests/user-asks", Fixture, NULL, test_user_asks);
 	AXIS_TEST_ADD_DB_CASE("/web/requests/mine", Fixture, NULL, test_mine);
 	AXIS_TEST_ADD_DB_CASE("/web/requests/decide", Fixture, NULL, test_decide);

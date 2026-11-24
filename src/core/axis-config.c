@@ -15,6 +15,8 @@ struct _AxisConfig
 {
 	gchar        *host;
 	guint16       port;
+	gchar        *portal_host;	/* NULL: the main listener's host */
+	guint16       portal_port;	/* 0: no portal listener */
 	gchar        *trusted_proxies;	/* canonical list, "" for none */
 	AxisSecureCookies secure_cookies;
 	gchar        *database_url;	/* secret */
@@ -63,6 +65,8 @@ typedef struct
 
 static gboolean set_host(AxisConfig *cfg, const gchar *value, const gchar *label, GError **error);
 static gboolean set_port(AxisConfig *cfg, const gchar *value, const gchar *label, GError **error);
+static gboolean set_portal_host(AxisConfig *cfg, const gchar *value, const gchar *label, GError **error);
+static gboolean set_portal_port(AxisConfig *cfg, const gchar *value, const gchar *label, GError **error);
 static gboolean set_trusted_proxies(AxisConfig *cfg, const gchar *value, const gchar *label, GError **error);
 static gboolean set_secure_cookies(AxisConfig *cfg, const gchar *value, const gchar *label, GError **error);
 static gboolean set_url(AxisConfig *cfg, const gchar *value, const gchar *label, GError **error);
@@ -91,6 +95,8 @@ static gboolean set_max_per_address(AxisConfig *cfg, const gchar *value, const g
 static const Setting settings[] = {
 	{ "server",   "host",         "AXIS_LISTEN_HOST",        set_host,         FALSE },
 	{ "server",   "port",         "AXIS_LISTEN_PORT",        set_port,         FALSE },
+	{ "server",   "portal_listen_host", "AXIS_PORTAL_LISTEN_HOST", set_portal_host, FALSE },
+	{ "server",   "portal_listen_port", "AXIS_PORTAL_LISTEN_PORT", set_portal_port, FALSE },
 	{ "server",   "trusted_proxies", "AXIS_TRUSTED_PROXIES", set_trusted_proxies, FALSE },
 	{ "server",   "secure_cookies", "AXIS_SECURE_COOKIES",   set_secure_cookies, FALSE },
 	{ "server",   "head_timeout", "AXIS_HEAD_TIMEOUT",       set_head_timeout, FALSE },
@@ -158,6 +164,7 @@ static void
 config_clear(AxisConfig *self)
 {
 	g_free(self->host);
+	g_free(self->portal_host);
 	g_free(self->trusted_proxies);
 	secret_free(self->database_url);
 	g_free(self->jobs_concurrency);
@@ -185,6 +192,7 @@ config_copy(const AxisConfig *self)
 
 	*copy = *self;
 	copy->host = g_strdup(self->host);
+	copy->portal_host = g_strdup(self->portal_host);
 	copy->trusted_proxies = g_strdup(self->trusted_proxies);
 	copy->database_url = g_strdup(self->database_url);
 	copy->jobs_concurrency = g_strdup(self->jobs_concurrency);
@@ -274,6 +282,46 @@ set_port(
 	}
 
 	cfg->port = (guint16)port;
+	return TRUE;
+}
+
+/* The portal listener's own address; without it, the main listener's. */
+static gboolean
+set_portal_host(
+	AxisConfig  *cfg,
+	const gchar *value,
+	const gchar *label,
+	GError     **error
+){
+	if (value == NULL || *value == '\0') {
+		g_set_error(error, AXIS_ERROR, AXIS_ERROR_CONFIG,
+			"%s: host must not be empty", label);
+		return FALSE;
+	}
+
+	g_free(cfg->portal_host);
+	cfg->portal_host = g_strdup(value);
+	return TRUE;
+}
+
+/* 0: no portal listener (the default). */
+static gboolean
+set_portal_port(
+	AxisConfig  *cfg,
+	const gchar *value,
+	const gchar *label,
+	GError     **error
+){
+	guint port;
+
+	if (!parse_uint(value, 0, 65535, &port)) {
+		g_set_error(error, AXIS_ERROR, AXIS_ERROR_CONFIG,
+			"%s: invalid port '%s' (expected 0 for no portal listener, or a number from 1 to 65535)",
+			label, value != NULL ? value : "");
+		return FALSE;
+	}
+
+	cfg->portal_port = (guint16)port;
 	return TRUE;
 }
 
@@ -1008,6 +1056,20 @@ axis_config_get_port(AxisConfig *self)
 	return self->port;
 }
 
+guint16
+axis_config_get_portal_port(AxisConfig *self)
+{
+	g_return_val_if_fail(self != NULL, 0);
+	return self->portal_port;
+}
+
+const gchar *
+axis_config_get_portal_host(AxisConfig *self)
+{
+	g_return_val_if_fail(self != NULL, NULL);
+	return self->portal_host != NULL ? self->portal_host : self->host;
+}
+
 const gchar *
 axis_config_get_trusted_proxies(AxisConfig *self)
 {
@@ -1490,7 +1552,8 @@ axis_config_describe(AxisConfig *self)
 		"host=%s port=%u trusted_proxies=%s secure_cookies=%s log_level=%s log_format=%s database_url=%s "
 		"database_pool_size=%u database_wait=%s jobs_concurrency=%s jobs_grace_period=%u worker_lease=%u "
 		"data_dir=%s first_admin=%s metrics=%s outbound_bind=%s outbound_bind_scope=%s head_timeout=%u "
-		"body_timeout=%u idle_timeout=%u max_connections=%u max_connections_per_address=%u",
+		"body_timeout=%u idle_timeout=%u max_connections=%u max_connections_per_address=%u portal_listen_host=%s "
+		"portal_listen_port=%u",
 		self->host, (guint)self->port,
 		self->trusted_proxies[0] != '\0' ? self->trusted_proxies : "(none)",
 		self->secure_cookies == AXIS_SECURE_COOKIES_ALWAYS ? "always" : "auto",
@@ -1505,5 +1568,6 @@ axis_config_describe(AxisConfig *self)
 		self->metrics_token != NULL ? "on" : "off",
 		self->outbound_bind[0] != '\0' ? self->outbound_bind : "(none)",
 		axis_outbound_scope_to_string(self->outbound_scope), self->head_timeout, self->body_timeout,
-		self->idle_timeout, self->max_connections, self->max_per_address);
+		self->idle_timeout, self->max_connections, self->max_per_address,
+		self->portal_host != NULL ? self->portal_host : self->host, (guint)self->portal_port);
 }

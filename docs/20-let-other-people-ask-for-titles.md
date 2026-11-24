@@ -11,8 +11,10 @@ Axis adds nothing and searches for nothing.
 
 Requests work inside Axis's own pages, for the accounts that you create. A
 person with a **User** account still sees the other pages of Axis. A separate
-request portal for people outside your network is planned and is not part of
-Axis yet.
+request portal for people outside your network is planned. Axis already has
+the part of it that runs inside Axis: the **Requester** role and the page
+**Request portal**. The portal program itself is not part of Axis yet. See
+[Prepare for the request portal](#prepare-for-the-request-portal-administrators).
 
 ## Before you begin
 
@@ -202,6 +204,97 @@ the requests of that account that still wait. If another person follows one
 of them, that person takes it over as for a withdrawal. Approved requests
 and the titles that they added stay as they are.
 
+## Prepare for the request portal (administrators)
+
+The request portal is a separate program for people outside your network. It
+is not part of Axis yet. What follows is the part that Axis has today. You do
+not need any of it to use requests inside Axis's own pages.
+
+**Do not make any of this reachable from the internet.** The portal's
+interface to Axis has not been reviewed for that, and no program uses it yet.
+
+### The Requester role
+
+A **Requester** is an account for the request portal only. A requester cannot
+log in to Axis's own pages at all, so a requester sees no file names, no
+release names and no downloads.
+
+1. Open **System**, then **Users**.
+2. In the **New account** card, enter a **Username** and a **Password**, and
+   set **Role** to **Requester (the request portal only)**.
+3. Select **Create account**.
+
+A requester's password needs at least 12 characters and must not contain the
+username. Axis refuses a password that breaks the rule and states the rule.
+
+To change an account's role, use **Change role to user**, **Change role to
+administrator** or **Change role to requester** in the account's row. A
+change of role ends every session of that account at once, in Axis and in
+the portal. If you change your own role, you are logged out. Axis refuses to
+make the only enabled administrator a requester.
+
+To give a requester another role, type a new password in the field beside
+**Change role to user** or **Change role to administrator**. The person typed
+the old password into the portal, so it must not open Axis's own pages: Axis
+refuses the change without a new password, or with the one the account has
+now. The new password follows the rule of the new role (at least 10
+characters). An account that you make a requester keeps its password.
+
+When a requester is logged in through a portal, the account's row shows
+**End 1 portal session** (or the number of sessions). Select it to log that
+person out of the portal at once. Disabling the account or setting a new
+password does the same.
+
+A requester's limits and automatic approval are set like any other person's.
+See [Set limits and automatic approval for a
+person](#set-limits-and-automatic-approval-for-a-person-administrators).
+
+### The Request portal page
+
+Open **System**, then **Request portal**. The page shows two things.
+
+- **The portal's listener** says whether Axis answers the portal's interface.
+  It is off by default. To switch it on, set `portal_listen_port` in the
+  `[server]` section of the configuration file, or `AXIS_PORTAL_LISTEN_PORT`
+  in the environment, to a port that Axis does not use, and restart Axis.
+  That port answers the portal's interface and nothing else: no page, no
+  login form and no other part of Axis. Axis's main port never answers the
+  portal's interface. The port listens on the same address as the main port
+  unless you set `portal_listen_host` (or `AXIS_PORTAL_LISTEN_HOST`) to an
+  address of its own. Use the address that Axis has on the network it shares
+  with the portal alone, so that nothing else on your network reaches it.
+- **Tokens** lists the tokens that a portal identifies itself with. A token
+  opens the portal's interface and nothing else, and by itself it acts as no
+  one: every action also needs the session of a requester who logged in.
+
+To make a token, select **Make a token**. Axis shows the token once. Copy it
+then: Axis keeps only a hash of it and cannot show it again. At most four
+tokens can be active.
+
+To replace a token without an interruption, make a second token, give it to
+the portal, then select **Revoke this token** on the first. A revoked token
+is refused from the portal's next request.
+
+The setting **Requests through the request portal in one day** (30 by
+default, under **System**, then **Settings**, in the **Requests** card)
+limits what all requests made through a portal count in one calendar day: a
+movie counts one and each season counts one. It bounds what a portal in the
+wrong hands can ask for. One person's requests can count at most a third of
+it, withdrawn ones included, so that one person cannot use up the day for
+everyone.
+
+Axis also limits how often a portal can call it: 600 calls a minute for a
+token and 120 for each person. Axis tells a portal that calls more often to
+wait.
+
+Axis hides some titles from requesters: a title that Axis stored before this
+version, and a title that came from an import or from a list that you
+brought over. Axis cannot tell whether the provider marks such a title as
+adult. The title stays hidden until Axis gets the title's record from its
+provider again, from a search that finds the title or from the refresh of
+the titles that Axis keeps up to date. Until then, an ordinary user cannot
+ask for the title either.
+
 ## What can go wrong
 
 | What you see | What to do |
@@ -229,5 +322,11 @@ and the titles that they added stay as they are.
 - No request has been made in a real browser, and none has run against a
   real library, a real indexer, or a real download client. The pages have
   not been tried on a phone.
+- The **Requester** role, the tokens and the portal's interface are covered
+  by the test suite, under the sanitizers: what a token opens, what a
+  requester's session opens, and what each answer holds. They have not been
+  reviewed by someone who did not write them, and no portal program has used
+  them.
 - The request portal for people outside your network is not built. Do not
-  expose Axis itself to the internet to let people ask for titles.
+  expose Axis itself, or the portal's port, to the internet to let people ask
+  for titles.

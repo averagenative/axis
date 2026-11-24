@@ -73,6 +73,11 @@ G_BEGIN_DECLS
 #define AXIS_REQUESTS_SETTING_MOVIES_PROFILE "requests.movies_profile"
 #define AXIS_REQUESTS_SETTING_SERIES_ROOT    "requests.series_root"
 #define AXIS_REQUESTS_SETTING_SERIES_PROFILE "requests.series_profile"
+#define AXIS_REQUESTS_SETTING_PORTAL_DAY     "requests.portal_per_day"
+
+/* The default of requests.portal_per_day: what all requests made through the
+ * portal API may count in one calendar day. */
+#define AXIS_REQUESTS_PORTAL_A_DAY 30
 
 /* The most seasons one request may list, and the longest decline reason (in
  * characters). */
@@ -107,6 +112,13 @@ G_BEGIN_DECLS
  *   quality profile, and neither the form nor the defaults gave both
  * @AXIS_REQUESTS_ERROR_TOO_MANY: the person made %AXIS_REQUESTS_MAX_A_DAY
  *   requests in the last 24 hours, whatever became of them
+ * @AXIS_REQUESTS_ERROR_PORTAL_FULL: the request came through the portal API,
+ *   and what all such requests count today (a movie one, a season one each,
+ *   whatever became of them) has reached requests.portal_per_day
+ * @AXIS_REQUESTS_ERROR_PORTAL_SHARE: the request came through the portal API,
+ *   and what the person's own such requests count today (withdrawn ones
+ *   included) has reached AXIS_REQUESTS_PORTAL_SHARE_OF() of
+ *   requests.portal_per_day: one person cannot use up the portal's day
  */
 typedef enum
 {
@@ -117,8 +129,14 @@ typedef enum
 	AXIS_REQUESTS_ERROR_QUOTA,
 	AXIS_REQUESTS_ERROR_DECIDED,
 	AXIS_REQUESTS_ERROR_PLACEMENT,
-	AXIS_REQUESTS_ERROR_TOO_MANY
+	AXIS_REQUESTS_ERROR_TOO_MANY,
+	AXIS_REQUESTS_ERROR_PORTAL_FULL,
+	AXIS_REQUESTS_ERROR_PORTAL_SHARE
 } AxisRequestsError;
+
+/* One person's share of requests.portal_per_day (@ceiling): a third of it, at
+ * least one. */
+#define AXIS_REQUESTS_PORTAL_SHARE_OF(ceiling) MAX((ceiling) / 3, 1)
 
 GQuark
 axis_requests_error_quark(void);
@@ -365,6 +383,30 @@ axis_requests_set_registry(
 	AxisModuleRegistry *registry
 );
 
+/* Whether the Requests module itself is on (always, without a registry):
+ * while it is off, nothing can be asked for through the portal API either. */
+gboolean
+axis_requests_is_on(AxisRequests *self);
+
+/* Defined in api/axis-portal-tokens.h. */
+typedef struct _AxisPortalTokens AxisPortalTokens;
+
+/**
+ * axis_requests_set_portal:
+ * @tokens: (nullable): the request portal's tokens (borrowed: they outlive
+ *   the layer's pages); %NULL: this daemon has no portal API
+ * @port: the port of the portal listener, 0 while it is off
+ *
+ * What the page "Request portal" (System) shows and changes.  Main thread,
+ * before the pages are registered.
+ */
+void
+axis_requests_set_portal(
+	AxisRequests     *self,
+	AxisPortalTokens *tokens,
+	guint             port
+);
+
 /* Whether @kind can be asked for now (its module given and switched on). */
 gboolean
 axis_requests_kind_on(
@@ -479,8 +521,12 @@ axis_request_made_clear(AxisRequestMade *made);
  * @made: (out caller-allocates): what came of it; clear it
  *
  * A person asks for a title.  Refused whole, changing nothing, with
- * KIND_OFF, CLOSED, QUOTA, TOO_MANY, INVALID or NOT_FOUND (no such title, or
- * no such enabled account).  A second person is never refused for asking for
+ * KIND_OFF, CLOSED, QUOTA, TOO_MANY, PORTAL_FULL, PORTAL_SHARE, INVALID or
+ * NOT_FOUND (no such title, or no such enabled account; also a title its
+ * provider marks as adult, or whose mark is not known yet, for anyone but an
+ * administrator: the same answer, given before the title's kind or closed
+ * state is looked at, so that the title's number says nothing).  A second
+ * person is never refused for asking for
  * what is requested already: they follow it, unless their limit for the kind
  * is 0 (QUOTA: they follow nothing either).
  */

@@ -7,12 +7,14 @@
 #include "web/axis-web-auth-private.h"
 #include "web/axis-password.h"
 #include "web/axis-web-auth-input.h"
+#include "web/axis-web-auth-portal.h"
 #include "web/axis-web-path.h"
 
 #include <sodium.h>
 #include <stdarg.h>
 #include <string.h>
 
+#include "api/axis-portal-proto.h"
 #include "api/axis-worker-proto.h"
 
 #define STATE_KEY "axis-web-auth-state"
@@ -22,15 +24,14 @@
 #define FLUSH_INTERVAL_S (60)
 #define SWEEP_INTERVAL_S (15 * 60)
 
-/* Throttles: free failures, first delay, longest delay, forget after,
- * keys tracked.  A client address is allowed more failures than one
- * username, since several people may share one address. */
-#define USER_FREE_FAILURES     5
-#define ADDRESS_FREE_FAILURES  20
-#define THROTTLE_BASE_US       (G_GINT64_CONSTANT(2) * G_USEC_PER_SEC)
-#define THROTTLE_MAX_US        (G_GINT64_CONSTANT(15) * 60 * G_USEC_PER_SEC)
-#define THROTTLE_FORGET_US     (G_GINT64_CONSTANT(24) * 3600 * G_USEC_PER_SEC)
-#define THROTTLE_MAX_KEYS      10000
+/* The throttles' numbers are in axis-web-auth-private.h: the portal API's
+ * logins use the same. */
+#define USER_FREE_FAILURES     AXIS_AUTH_USER_FREE_FAILURES
+#define ADDRESS_FREE_FAILURES  AXIS_AUTH_ADDRESS_FREE_FAILURES
+#define THROTTLE_BASE_US       AXIS_AUTH_THROTTLE_BASE_US
+#define THROTTLE_MAX_US        AXIS_AUTH_THROTTLE_MAX_US
+#define THROTTLE_FORGET_US     AXIS_AUTH_THROTTLE_FORGET_US
+#define THROTTLE_MAX_KEYS      AXIS_AUTH_THROTTLE_MAX_KEYS
 
 /* Wrong worker tokens: an address gets this many before it waits.  A token
  * is 256 random bits, so the throttle is not what protects it; it keeps a
@@ -147,6 +148,33 @@ gboolean
 axis_web_auth_is_worker_pattern(const gchar *pattern)
 {
 	return under_worker_prefix(pattern);
+}
+
+/* "/api/v1/portal" itself, or anything below it. */
+gboolean
+axis_web_auth_is_portal_path(const gchar *path)
+{
+	static const gchar bare[] = "/api/v1/portal";
+
+	G_STATIC_ASSERT(sizeof(bare) == sizeof(AXIS_PORTAL_API_PREFIX) - 1);
+
+	return path != NULL && strncmp(path, bare, sizeof(bare) - 1) == 0 &&
+		(path[sizeof(bare) - 1] == '\0' || path[sizeof(bare) - 1] == '/');
+}
+
+HtmxResponse *
+axis_web_auth_portal_error(
+	guint        status,
+	const gchar *word,
+	const gchar *message
+){
+	HtmxResponse *response = htmx_response_new();
+	g_autofree gchar *body = axis_portal_error_to_json(word, message);
+
+	htmx_response_set_status(response, status);
+	htmx_response_set_content(response, body);
+	htmx_response_set_content_type(response, "application/json");
+	return response;
 }
 
 HtmxResponse *
@@ -599,8 +627,13 @@ axis_web_auth_authorize(
 	}
 	if (axis_web_auth_is_worker_path(htmx_request_get_path(request)))
 		return axis_web_auth_worker_error(401, "unauthorized", "a worker's token is required");
+	/* The portal API is answered on its own listener and nowhere else. */
+	if (axis_web_auth_is_portal_path(htmx_request_get_path(request)))
+		return axis_web_auth_portal_error(404, "not-found", "there is no such address");
 
-	if (!(flags & AXIS_WEB_ROUTE_PUBLIC) && state->user_id == 0)
+	/* Whatever the route's own class: a requester is no one here (the third
+	 * of the role's barriers, beside the login and the session lookup). */
+	if (!(flags & AXIS_WEB_ROUTE_PUBLIC) && (state->user_id == 0 || state->role == AXIS_USER_ROLE_REQUESTER))
 		return unauthenticated(self, request);
 
 	if ((flags & AXIS_WEB_ROUTE_ADMIN) &&
@@ -686,7 +719,12 @@ build_state(
 		return state;
 
 	session = axis_session_store_lookup(self->sessions, token, axis_web_auth_now(self), &user);
-	if (session == NULL || user == NULL) {
+	/* A requester has no part in the engine's interface.  The session store
+	 * finds no session of this kind for one; this is the same rule said
+	 * again where the request's identity is decided, so that it holds
+	 * whatever the store is given. */
+	if (session == NULL || user == NULL || session->kind != AXIS_SESSION_WEB ||
+	    user->role == AXIS_USER_ROLE_REQUESTER) {
 		axis_secret_free(token);
 		return state;
 	}
@@ -702,6 +740,22 @@ build_state(
 	state->csrf = axis_token_derive(token, AXIS_CSRF_PURPOSE);
 
 	return state;
+}
+
+/* Makes @state that of a request without a session: its address and scheme
+ * stay, everything of an account goes. */
+static void
+forget_session(AxisAuthState *state)
+{
+	state->user_id = 0;
+	state->role = AXIS_USER_ROLE_USER;
+	g_clear_pointer(&state->username, g_free);
+	g_clear_pointer(&state->theme, g_free);
+	g_clear_pointer(&state->add_defaults, g_free);
+	g_clear_pointer(&state->token, axis_secret_free);
+	g_clear_pointer(&state->token_hash, g_free);
+	g_clear_pointer(&state->public_id, g_free);
+	g_clear_pointer(&state->csrf, axis_secret_free);
 }
 
 /* The token of "Bearer <token>": the scheme in any case, one space, and the
@@ -845,6 +899,14 @@ auth_middleware(
 	const gchar *path = htmx_request_get_path(request);
 	AxisAuthState *state;
 
+	/* The portal API (add-request-portal) is not on this listener: every
+	 * path under it is one that does not exist, before any credential is
+	 * looked at (no cookie, no Authorization header is read). */
+	if (axis_web_auth_is_portal_path(path)) {
+		htmx_context_set_response(context, axis_web_auth_portal_error(404, "not-found", "there is no such address"));
+		return;
+	}
+
 	/* The third class of route: a worker's token, never a session. */
 	if (axis_web_auth_is_worker_path(path)) {
 		state = build_state(self, request, FALSE);
@@ -854,6 +916,12 @@ auth_middleware(
 	}
 
 	state = build_state(self, request, TRUE);
+	/* The third of the requester role's barriers (the login and the session
+	 * lookup are the others): whatever identified the request as a
+	 * requester's, it goes on as a request without a session, on every path,
+	 * public ones too, so that no page or handler ever sees one. */
+	if (state->user_id != 0 && state->role == AXIS_USER_ROLE_REQUESTER)
+		forget_session(state);
 	g_object_set_data_full(G_OBJECT(request), STATE_KEY, state, state_free);
 
 	/* Default deny: only the public paths go further without a session. */
@@ -887,6 +955,7 @@ typedef struct
 	HtmxResponse     *deferred;
 	AxisAuthWorkFunc  work;
 	AxisAuthDoneFunc  done;
+	AxisAuthAfterFunc after;	/* work without a request (axis_web_auth_run()) */
 	gpointer          data;
 	GDestroyNotify    free_data;
 	gboolean          skipped;
@@ -897,8 +966,8 @@ work_free(Work *work)
 {
 	if (work->free_data != NULL)
 		work->free_data(work->data);
-	g_object_unref(work->request);
-	g_object_unref(work->deferred);
+	g_clear_object(&work->request);
+	g_clear_object(&work->deferred);
 	g_free(work);
 }
 
@@ -908,6 +977,13 @@ work_complete(gpointer data)
 {
 	Work *work = data;
 	HtmxResponse *response = NULL;
+
+	if (work->after != NULL) {
+		work->auth->pending--;
+		work->after(work->auth, work->data, work->skipped);
+		work_free(work);
+		return G_SOURCE_REMOVE;
+	}
 
 	if (!work->skipped)
 		response = work->done(work->auth, work->request, work->data);
@@ -975,6 +1051,29 @@ axis_web_auth_dispatch(
 	g_thread_pool_push(self->workers, item, NULL);
 
 	return g_object_ref(item->deferred);
+}
+
+gboolean
+axis_web_auth_run(
+	AxisWebAuth       *self,
+	AxisAuthWorkFunc   work,
+	AxisAuthAfterFunc  after,
+	gpointer           data
+){
+	Work *item;
+
+	if (self->workers == NULL || self->pool == NULL || g_atomic_int_get(&self->stopping) ||
+	    self->pending >= AXIS_WEB_AUTH_MAX_PENDING)
+		return FALSE;
+
+	item = g_new0(Work, 1);
+	item->auth = self;
+	item->work = work;
+	item->after = after;
+	item->data = data;
+	self->pending++;
+	g_thread_pool_push(self->workers, item, NULL);
+	return TRUE;
 }
 
 /* ── Page parts ─────────────────────────────────────────────────── */
@@ -1200,6 +1299,7 @@ axis_web_auth_new_with_admin(
 	axis_web_auth_device_init(self);
 	self->by_worker_address = axis_login_throttle_new(WORKER_FREE_FAILURES, THROTTLE_BASE_US,
 		THROTTLE_MAX_US, THROTTLE_FORGET_US, THROTTLE_MAX_KEYS);
+	axis_web_auth_portal_init(self);
 
 	self->trusted = axis_proxy_list_parse(trusted_proxies != NULL ? trusted_proxies : "", &local);
 	if (self->trusted == NULL) {
@@ -1263,6 +1363,8 @@ axis_web_auth_stop(AxisWebAuth *self)
 		return;
 
 	g_atomic_int_set(&self->stopping, TRUE);
+	/* Portal logins that wait for the hashing place are answered now. */
+	axis_web_auth_portal_stop(self);
 	axis_proxy_resolver_stop(self->resolver);
 	if (self->workers != NULL) {
 		g_thread_pool_free(self->workers, FALSE, TRUE);
@@ -1304,6 +1406,7 @@ axis_web_auth_free(AxisWebAuth *self)
 	axis_login_throttle_free(self->by_owner);
 	axis_login_throttle_free(self->by_session);
 	axis_login_throttle_free(self->by_worker_address);
+	axis_web_auth_portal_clear(self);
 	axis_web_auth_device_clear(self);
 	sodium_memzero(self->device_key, sizeof(self->device_key));
 	g_free(self->forwarding_peer);
@@ -1416,6 +1519,16 @@ axis_web_auth_set_test_theme(
 	g_free(updated->theme);
 	updated->theme = g_strdup(theme);
 	axis_session_store_put_user(self->sessions, updated);
+}
+
+guint
+axis_web_auth_count_held_sessions(
+	AxisWebAuth *self,
+	gint64       user_id
+){
+	g_return_val_if_fail(self != NULL, 0);
+
+	return axis_session_store_count_held(self->sessions, user_id);
 }
 
 void

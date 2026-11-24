@@ -329,6 +329,19 @@ axis_web_auth_device_of(
 ){
 	const AxisAuthState *state = axis_web_auth_state(request);
 	g_autofree gchar *cookie = NULL;
+
+	g_return_val_if_fail(self != NULL, NULL);
+
+	cookie = axis_web_auth_get_cookie(request, device_cookie_name(state != NULL && state->secure));
+	return axis_web_auth_device_of_value(self, cookie, account);
+}
+
+gchar *
+axis_web_auth_device_of_value(
+	AxisWebAuth    *self,
+	const gchar    *cookie,
+	const AxisUser *account
+){
 	g_auto(GStrv) parts = NULL;
 	g_autofree gchar *signed_part = NULL;
 	g_autofree gchar *expected = NULL;
@@ -339,7 +352,6 @@ axis_web_auth_device_of(
 
 	if (account == NULL || account->id <= 0 || account->disabled)
 		return NULL;
-	cookie = axis_web_auth_get_cookie(request, device_cookie_name(state != NULL && state->secure));
 	if (cookie == NULL || strlen(cookie) > 160)
 		return NULL;
 
@@ -378,22 +390,34 @@ axis_web_auth_remember_device(
 ){
 	const AxisAuthState *state = axis_web_auth_state(request);
 	gboolean secure = state != NULL && state->secure;
-	g_autofree gchar *nonce = axis_random_public_id();
-	g_autofree gchar *signed_part = NULL;
-	g_autofree gchar *mac = NULL;
 	g_autofree gchar *value = NULL;
-	gint64 issued = axis_web_auth_now(self) / G_USEC_PER_SEC;
 
 	g_return_if_fail(self != NULL);
 	g_return_if_fail(account != NULL);
 
+	value = axis_web_auth_device_issue(self, account);
+	axis_web_auth_set_cookie(response, device_cookie_name(secure), value, AXIS_DEVICE_MAX_AGE, secure, "Strict");
+}
+
+gchar *
+axis_web_auth_device_issue(
+	AxisWebAuth    *self,
+	const AxisUser *account
+){
+	g_autofree gchar *nonce = axis_random_public_id();
+	g_autofree gchar *signed_part = NULL;
+	g_autofree gchar *mac = NULL;
+	gint64 issued = axis_web_auth_now(self) / G_USEC_PER_SEC;
+
+	g_return_val_if_fail(self != NULL, NULL);
+	g_return_val_if_fail(account != NULL, NULL);
+
 	signed_part = g_strdup_printf("%" G_GINT64_FORMAT ".%d.%" G_GINT64_FORMAT ".%s", account->id, account->epoch,
 		issued, nonce);
 	mac = device_mac(self, signed_part);
-	value = g_strdup_printf("%s.%s", signed_part, mac);
-	axis_web_auth_set_cookie(response, device_cookie_name(secure), value, AXIS_DEVICE_MAX_AGE, secure, "Strict");
 	devices_add(self, account->id, account->epoch, issued, nonce);
 	devices_save(self);
+	return g_strdup_printf("%s.%s", signed_part, mac);
 }
 
 /* ── The key ────────────────────────────────────────────────────── */

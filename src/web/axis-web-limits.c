@@ -81,6 +81,8 @@ struct _AxisWebLimits
 	guint          max_per_address;
 	guint          max_overflow;
 	gboolean       local_is_public;	/* tests: loopback held to the per-address cap */
+	goffset        max_body;	/* 0: the shell's limits */
+	gchar         *too_large_json;	/* the body of a 413, or NULL for none */
 	AxisProxyList *own_trusted;
 	AxisWebAuth   *auth;		/* borrowed: its trusted proxies and workers */
 	GHashTable    *conns;		/* GSocket* -> Conn* */
@@ -531,12 +533,16 @@ on_got_headers(
 		return;
 	}
 
-	/* The worker API takes less than a form may be. */
-	limit = path != NULL && axis_web_auth_is_worker_path(path) ? AXIS_WORKER_MAX_REQUEST_BYTES :
-		AXIS_WEB_MAX_REQUEST_BODY;
+	/* The worker API takes less than a form may be; a listener with a limit
+	 * of its own (the portal API's) takes that. */
+	limit = self->max_body > 0 ? self->max_body :
+		path != NULL && axis_web_auth_is_worker_path(path) ? AXIS_WORKER_MAX_REQUEST_BYTES : AXIS_WEB_MAX_REQUEST_BODY;
 	if (has_body && (encoding != SOUP_ENCODING_CONTENT_LENGTH ||
 	                 soup_message_headers_get_content_length(headers) > limit)) {
 		refuse(message, 413);
+		if (self->too_large_json != NULL)
+			soup_server_message_set_response(message, "application/json", SOUP_MEMORY_COPY, self->too_large_json,
+				strlen(self->too_large_json));
 		return;
 	}
 
@@ -764,6 +770,8 @@ axis_web_limits_install(
 	self->max_per_address = options->max_per_address > 0 ? options->max_per_address : AXIS_WEB_LIMITS_MAX_PER_ADDRESS;
 	self->max_overflow = options->max_overflow > 0 ? options->max_overflow : AXIS_WEB_LIMITS_MAX_OVERFLOW;
 	self->local_is_public = options->local_is_public;
+	self->max_body = (goffset)options->max_body_bytes;
+	self->too_large_json = g_strdup(options->too_large_json);
 	self->own_trusted = axis_proxy_list_parse(options->trusted_proxies != NULL ? options->trusted_proxies : "", NULL);
 	if (self->own_trusted == NULL)
 		self->own_trusted = axis_proxy_list_parse("", NULL);
@@ -808,6 +816,7 @@ axis_web_limits_unref(AxisWebLimits *self)
 	g_hash_table_unref(self->in_flight);
 	axis_proxy_list_free(self->own_trusted);
 	g_free(self->refused_peer);
+	g_free(self->too_large_json);
 	g_free(self);
 }
 

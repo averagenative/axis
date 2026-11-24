@@ -166,7 +166,8 @@ typedef enum
 	LOGIN_OK,
 	LOGIN_UNKNOWN,
 	LOGIN_DISABLED,
-	LOGIN_WRONG
+	LOGIN_WRONG,
+	LOGIN_REQUESTER	/* the right password of a requester: no session here */
 } LoginOutcome;
 
 /*
@@ -347,6 +348,10 @@ login_work(
 		work->outcome = LOGIN_DISABLED;
 	} else if (!match) {
 		work->outcome = LOGIN_WRONG;
+	} else if (work->user->role == AXIS_USER_ROLE_REQUESTER) {
+		/* A requester has no part in the engine's interface: the answer of a
+		 * wrong password, after the same work, and nothing is written. */
+		work->outcome = LOGIN_REQUESTER;
 	} else {
 		work->outcome = LOGIN_OK;
 
@@ -384,6 +389,15 @@ login_done(
 	if (work->error != NULL)
 		return axis_web_internal_error(request, work->error);
 
+	/* The account as this daemon knows it now decides too: one made a
+	 * requester a moment ago is one. */
+	if (work->outcome == LOGIN_OK) {
+		const AxisUser *cached = axis_session_store_get_user(auth->sessions, work->user->id);
+
+		if (cached != NULL && cached->role == AXIS_USER_ROLE_REQUESTER)
+			work->outcome = LOGIN_REQUESTER;
+	}
+
 	if (work->outcome == LOGIN_OK &&
 	    axis_session_store_get_user(auth->sessions, work->user->id) == NULL) {
 		g_autoptr(GError) error = NULL;
@@ -416,7 +430,8 @@ login_done(
 	else
 		axis_web_auth_audit("login failed: user=%s client=%s%s", work->user->username,
 			state->client_address,
-			work->outcome == LOGIN_DISABLED ? " (account disabled)" : " (wrong password)");
+			work->outcome == LOGIN_DISABLED ? " (account disabled)" :
+			work->outcome == LOGIN_REQUESTER ? " (a requester: no login here)" : " (wrong password)");
 
 	return login_page(request, 401, work->next, work->typed, LOGIN_FAILED);
 }

@@ -226,7 +226,8 @@ FUZZ_LIB_SOURCES := $(SRCDIR)/db/axis-db-migrate-parse.c $(SRCDIR)/web/axis-web-
                     $(SRCDIR)/compat/axis-compat-jellyfin.c $(SRCDIR)/compat/axis-compat-reasons.c \
                     $(SRCDIR)/compat/axis-compat-evidence.c $(SRCDIR)/compat/axis-compat-verdict.c \
                     $(SRCDIR)/compat/axis-compat-path.c $(SRCDIR)/core/axis-http-origin.c \
-                    $(SRCDIR)/api/axis-worker-proto.c $(SRCDIR)/storage/axis-storage-open.c \
+                    $(SRCDIR)/api/axis-worker-proto.c $(SRCDIR)/api/axis-portal-proto.c \
+                    $(SRCDIR)/storage/axis-storage-open.c \
                     $(SRCDIR)/storage/axis-storage-fs.c $(SRCDIR)/transcode/axis-sample-args.c \
                     $(SRCDIR)/transcode/axis-verify-judge.c $(SRCDIR)/probe/axis-probe-run.c \
                     $(SRCDIR)/meta/axis-meta-model.c $(SRCDIR)/meta/axis-meta-image.c \

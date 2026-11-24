@@ -158,7 +158,8 @@ static const gchar *const clean[] = {
 	"AXIS_JOBS_CONCURRENCY", "AXIS_JOBS_GRACE_PERIOD", "AXIS_TRUSTED_PROXIES", "AXIS_SECURE_COOKIES",
 	"AXIS_WORKER_LEASE", "AXIS_DATA_DIR", "AXIS_ADMIN_USERNAME", "AXIS_ADMIN_PASSWORD",
 	"AXIS_ADMIN_PASSWORD_FILE", "AXIS_METRICS_TOKEN", "AXIS_METRICS_TOKEN_FILE", "AXIS_HEAD_TIMEOUT",
-	"AXIS_BODY_TIMEOUT", "AXIS_IDLE_TIMEOUT", "AXIS_MAX_CONNECTIONS", "AXIS_MAX_CONNECTIONS_PER_ADDRESS", NULL
+	"AXIS_BODY_TIMEOUT", "AXIS_IDLE_TIMEOUT", "AXIS_MAX_CONNECTIONS", "AXIS_MAX_CONNECTIONS_PER_ADDRESS",
+	"AXIS_PORTAL_LISTEN_PORT", NULL
 };
 
 /* The process id of the daemon the test started last: what answers a
@@ -2033,6 +2034,77 @@ get_with_authorization(
 	return soup_message_get_status(message);
 }
 
+/* Whether nothing listens on 127.0.0.1:@port. */
+static gboolean
+port_is_closed(guint16 port)
+{
+	g_autoptr(GSocketClient) client = g_socket_client_new();
+	g_autoptr(GSocketConnection) connection = NULL;
+
+	connection = g_socket_client_connect_to_host(client, "127.0.0.1", port, NULL, NULL);
+	return connection == NULL;
+}
+
+/*
+ * Spec (portal, add-request-portal slice P2): Off by default; Only the API
+ * on the portal listener; Not on the main listener.  The real daemon: with no
+ * portal port configured it listens on its main port only, and that port
+ * answers no path of the portal API; with one, the second port answers the
+ * portal API (here: that a token is required) and nothing else, and the main
+ * port still answers none of it.
+ */
+static void
+test_portal_listener(Fixture *fx, gconstpointer data)
+{
+	static const gchar bearer[] = "Bearer AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+	guint16 port = pick_free_port();
+	guint16 portal = pick_free_port();
+	g_autofree gchar *portal_text = g_strdup_printf("%u", (guint)portal);
+	const gchar *env[] = { "AXIS_PORTAL_LISTEN_PORT", NULL, NULL };
+	g_autofree gchar *body = NULL;
+	guint status;
+
+	g_assert_cmpuint(port, !=, portal);
+	if (!spawn_axisd_with_db(fx, port))
+		return;
+	body = http_get(port, "/healthz", &status, NULL);
+	g_assert_cmpuint(status, ==, SOUP_STATUS_OK);
+	g_clear_pointer(&body, g_free);
+	g_assert_cmpuint(get_with_authorization(port, "/api/v1/portal/hello", bearer, &body), ==, 404);
+	g_assert_nonnull(strstr(body, "not-found"));
+	g_clear_pointer(&body, g_free);
+	g_assert_cmpuint(get_with_authorization(port, "/api/v1/portal/login", NULL, NULL), ==, 404);
+	g_assert_true(port_is_closed(portal));
+	stop_and_expect_zero(fx);
+	g_assert_null(strstr(fx->stderr_text, "portal API: listening"));
+	g_clear_object(&fx->proc);
+
+	env[1] = portal_text;
+	spawn_axisd_env(fx, port, axis_test_db_get_url(fx->db), env, NULL, NULL);
+	body = http_get(port, "/healthz", &status, NULL);
+	g_assert_cmpuint(status, ==, SOUP_STATUS_OK);
+	g_clear_pointer(&body, g_free);
+	/* The portal listener: the API (a token is required), and nothing else. */
+	g_assert_cmpuint(get_with_authorization(portal, "/api/v1/portal/hello", NULL, &body), ==, 401);
+	g_assert_nonnull(strstr(body, "\"error\":\"unauthorized\""));
+	g_clear_pointer(&body, g_free);
+	g_assert_cmpuint(get_with_authorization(portal, "/api/v1/portal/hello", bearer, NULL), ==, 401);
+	g_assert_cmpuint(get_with_authorization(portal, "/healthz", NULL, &body), ==, 404);
+	g_assert_nonnull(strstr(body, "\"error\":\"not-found\""));
+	g_clear_pointer(&body, g_free);
+	g_assert_cmpuint(get_with_authorization(portal, "/", NULL, NULL), ==, 404);
+	g_assert_cmpuint(get_with_authorization(portal, "/login", NULL, NULL), ==, 404);
+	g_assert_cmpuint(get_with_authorization(portal, "/setup", NULL, NULL), ==, 404);
+	g_assert_cmpuint(get_with_authorization(portal, "/static/axis.css", NULL, NULL), ==, 404);
+	g_assert_cmpuint(get_with_authorization(portal, "/api/v1/worker/claim", bearer, NULL), ==, 404);
+	/* The main listener still answers none of the portal API. */
+	g_assert_cmpuint(get_with_authorization(port, "/api/v1/portal/hello", bearer, NULL), ==, 404);
+	stop_and_expect_zero(fx);
+	g_assert_nonnull(strstr(fx->stderr_text, "portal API: listening on 127.0.0.1:"));
+	g_assert_null(strstr(fx->stderr_text, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"));
+	g_assert_true(port_is_closed(portal));
+}
+
 /*
  * Spec (deployment): liveness and readiness are separate; ready only at the
  * expected schema version.  Spec (deployment): the metrics endpoint answers
@@ -2557,6 +2629,8 @@ main(int argc, char **argv)
 		fixture_setup, test_first_admin_refused, fixture_teardown);
 	g_test_add("/daemon/probes-and-metrics", Fixture, NULL,
 		fixture_setup, test_probes_and_metrics, fixture_teardown);
+	g_test_add("/portal/api/listener/off-by-default", Fixture, NULL,
+		fixture_setup, test_portal_listener, fixture_teardown);
 	g_test_add("/daemon/log/json", Fixture, NULL,
 		fixture_setup, test_json_logs, fixture_teardown);
 	g_test_add("/daemon/database/migrations-before-serving", Fixture, NULL,

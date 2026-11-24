@@ -1,0 +1,22 @@
+-- 0084_title_adult.sql - a title's adult mark, kept with its record
+-- SPDX-License-Identifier: AGPL-3.0-or-later
+--
+-- (add-request-portal, before slice P2.)  A search drops the titles its
+-- provider marks as adult while metadata.tmdb_adult is off, so a search never
+-- stores one.  A title stored another way (a lookup by identifier, an
+-- identification of a file, a list brought over) was stored without the mark,
+-- and so could be asked for by its number by a person who is not an
+-- administrator.  The mark is now part of the record: set by every provider
+-- answer about the title that is read, and never cleared once an answer said
+-- so (a brief record need not carry it).
+--
+-- Three values.  NULL is "not known": every title stored before this
+-- migration, and one stored from something that is not a provider's answer,
+-- until an answer about it is stored (a search that finds it, a lookup, the
+-- refresh job for every title something refers to).  For anyone who is not
+-- an administrator, a title whose mark is not known is treated as marked: the
+-- portal API answers it as a number never given, and it cannot be asked for.
+--
+-- Only adds a column with no default: safe on a live database.
+
+ALTER TABLE meta_title ADD COLUMN adult boolean;

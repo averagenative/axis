@@ -32,6 +32,11 @@ struct _AxisRequests
 	AxisModuleRegistry *registry;
 	gint64              clock_us;	/* tests: 0 for the real time */
 	GTimeZone          *zone;
+	/* The page "Request portal" (web/axis-web-portal.c): the portal's
+	 * tokens (borrowed; NULL: this daemon has no portal API) and the port of
+	 * its listener (0: off). */
+	AxisPortalTokens   *portal_tokens;
+	guint               portal_port;
 	/* The pages (main loop). */
 	guint               pending;
 	gboolean            stopping;
@@ -241,6 +246,13 @@ axis_requests_people_without(
 	GArray       **no_movies,
 	GArray       **no_series,
 	GError       **error
+);
+
+/* The page "Request portal" (web/axis-web-portal.c), with the pages below. */
+void
+axis_web_portal_register(
+	AxisRequests *self,
+	AxisWeb      *web
 );
 
 /* The pages (web/axis-web-requests.c). */

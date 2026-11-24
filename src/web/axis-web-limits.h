@@ -89,6 +89,11 @@ typedef struct
 	guint        max_overflow;
 	const gchar *trusted_proxies;	/* server.trusted_proxies, until set_auth() */
 	gboolean     local_is_public;	/* tests only: hold loopback to the per-address cap */
+	/* A listener that is not the shell's (the portal API's): the largest
+	 * body of any request on it (0: the shell's limits), and the JSON a body
+	 * beyond it is answered with (%NULL: no body). */
+	guint        max_body_bytes;
+	const gchar *too_large_json;
 } AxisWebLimitsOptions;
 
 typedef struct _AxisWebLimits AxisWebLimits;

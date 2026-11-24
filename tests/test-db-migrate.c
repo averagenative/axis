@@ -722,9 +722,41 @@ test_requests_on_accounts(Fixture *fx, gconstpointer data)
 		" ('root', '$argon2id$not-a-password', 'admin', false, 3), ('robin', '$argon2id$not-a-password', 'user', true, 7)");
 	axis_test_db_exec(fx->db, "INSERT INTO meta_title (kind, title, provider, provider_id) VALUES"
 		" ('film', 'A Made-Up Film', 'fixture', 'm1'), ('series', 'A Made-Up Series', 'fixture', 's1')");
+	axis_test_db_exec(fx->db, "INSERT INTO web_session (token_hash, public_id, user_id, user_epoch, created_at,"
+		" last_seen_at, client_address, user_agent) SELECT repeat('a', 64), 'AAAAAAAAAAAAAAAAAAAAAA', id, auth_epoch,"
+		" now(), now(), '192.0.2.1', 'test' FROM app_user WHERE username = 'root'");
 
 	g_assert_true(axis_db_migrate(fx->pool, &error));
 	g_assert_no_error(error);
+	/* Slice P2 (task 2.2), 0084_title_adult.sql and 0085_portal_api.sql on that
+	 * database: a stored title's adult mark is not known (NULL: no provider's
+	 * answer has said yet), a session that existed is one of the engine's
+	 * interface, an account can be a requester, and only the three roles and
+	 * the two kinds are taken. */
+	assert_query(fx, "SELECT count(*) FILTER (WHERE adult IS NULL) || ' ' || count(*) FROM meta_title", "2 2");
+	assert_query(fx, "SELECT kind FROM web_session", "web");
+	axis_test_db_exec(fx->db, "INSERT INTO app_user (username, password_hash, role) VALUES"
+		" ('quill', '$argon2id$not-a-password', 'requester')");
+	axis_test_db_exec(fx->db, "DELETE FROM app_user WHERE username = 'quill'");
+	assert_query(fx, "WITH tried AS (INSERT INTO portal_token (token_hash, created_by) VALUES (repeat('b', 64), 'root')"
+		" RETURNING revoked_at IS NULL AND last_used_at IS NULL) SELECT count(*) FROM tried", "1");
+	{
+		static const gchar *const refused[] = {
+			"INSERT INTO app_user (username, password_hash, role) VALUES ('wren', '$argon2id$not-a-password', 'owner')",
+			"UPDATE web_session SET kind = 'other'",
+			"INSERT INTO portal_token (token_hash, created_by) VALUES ('not-a-hash', 'root')",
+			"INSERT INTO portal_token (token_hash, created_by) VALUES (repeat('b', 64), 'root')",
+			"UPDATE portal_token SET revoked_at = now()",
+			NULL
+		};
+
+		for (i = 0; refused[i] != NULL; i++) {
+			g_autoptr(GError) local = NULL;
+
+			g_assert_false(axis_db_pool_exec(fx->pool, refused[i], 0, NULL, NULL, &local));
+			g_assert_nonnull(local);
+		}
+	}
 	accounts = q(fx, "SELECT string_agg(username || ' ' || role || ' ' || disabled || ' ' || auth_epoch || ' ' ||"
 		" request_auto_movies || ' ' || request_auto_series || ' ' || coalesce(request_movies_limit::text, '-') || ' '"
 		" || coalesce(request_seasons_limit::text, '-'), ', ' ORDER BY username) FROM app_user");

@@ -90,7 +90,12 @@ username does not stop you from changing your password.
    characters)** and a **Role**, and select **Create account**.
 3. For an existing account, use the actions on its row:
 
-   - **Change role to user** or **Change role to administrator**
+   - **Change role to user**, **Change role to administrator** or **Change
+     role to requester**. A change of role ends the account's sessions. A
+     requester is an account for the request portal only and cannot log in
+     here. To give a requester another role, type a new password beside the
+     button. See
+     [The Requester role](20-let-other-people-ask-for-titles.md#the-requester-role).
    - **Disable this account** or **Enable this account**. Disabling ends the
      account's sessions.
    - **Set password**, which ends the account's sessions.

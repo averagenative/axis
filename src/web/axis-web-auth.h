@@ -202,6 +202,14 @@ axis_web_auth_set_test_theme(
 	const gchar *theme
 );
 
+/* How many sessions of the account @user_id are held in memory, of either
+ * kind, usable or not (one that is not is ended when it is presented). */
+guint
+axis_web_auth_count_held_sessions(
+	AxisWebAuth *self,
+	gint64       user_id
+);
+
 /* Blocks until the session writer has written everything queued so far. */
 void
 axis_web_auth_wait_writes(AxisWebAuth *self);

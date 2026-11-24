@@ -415,6 +415,11 @@ static const AxisSettingInfo settings_table[] = {
 	  "administrator.", 0, "0", 0, 0, 0, 0, NULL },
 	{ AXIS_REQUESTS_SETTING_SERIES_PROFILE, AXIS_SETTING_INTEGER, "Quality profile for requested series (its number)",
 	  "Set on the Requests page, under Defaults. 0: none.", 0, "0", 0, 0, 0, 0, NULL },
+	{ AXIS_REQUESTS_SETTING_PORTAL_DAY, AXIS_SETTING_INTEGER, "Requests through the request portal in one day",
+	  "What all requests made through the request portal may count in one calendar day, whoever made them: a movie "
+	  "counts one and each season one. Beyond it the portal's requests are refused until the next day. It bounds what "
+	  "a portal in the wrong hands can ask for. One person's requests may count a third of it at most, withdrawn ones "
+	  "included. 0: no request can be made through the portal.", 0, "30", 0, 10000, 0, 0, NULL },
 	{ NULL, 0, NULL, NULL, 0, NULL, 0, 0, 0, 0, NULL }
 };
 
@@ -519,6 +524,22 @@ axis_requests_set_registry(
 }
 
 gboolean
+axis_requests_is_on(AxisRequests *self)
+{
+	return self->registry == NULL || axis_module_registry_is_enabled(self->registry, AXIS_REQUESTS_MODULE_ID);
+}
+
+void
+axis_requests_set_portal(
+	AxisRequests     *self,
+	AxisPortalTokens *tokens,
+	guint             port
+){
+	self->portal_tokens = tokens;
+	self->portal_port = port;
+}
+
+gboolean
 axis_requests_kind_on(
 	AxisRequests    *self,
 	AxisRequestKind  kind
@@ -589,6 +610,8 @@ register_routes(
 /* Media: a page of its own beside the media types. */
 static const AxisNavEntry nav_entries[] = {
 	{ "Requests", "/requests", 90, AXIS_NAV_GROUP_MEDIA, FALSE, NULL, 0 },
+	/* System: the tokens of the request portal, and its listener. */
+	{ "Request portal", "/admin/portal", 22, AXIS_NAV_GROUP_SYSTEM, TRUE, NULL, 0 },
 	{ NULL, NULL, 0, 0, FALSE, NULL, 0 }
 };
 

@@ -28,6 +28,8 @@ G_BEGIN_DECLS
 #define AXIS_TEST_REQUESTS_COMPASS   "305"	/* Tin Compass (2021) */
 #define AXIS_TEST_REQUESTS_ALMANAC   "306"	/* Low Tide Almanac (2017) */
 #define AXIS_TEST_REQUESTS_FILMS     6
+/* Velvet Annex (2014): a film the provider marks as adult. */
+#define AXIS_TEST_REQUESTS_ANNEX     "307"
 /* Harbour of Glass (2020): seasons 0 (one special), 1, 2 and 3, two aired
  * episodes each. */
 #define AXIS_TEST_REQUESTS_HARBOUR   "351"
