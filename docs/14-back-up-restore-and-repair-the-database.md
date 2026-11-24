@@ -146,7 +146,8 @@ Axis records what happens to each movie and series, each release it grabs, each 
 To choose how long Axis keeps history:
 
 1. Open **System**, then **Settings**, and find the **History settings** card.
-2. Change the durations, then select **Save History settings**.
+2. To use the same time for every kind of record, select one of the buttons in the **Keep history for** row: **1 month**, **3 months**, **6 months**, **1 year**, or **Forever**. Axis saves all four settings at once, and the button that matches them is marked. If the four times differ, the row says **Custom**.
+3. To use a different time for each kind of record, change the durations, then select **Save History settings**.
 
 The following table describes the settings:
 
@@ -157,7 +158,7 @@ The following table describes the settings:
 | **Keep finished downloads on the Downloads page for** | `365d` (a year) | The downloads that finished, failed, or were removed, counted from when each ended. |
 | **Keep finished imports on the Imports page for** | `365d` (a year) | The imports that were imported or dismissed, with their files and decisions, counted from when each ended. |
 
-Each setting takes a duration from `30d` to `3650d`. Enter `0` to keep that kind of record forever. A change applies at the next hourly run, and you don't need to restart Axis.
+The buttons set each setting to `30d`, `90d`, `180d`, `365d`, or `0`. Each setting takes a duration from `30d` to `3650d`. Enter `0` to keep that kind of record forever. A change applies at the next hourly run, and you don't need to restart Axis.
 
 Axis never deletes a record that something still needs, however old the record is:
 
@@ -169,7 +170,7 @@ Axis never deletes a record that something still needs, however old the record i
 
 Each run deletes a limited number of records at a time, in short steps, so that pages and imports do not wait for it. After an upgrade, a large backlog of old history goes over several runs: each hourly run deletes at most 50,000 events of series, 50,000 events of movies, 50,000 grabs of series, 50,000 grabs of movies, 12,500 imports, and 50,000 downloads, and the rest waits for the next run.
 
-**Run:** each rule above runs in `tests/test-history-retention.c`, and the runs on a generated database of 3,000,000 events run in `tests/test-db-scale.c`. **Not run:** the hourly job on a real server.
+**Run:** each rule above and each button of the **Keep history for** row run in `tests/test-history-retention.c`, and the runs on a generated database of 3,000,000 events run in `tests/test-db-scale.c`. **Not run:** the hourly job on a real server.
 
 ## Start again from an empty database
 

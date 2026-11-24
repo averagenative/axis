@@ -73,6 +73,19 @@ axis_web_settings_card(const gchar *heading);
 void
 axis_web_settings_register_settings_page(AxisWebSettings *self, AxisWeb *web);
 
+/* The History card's quick choices (web/axis-web-settings-presets.c): the
+ * row of buttons for @module_id, or %NULL when the module has none; and the
+ * route the buttons post to. */
+HtmxNode *
+axis_web_settings_presets_row(
+	AxisSettings *settings,
+	HtmxRequest  *request,
+	const gchar  *module_id
+);
+
+void
+axis_web_settings_register_presets(AxisWebSettings *self, AxisWeb *web);
+
 void
 axis_web_modules_register_page(AxisWebSettings *self, AxisWeb *web);
 
