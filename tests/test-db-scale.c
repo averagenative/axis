@@ -67,6 +67,7 @@
 #include "download/axis-download.h"
 #include "import/axis-import.h"
 #include "indexer/axis-indexer.h"
+#include "jobs/axis-history.h"
 #include "jobs/axis-job-registry.h"
 #include "library/axis-analysis.h"
 #include "meta/axis-meta.h"
@@ -1947,6 +1948,183 @@ test_report(Fixture *fx, gconstpointer data)
 	print_table(fx);
 }
 
+/* ── The deletion of old history (history retention) ────────────── */
+
+/* The indexes of 0082_history_retention.sql. */
+static const gchar *const retention_indexes[] = {
+	"series_event_age", "movie_event_age", "series_grab_age", "movie_grab_age", "download_age",
+	"series_event_grab", "movie_event_grab", "series_blocklist_grab", "movie_blocklist_grab",
+	"series_file_import", "movie_file_import"
+};
+
+/* The tables of the history and of what names it, which no statement of a
+ * run may read whole ("Seq Scan on <table> "). */
+static const gchar *const retention_tables[] = {
+	"series_event", "movie_event", "series_grab", "movie_grab", "series_grab_episode", "download", "import",
+	"import_file", "import_action", "import_assignment", "series_file", "movie_file", "job"
+};
+
+/* Generous, of the database's own time for one statement, under the
+ * session's statement timeout of AXIS_DB_STATEMENT_TIMEOUT_MS. */
+#define BOUND_RETENTION_MS 5000.0
+
+static void
+retention_counts(
+	Fixture     *fx,
+	const gchar *when
+){
+	g_print("%s: %" G_GINT64_FORMAT " series events, %" G_GINT64_FORMAT " movie events, %" G_GINT64_FORMAT
+		" imports with %" G_GINT64_FORMAT " files, %" G_GINT64_FORMAT " series grabs, %" G_GINT64_FORMAT
+		" movie grabs, %" G_GINT64_FORMAT " downloads\n", when, qi(fx, "SELECT count(*) FROM series_event"),
+		qi(fx, "SELECT count(*) FROM movie_event"), qi(fx, "SELECT count(*) FROM import"),
+		qi(fx, "SELECT count(*) FROM import_file"), qi(fx, "SELECT count(*) FROM series_grab"),
+		qi(fx, "SELECT count(*) FROM movie_grab"), qi(fx, "SELECT count(*) FROM download"));
+}
+
+/* Each statement of @all explained as it was sent (in a transaction rolled
+ * back: it looks at the rows after those the run took): none reads a whole
+ * table, none takes longer than the bound; the first of each table and the
+ * slowest are added to the table printed at the end. */
+static void
+retention_explain(
+	Fixture   *fx,
+	GPtrArray *all
+){
+	gboolean seen[AXIS_HISTORY_N_PARTS] = { FALSE };
+	g_autofree gchar *slowest = NULL;
+	gdouble slowest_ms = -1;
+	guint i;
+	guint k;
+
+	for (i = 0; i < all->len; i++) {
+		const Sent *sent = g_ptr_array_index(all, i);
+		g_autofree gchar *literal = NULL;
+		g_autofree gchar *plan = NULL;
+		gdouble ms;
+		gint part = -1;
+
+		for (k = 0; k < AXIS_HISTORY_N_PARTS; k++) {
+			g_autofree gchar *mark = g_strdup_printf("DELETE FROM %s ", axis_history_part_name((AxisHistoryPart)k));
+
+			if (strstr(sent->sql, mark) != NULL)
+				part = (gint)k;
+		}
+		if (part < 0)
+			continue;
+		literal = sent_literal(sent);
+		plan = plan_of(fx, literal, TRUE, NULL);
+		ms = plan_ms(plan);
+		for (k = 0; k < G_N_ELEMENTS(retention_tables); k++) {
+			g_autofree gchar *whole = g_strdup_printf("Seq Scan on %s ", retention_tables[k]);
+
+			if (strstr(plan, whole) != NULL) {
+				g_print("a statement of the prune of %s reads all of %s:\n%s\n", axis_history_part_name(part),
+					retention_tables[k], plan);
+				g_assert_not_reached();
+			}
+		}
+		g_assert_cmpfloat(ms, <, BOUND_RETENTION_MS);
+		if (!seen[part]) {
+			g_autofree gchar *name = g_strdup_printf("retention: a batch of %s", axis_history_part_name(part));
+
+			seen[part] = TRUE;
+			add_row(fx, name, "run 1", -1, plan, "Delete on|Index Scan|Index Only Scan|Bitmap|Seq Scan|Limit");
+		}
+		if (ms > slowest_ms) {
+			slowest_ms = ms;
+			g_free(slowest);
+			slowest = g_steal_pointer(&plan);
+		}
+	}
+	if (slowest != NULL)
+		add_row(fx, "retention: the slowest batch of run 1", "run 1", -1, slowest,
+			"Delete on|Index Scan|Index Only Scan|Bitmap|Seq Scan|Limit");
+}
+
+static void
+test_retention(Fixture *fx, gconstpointer data)
+{
+	g_autoptr(AxisHistory) history = axis_history_new(NULL);
+	gchar *defs[G_N_ELEMENTS(retention_indexes)];
+	gdouble total = 0;
+	guint run;
+	guint i;
+
+	/* The indexes are made after the rows, as the migration makes them on a
+	 * database that has them all. */
+	for (i = 0; i < G_N_ELEMENTS(retention_indexes); i++) {
+		g_autofree gchar *ask = g_strdup_printf("SELECT indexdef FROM pg_indexes WHERE schemaname = 'public'"
+			" AND indexname = '%s'", retention_indexes[i]);
+
+		defs[i] = axis_test_db_query(fx->t->db, ask);
+		g_assert_nonnull(defs[i]);
+		sql(fx, "DROP INDEX %s", retention_indexes[i]);
+	}
+	make_database(fx);
+
+	/* Half of every kind ended 400 days ago, beyond the default of 365. */
+	sql(fx, "UPDATE series_event SET created_at = created_at - interval '400 days' WHERE id %% 2 = 0");
+	sql(fx, "UPDATE movie_event SET created_at = created_at - interval '400 days' WHERE id %% 2 = 0");
+	sql(fx, "UPDATE series_grab SET closed_at = closed_at - interval '400 days' WHERE id %% 2 = 0");
+	sql(fx, "UPDATE movie_grab SET closed_at = closed_at - interval '400 days' WHERE id %% 2 = 0");
+	sql(fx, "UPDATE download SET finished_at = finished_at - interval '400 days' WHERE id %% 2 = 0");
+	sql(fx, "UPDATE import SET finished_at = finished_at - interval '400 days' WHERE id %% 2 = 0");
+	sql(fx, "VACUUM ANALYZE");
+
+	g_print("the indexes of 0082_history_retention.sql, each built on the database above:\n");
+	for (i = 0; i < G_N_ELEMENTS(retention_indexes); i++) {
+		g_autofree gchar *size = NULL;
+		g_autofree gchar *ask = g_strdup_printf("SELECT pg_size_pretty(pg_relation_size('%s'::regclass))",
+			retention_indexes[i]);
+		gint64 began = g_get_monotonic_time();
+		gdouble ms;
+
+		axis_test_db_exec(fx->t->db, defs[i]);
+		ms = (g_get_monotonic_time() - began) / 1000.0;
+		total += ms;
+		size = axis_test_db_query(fx->t->db, ask);
+		g_print("  %-32s %8.0f ms  %s\n", retention_indexes[i], ms, size);
+		g_free(defs[i]);
+	}
+	g_print("  %-32s %8.0f ms\n", "all of them", total);
+	sql(fx, "ANALYZE");
+	retention_counts(fx, "before the first run");
+
+	for (run = 1; run <= 3; run++) {
+		g_autoptr(GError) error = NULL;
+		g_autoptr(GPtrArray) all = NULL;
+		AxisHistoryReport report;
+		AxisHistoryKeep keep;
+		gint64 began;
+		gdouble ms;
+		guint k;
+
+		axis_history_read_keep(history, &keep);
+		listen_begin();
+		began = g_get_monotonic_time();
+		g_assert_true(axis_history_prune(history, fx->t->pool, &keep, NULL, &report, &error));
+		g_assert_no_error(error);
+		ms = (g_get_monotonic_time() - began) / 1000.0;
+		all = listen_end();
+		g_print("retention run %u: %.0f ms, %u statements, the longest %.0f ms (the session's statement timeout is %d"
+			" ms)\n", run, ms, all->len, report.longest_ms, AXIS_DB_STATEMENT_TIMEOUT_MS);
+		for (k = 0; k < AXIS_HISTORY_N_PARTS; k++)
+			g_print("  %-14s %3u statements, %7" G_GUINT64_FORMAT " looked at, %7" G_GUINT64_FORMAT " deleted%s\n",
+				axis_history_part_name((AxisHistoryPart)k), report.statements[k], report.examined[k],
+				report.deleted[k], report.more[k] ? ", more left for the next run" : "");
+		if (run == 1) {
+			for (k = 0; k < AXIS_HISTORY_N_PARTS; k++)
+				g_assert_cmpuint(report.statements[k], <=, AXIS_HISTORY_BATCHES_PER_RUN);
+			g_assert_cmpuint(report.deleted[AXIS_HISTORY_SERIES_EVENTS], >, 0);
+			g_assert_cmpuint(report.deleted[AXIS_HISTORY_IMPORTS], >, 0);
+			g_assert_cmpuint(report.deleted[AXIS_HISTORY_SERIES_GRABS], >, 0);
+			retention_explain(fx, all);
+		}
+		retention_counts(fx, "after it");
+	}
+	print_table(fx);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -1957,6 +2135,7 @@ main(int argc, char **argv)
 	AXIS_TEST_ADD_DB_CASE("/db/scale/fixes", Fixture, NULL, test_fixes);
 	AXIS_TEST_ADD_DB_CASE("/db/scale/second", Fixture, NULL, test_second);
 	AXIS_TEST_ADD_DB_CASE("/db/scale/report", Fixture, NULL, test_report);
+	AXIS_TEST_ADD_DB_CASE("/db/scale/retention", Fixture, NULL, test_retention);
 
 	return g_test_run();
 }
