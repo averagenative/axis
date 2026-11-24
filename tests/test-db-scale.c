@@ -1832,6 +1832,31 @@ test_second(Fixture *fx, gconstpointer data)
 	sql(fx, "UPDATE series SET synced_at = now() - interval '7 hours'");
 	call_schedule(fx, "every series behind the metadata", &report);
 	g_assert_cmpuint(report.synced, ==, axis_tv_sync_batch(n_series));
+
+	/* What 0081_scale_lists.sql costs at an upgrade: each index built again
+	 * on this database. */
+	{
+		static const gchar *const built[] = { "job_list_idx", "series_search_unfinished", "movie_search_unfinished" };
+		guint i;
+
+		g_print("the indexes of 0081_scale_lists.sql, each built on the database above:\n");
+		for (i = 0; i < G_N_ELEMENTS(built); i++) {
+			g_autofree gchar *ask = g_strdup_printf("SELECT indexdef FROM pg_indexes WHERE schemaname = 'public'"
+				" AND indexname = '%s'", built[i]);
+			g_autofree gchar *def = axis_test_db_query(fx->t->db, ask);
+			g_autofree gchar *size_ask = g_strdup_printf("SELECT pg_size_pretty(pg_relation_size('%s'::regclass))",
+				built[i]);
+			g_autofree gchar *size = NULL;
+
+			g_assert_nonnull(def);
+			sql(fx, "DROP INDEX %s", built[i]);
+			began = g_get_monotonic_time();
+			axis_test_db_exec(fx->t->db, def);
+			g_print("  %-32s %8.0f ms", built[i], (g_get_monotonic_time() - began) / 1000.0);
+			size = axis_test_db_query(fx->t->db, size_ask);
+			g_print("  %s\n", size);
+		}
+	}
 	print_table(fx);
 }
 

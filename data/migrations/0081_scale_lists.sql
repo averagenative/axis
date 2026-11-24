@@ -24,8 +24,8 @@
 -- Applying it: as 0080.  CREATE INDEX blocks writes to its table while it
 -- builds (reads go on) and the lock lasts until the migration's transaction
 -- ends.  The daemon applies migrations before it starts anything that
--- writes.  On the database above job_list_idx took about two seconds to
--- build (design.md has the time and the size).
+-- writes.  On the database above job_list_idx took about three seconds to
+-- build and is 105 MB (design.md).
 
 -- 1. The jobs of a kind, a queue and a state, by id.
 CREATE INDEX job_list_idx ON job (kind, queue, state, id);
