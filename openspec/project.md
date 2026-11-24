@@ -292,7 +292,7 @@ Three phrases are used with a fixed meaning:
 | Docker | Not run. The examples and checks were run with Podman and podman-compose only. |
 | Kubernetes | The manifests were applied once to a kind cluster. |
 | Browsers | Pages were checked in headless Chrome. Firefox, Safari and a real phone were not tried. |
-| The image workflow | `.github/workflows/images.yml` has never run. |
+| The image workflow | `.github/workflows/images.yml` ran once, for `v0.1.0-rc1`, and failed in the arm64 half, which was then built under emulation. Since then each architecture has a job of its own on a runner of that architecture; that form has not yet published an image. |
 
 ### Web interface
 
@@ -594,7 +594,7 @@ Three phrases are used with a fixed meaning:
 - Through rootless Podman's port forwarding every client reaches a container from the container network's own address, so the client address that a proxy reports is right only for clients on that network or with rootful networking.
 - Kubernetes: the Ingress and the NetworkPolicies were applied but not exercised, the worker was not applied, and the Traefik IngressRoute is written from the documentation. Some provisioners make every volume writable by everyone, which the daemon refuses for its data directory; the example points the data directory at a subdirectory that the daemon makes.
 - An arbitrary user id was run only within rootless Podman's subordinate range, not in OpenShift's range.
-- The image workflow names its actions by major version, not by commit, and builds the arm64 half under emulation, so it is slow. Images for amd64 and arm64 can also be built and pushed locally with `deploy/images.sh`.
+- The image workflow names its actions by major version, not by commit, and builds each architecture in a job of its own on a runner of that architecture. Images for amd64 and arm64 can also be built and pushed locally with `deploy/images.sh`.
 - The first administrator's password, when given as `AXIS_ADMIN_PASSWORD`, stays in the process environment. The `_FILE` form avoids that.
 - Logs, JSON or not, go to standard error.
 - `/metrics` sees what the shell answers, not requests that libsoup refuses itself, and counts event streams without timing them.

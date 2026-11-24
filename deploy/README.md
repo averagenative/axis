@@ -152,9 +152,11 @@ with cosign. It runs only when a version tag is pushed or when someone starts
 it by hand from the Actions tab, never on a branch push or a pull request.
 On a public repository GitHub's runners cost nothing; on a private one each
 run uses the account's included Actions minutes, and is billed beyond them.
-Its arm64 half is built under QEMU emulation on an amd64 runner, so one run
-takes a long time (its limit is four hours) where the Raspberry Pi takes
-minutes.
+Each architecture is built and tested in a job of its own, on a runner of
+that architecture, so nothing is emulated. The two do not wait for each
+other: when one fails, the image is published with the other alone and the
+run is marked failed, and **Re-run failed jobs** on that run adds the missing
+one. Started by hand, the workflow can build one architecture only.
 
 Without `make`:
 

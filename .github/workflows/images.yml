@@ -1,18 +1,24 @@
 # images.yml - build, sign and publish the Axis container images
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
-# The only workflow this repository has, and the only one it may have: it
-# builds images.  Tests and the other gates are run locally (make check, make
-# fuzz, make check-container); nothing here runs on a pull request or a
-# branch push.
+# It builds images, and nothing else.  Nothing here runs on a pull request or
+# a branch push.
 #
 # On a version tag (v1.2.3, or a pre-release such as v1.2.3-rc1), or when
 # started by hand from the Actions tab, it builds deploy/Containerfile for
-# linux/amd64 and linux/arm64 (arm64 under QEMU emulation, so slowly: the
-# build stage compiles and runs the unit tests that need no database), pushes
-# the image to the GitHub Container Registry, and signs it with cosign,
-# keyless (GitHub's OIDC identity, recorded in the public Sigstore
-# transparency log).
+# linux/amd64 and linux/arm64, each in a job of its own on a runner of that
+# architecture (nothing is emulated), pushes the image to the GitHub Container
+# Registry, and signs it with cosign, keyless (GitHub's OIDC identity,
+# recorded in the public Sigstore transparency log).  The build stage of the
+# Containerfile compiles and runs the unit tests that need no database, so
+# each architecture is tested where it is built.
+#
+# The two architectures do not wait for each other and do not fail each
+# other.  The publish job joins what was built under the image's names: when
+# one architecture fails, the image is published with the other alone and the
+# run is marked failed.  "Re-run failed jobs" on that run then builds the
+# missing architecture and publishes the image again with both.  Started by
+# hand, the workflow can also be told to build one architecture only.
 #
 # Tag policy (deploy/README.md, "Published images"):
 #   v1.2.3-rc1 pushed  ->  1.2.3-rc1 and rc (a pre-release: any version tag
@@ -39,6 +45,15 @@ on:
       - "v[0-9]+.[0-9]+.[0-9]+"
       - "v[0-9]+.[0-9]+.[0-9]+-*"
   workflow_dispatch:
+    inputs:
+      architectures:
+        description: Which architectures to build
+        type: choice
+        default: both
+        options:
+          - both
+          - amd64
+          - arm64
 
 # Nothing by default; each job asks for what it needs.
 permissions: {}
@@ -51,43 +66,23 @@ env:
   IMAGE: ghcr.io/averagenative/axis
 
 jobs:
-  image:
+  # The names this build gets, worked out once for the jobs below.
+  plan:
     runs-on: ubuntu-24.04
-    timeout-minutes: 240
-    permissions:
-      contents: read      # check out the source
-      packages: write     # push to ghcr.io
-      id-token: write     # cosign keyless: the workflow's OIDC token
+    timeout-minutes: 5
+    permissions: {}
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      tags: ${{ steps.meta.outputs.tags }}
+      labels: ${{ steps.meta.outputs.labels }}
+      day: ${{ steps.day.outputs.day }}
     steps:
-      # TODO: pin to a commit SHA.
-      - name: Check out (with the htmx-glib submodule)
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          persist-credentials: false
-
-      # TODO: pin to a commit SHA.
-      - name: QEMU, for arm64
-        uses: docker/setup-qemu-action@v3
-
-      # TODO: pin to a commit SHA.
-      - name: Buildx
-        uses: docker/setup-buildx-action@v3
-
-      # TODO: pin to a commit SHA.
-      - name: Log in to ghcr.io
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
       # The tag policy in the header.  type=semver gives nothing off a tag,
       # and leaves {{major}}.{{minor}} out for a pre-release by itself; rc
       # and latest are told apart by the hyphen in the tag's name; the commit
       # names a build only where no version tag does.  The first line is
-      # also the `version` output, which the build below is given: 1.2.3-rc1
-      # or 1.2.3 on a tag, sha-<commit> anywhere else.
+      # also the `version` output, which the builds below are given:
+      # 1.2.3-rc1 or 1.2.3 on a tag, sha-<commit> anywhere else.
       # TODO: pin to a commit SHA.
       - name: Tags and labels
         id: meta
@@ -108,29 +103,141 @@ jobs:
 
       # yt-dlp is the newest release of the day of the build: the date as a
       # build argument makes its stage run again whatever layers are cached
-      # (deploy/Containerfile, the ytdlp stage).
+      # (deploy/Containerfile, the ytdlp stage).  One date for both
+      # architectures, whichever side of midnight each starts on.
       - name: The day of the build
         id: day
         run: echo "day=$(date -u +%F)" >> "$GITHUB_OUTPUT"
 
+  # One architecture, built and tested on a runner of that architecture and
+  # pushed under its digest alone: it has no name until the publish job
+  # gives it one.
+  build:
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(inputs.architectures == 'amd64' && '[{"arch":"amd64","runner":"ubuntu-24.04"}]' || inputs.architectures == 'arm64' && '[{"arch":"arm64","runner":"ubuntu-24.04-arm"}]' || '[{"arch":"amd64","runner":"ubuntu-24.04"},{"arch":"arm64","runner":"ubuntu-24.04-arm"}]') }}
+    name: build (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    permissions:
+      contents: read      # check out the source
+      packages: write     # push to ghcr.io
+    steps:
       # TODO: pin to a commit SHA.
-      - name: Build and push
+      - name: Check out (with the htmx-glib submodule)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      # TODO: pin to a commit SHA.
+      - name: Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # TODO: pin to a commit SHA.
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # TODO: pin to a commit SHA.
+      - name: Build and push by digest
         id: build
         uses: docker/build-push-action@v6
         with:
           context: .
           file: deploy/Containerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          platforms: linux/${{ matrix.arch }}
+          labels: ${{ needs.plan.outputs.labels }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
           build-args: |
             GIT_SHA=${{ github.sha }}
-            AXIS_VERSION=${{ steps.meta.outputs.version }}
+            AXIS_VERSION=${{ needs.plan.outputs.version }}
             SOURCE_URL=${{ github.server_url }}/${{ github.repository }}
-            YTDLP_REFRESH=${{ steps.day.outputs.day }}
+            YTDLP_REFRESH=${{ needs.plan.outputs.day }}
           provenance: true
           sbom: true
+
+      # The digest travels to the publish job as an empty file named after
+      # it.
+      - name: Note the digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          mkdir -p "${RUNNER_TEMP}/digests"
+          touch "${RUNNER_TEMP}/digests/${DIGEST#sha256:}"
+
+      # TODO: pin to a commit SHA.
+      - name: Hand the digest on
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true
+
+  # Joins what was built under the image's names and signs it.  It runs when
+  # one architecture failed too, with the other alone.
+  publish:
+    needs: [plan, build]
+    if: ${{ !cancelled() && needs.plan.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      packages: write     # push to ghcr.io
+      id-token: write     # cosign keyless: the workflow's OIDC token
+    steps:
+      # Every digest this run has: a re-run of one failed architecture finds
+      # the other's here from the earlier attempt.
+      # TODO: pin to a commit SHA.
+      - name: Collect the digests
+        uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digest-*
+          merge-multiple: true
+
+      # TODO: pin to a commit SHA.
+      - name: Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # TODO: pin to a commit SHA.
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish under the image's names
+        id: publish
+        working-directory: ${{ runner.temp }}/digests
+        env:
+          TAGS: ${{ needs.plan.outputs.tags }}
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          set -eu
+          sources=""
+          for digest in *; do
+              [ -f "$digest" ] || { echo "no architecture was built" >&2; exit 1; }
+              sources="$sources ${IMAGE}@sha256:${digest}"
+          done
+          names=""
+          for tag in $TAGS; do
+              names="$names -t $tag"
+          done
+          docker buildx imagetools create $names $sources
+          docker buildx imagetools inspect "${IMAGE}:${VERSION}"
+          digest=$(docker buildx imagetools inspect "${IMAGE}:${VERSION}" --format '{{json .Manifest.Digest}}' | tr -d '"')
+          case "$digest" in
+              sha256:*) echo "digest=$digest" >> "$GITHUB_OUTPUT" ;;
+              *) echo "the published image has no digest: $digest" >&2; exit 1 ;;
+          esac
 
       # TODO: pin to a commit SHA.
       - name: Install cosign
@@ -138,10 +245,10 @@ jobs:
 
       # Signs the digest, not a tag, so every tag of this build is covered.
       # Verify with:
-      #   cosign verify ghcr.io/averagenative/axis:0.1.0-rc1 \
+      #   cosign verify ghcr.io/averagenative/axis:0.1.0-rc2 \
       #     --certificate-identity-regexp '^https://github.com/averagenative/axis/' \
       #     --certificate-oidc-issuer https://token.actions.githubusercontent.com
       - name: Sign
         env:
-          DIGEST: ${{ steps.build.outputs.digest }}
+          DIGEST: ${{ steps.publish.outputs.digest }}
         run: cosign sign --yes "${IMAGE}@${DIGEST}"
