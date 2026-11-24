@@ -49,11 +49,16 @@ typedef enum
  * @AXIS_SETTING_RESTART: a change is stored at once but the getters keep
  *   returning the value the daemon started with until it is restarted; the
  *   Settings page says so.  Few settings should need this.
+ * @AXIS_SETTING_ZERO_OFF: 0 is allowed besides [minimum, maximum], and
+ *   means that what the setting limits is switched off ("0: kept for
+ *   ever"); its help says so.  Only for %AXIS_SETTING_INTEGER,
+ *   %AXIS_SETTING_DURATION and %AXIS_SETTING_BYTE_SIZE.
  */
 typedef enum
 {
-	AXIS_SETTING_SECRET  = 1 << 0,
-	AXIS_SETTING_RESTART = 1 << 1
+	AXIS_SETTING_SECRET   = 1 << 0,
+	AXIS_SETTING_RESTART  = 1 << 1,
+	AXIS_SETTING_ZERO_OFF = 1 << 2
 } AxisSettingFlags;
 
 #define AXIS_SETTING_DEFAULT_MAX_STRING 4096
