@@ -39,10 +39,18 @@ You need:
      disk**
 
 3. In **Conversion profile**, choose the profile in **Convert with**.
-4. Select **Make the list**. Axis shows "The run is made: its list is being
+4. In **Files Axis keeps**, decide whether to tick **Also convert files
+   Axis keeps**. It is off by default. Axis keeps a file when you keep it by
+   hand, and keeps nearly every file after a migration from Radarr or
+   Sonarr. Without the tick, the run leaves every kept file out. With the
+   tick, a kept file is re-encoded in place after every check passes. It
+   stays kept, so Axis still does not replace it with another release. You
+   can also decide later: see
+   [Convert files that Axis keeps](#convert-files-that-axis-keeps).
+5. Select **Make the list**. Axis shows "The run is made: its list is being
    made now (this page follows it). Nothing is converted until you start
    it." The state is **Making the list**, then **Ready to start**.
-5. Read **Movies and series in this run**. Each row is a movie or a series,
+6. Read **Movies and series in this run**. Each row is a movie or a series,
    with **Rank**, **Files**, **Size now**, **After (estimated)**, **Saving**
    and **Progress**.
    The largest saving comes first. Open a row to see its files. Select
@@ -50,12 +58,12 @@ You need:
 
    <!-- screenshot: a conversion run list with series grouped and savings in the Saving column -->
 
-6. Read **Files left out, and why**. Every file Axis looked at and would not
+7. Read **Files left out, and why**. Every file Axis looked at and would not
    convert is here with its reason, for example **Converted with this
-   version already**, **Remembered as not worth it** or **Another
-   conversion of it is in flight**. The counts add up, so nothing
-   disappears without a reason.
-7. In **Start, pause, cancel or limit this run**, under **Limits**, set what
+   version already**, **Remembered as not worth it**, **Another
+   conversion of it is in flight** or **Kept: Axis does not replace this
+   file**. The counts add up, so nothing disappears without a reason.
+8. In **Start, pause, cancel or limit this run**, under **Limits**, set what
    you want, and select **Save the limits**:
 
    | Limit | What it does |
@@ -66,7 +74,7 @@ You need:
    | **A time budget, in hours** | The run asks for nothing after this long. What is in flight finishes. |
    | **Only from (HH:MM)** and **Until (HH:MM)** | A daily window, in the server's local time, such as 22:00 to 06:00. |
 
-8. Choose how to start:
+9. Choose how to start:
 
    - **Start with trials**: each file is converted and checked, and the
      converted file is kept aside to be played. The library is not touched.
@@ -74,19 +82,94 @@ You need:
      the originals will be deleted") and select it. This button is offered
      only when the profile's current version is proven.
 
-9. Watch the run page. It shows **State**, **Files**, **Movies and series
-   finished**, **Saved so far** and **Files being converted or checked
-   now**. Each file has a state:
-   **Waiting**, **Waiting (its trial passed)**, a conversion state such as
-   **Being converted on a worker**, **Trial done**, **Replaced**,
-   **Skipped**, **Failed** or **Taken out**. The card **Estimates and real
-   sizes** compares what the converted files came to with what Axis
-   estimated.
-10. To control the run, use **Pause the run** (what is in flight finishes),
+10. Watch the run page. The card **Progress of this run** follows the run
+    while it works. It shows **State**, **Files**, **Movies and series
+    finished**, **Saved so far** and **Files being converted or checked
+    now**, with progress bars:
+
+    - A bar of the files that are settled (done, skipped or failed), out of
+      the files within the run's caps, or out of the whole list when the
+      run has no cap.
+    - A bar of the space saved so far, against the saving Axis estimated
+      for those files.
+    - A bar for each file in flight. The words beside it name the stage
+      (**Waiting for a worker**, **Encoding**, **Checking**, **Replacing**
+      or **Keeping the trial aside**), the percent, the speed as a
+      multiple of real time, and an estimate of the time left.
+
+    Each bar has its words beside it, so the page reads the same without
+    the bars. A bar that shows no amount means that the work goes on and
+    the worker has not reported how far it is.
+
+    Each file has a state:
+    **Waiting**, **Waiting (its trial passed)**, a conversion state such as
+    **Being converted on a worker**, **Trial done**, **Replaced**,
+    **Skipped**, **Failed** or **Taken out**. The card **Estimates and real
+    sizes** compares what the converted files came to with what Axis
+    estimated.
+11. To control the run, use **Pause the run** (what is in flight finishes),
     **Resume the run** and **Cancel the run**. To switch a trial run to
     replacing, after you proved the version, select **Replace originals
     from now on**. The files converted as trials are converted again as
-    replacements.
+    replacements. The run keeps its choice about kept files when you switch
+    it.
+
+## Convert files that Axis keeps
+
+Axis keeps a file when you select **Keep it by hand** on it, and keeps
+every file that was migrated from Radarr or Sonarr
+([Migrate from Radarr and Sonarr](16-migrate-from-radarr-and-sonarr.md)).
+Kept means that Axis does not replace the file with another release. A
+conversion is a different thing: it re-encodes the file you have, and
+replaces it only after the ten checks pass. So a run leaves kept files out
+unless you choose to convert them, and you make that choice for each run.
+
+After a migration, a run without the choice finds little to do. Its list is
+short, and **Files left out, and why** shows most of the library under
+**Kept: Axis does not replace this file**.
+
+To add those files to a run you already made:
+
+1. Open the run. It must be **Ready to start**, **Paused** or **Finished**,
+   with no file in flight. Pause a running run first, and wait for the file
+   in flight to finish.
+2. In **Files left out, and why**, on the row **Kept: Axis does not replace
+   this file**, select **Add these N files to the run**.
+3. Wait while the state is **Making the list**. Axis decides each kept file
+   as it decided the others. A file the profile would convert joins the
+   list, after the files that were there. An episode joins its series. A
+   file that has another reason of its own, for example **Already
+   efficient**, moves to that reason. Nothing the run already converted,
+   skipped or took out changes.
+4. Start or resume the run. A run that had finished waits, paused, for you
+   to select **Resume the run**. If the run has a cap, raise it under
+   **Limits** to reach the added files.
+
+The card **What this run converts, and how** says under **Files Axis keeps**
+whether kept files are included, and who chose that and when.
+
+What the choice changes, and what it does not:
+
+- It lifts one reason only. A kept file that is left out for any other
+  reason stays out, for example **Pinned** (it has another hard link),
+  **HDR uncertain** or **Already efficient**. A kept file on an offline
+  disk waits for its disk, like any other file.
+- A kept file goes through the same conditions and the same ten checks as
+  any other file. A replacement still needs a proven profile and a safe
+  playback verdict.
+- The file stays kept after it is converted. Upgrades, searches and the
+  file's links page treat it as before.
+- Only an administrator can make the choice, and Axis logs who made it.
+- A trial of a kept file never needed the choice, because a trial replaces
+  nothing. A run still lists kept files only with the choice.
+
+To convert one kept file without a run, open the file, choose **Replace the
+original** on the **Convert this file** card, and select **Review the
+conversion**. When nothing else holds the file back, the page offers **Also
+convert files Axis keeps** as a box of its own. Tick it, tick **I
+understand: the original will be deleted**, and select **Replace the
+original**. Without the first tick, Axis refuses with "Kept: Axis does not
+replace this file."
 
 ## What the screen shows
 
@@ -120,6 +203,9 @@ Only one run runs at a time.
 | "There is no usable video conversion profile." | Open **Conversion profiles**, copy a built-in profile, and check that the profile validates. |
 | The state is **The list could not be made** | Read the message on the run page. Make the run again. |
 | "Nothing would be converted: see what is not in the list, below." | Look at **Files left out, and why**. The profile may skip everything, for example HEVC sources. |
+| Nearly every file is under **Kept: Axis does not replace this file** | The library was migrated, or you keep its files by hand. Select **Add these N files to the run** on that row. See [Convert files that Axis keeps](#convert-files-that-axis-keeps). |
+| "Pause the run to add these files." or "You can add these files once nothing of the run is in flight." | Pause the run, wait for the file in flight to finish, and then select **Add these N files to the run**. |
+| "The files Axis keeps were not added, and the run is as it was" | The job that adds them stopped. The run and its list did not change, and the choice is off again. Read the rest of the message, and then select **Add these N files to the run** again. |
 | **Start replacing originals** is missing | The version is locked. "A run with a locked version makes trials until enough have passed, then pauses for you to prove it." |
 | "Conversion work has been paused since Axis started" | Select **Resume conversion work**. |
 | "Replacing originals needs the profile's current version: this run's is not, so it can only make trials." | Make a new run with the current version. |
@@ -134,6 +220,13 @@ Only one run runs at a time.
   conversions. Those have passed trials of real movies, and have not
   replaced an original in a real library
   ([Prove a conversion profile with trials](09-prove-a-profile-with-trials.md)).
+- Converting kept files has run in the tests only: one kept movie file
+  replaced by a real encode on a generated clip, and runs on generated
+  libraries. No kept file in a real library has been converted.
+- The progress bars have been checked in the tests as HTML. They have not
+  been looked at in a browser in every theme. The speed and the time left
+  are worked out from the percent the worker reports and the time the job
+  has run. The worker does not report frames a second.
 - Planned and not built yet: a space projection per disk, other orderings,
   a per-disk read limit, standing runs, and estimates corrected from the
   results.

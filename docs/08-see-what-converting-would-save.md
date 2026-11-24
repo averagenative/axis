@@ -37,6 +37,13 @@ read-only.
    Video profiles and the music and audiobook profiles apply to different
    files, so their savings do not add up.
 
+   The estimate counts every file, including the files that Axis keeps
+   (files you keep by hand, and files that were migrated from Radarr or
+   Sonarr). A conversion run leaves kept files out unless you choose to
+   convert them, so after a migration a run's list can be much shorter than
+   this table suggests. To reach the whole saving, see
+   [Convert files that Axis keeps](10-convert-a-whole-library.md#convert-files-that-axis-keeps).
+
    <!-- screenshot: the Space savings overview with the three video profiles -->
 
 4. Read the notice above the table. At first it says **Informed guesses
