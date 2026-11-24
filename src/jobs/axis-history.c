@@ -301,7 +301,7 @@ axis_history_read_keep(
 
 	if (self->settings == NULL) {
 		keep->events_s = keep->grabs_s = keep->downloads_s = keep->imports_s =
-			(gint64)AXIS_HISTORY_DEFAULT_DAYS * DAY_S;	/* 0: kept forever */
+			(gint64)AXIS_HISTORY_DEFAULT_DAYS * DAY_S;	/* a year */
 		return;
 	}
 	keep->events_s = axis_settings_get_duration(self->settings, AXIS_HISTORY_SETTING_KEEP_EVENTS);
@@ -525,9 +525,8 @@ static const AxisSettingInfo setting_table[] = {
 		"Keep the history of what happened to movies and series for",
 		"How long the events on a movie's or a series' page and on the History pages stay before the hourly "
 		"clean-up deletes them. The 30 latest events of each movie and series, when a title was added or removed, "
-		"and everything a person did are always kept. 0: kept forever, which is the default; a year (365d) is a "
-		"reasonable choice.",
-		AXIS_SETTING_ZERO_OFF, "0",
+		"and everything a person did are always kept. The default is a year (365d); 0 keeps them forever.",
+		AXIS_SETTING_ZERO_OFF, "365d",
 		(gint64)AXIS_HISTORY_MIN_DAYS * 24 * 3600, (gint64)AXIS_HISTORY_MAX_DAYS * 24 * 3600, 0, 0, NULL
 	},
 	{
@@ -536,8 +535,8 @@ static const AxisSettingInfo setting_table[] = {
 		"How long the record of a grab that ended (imported, failed, given up) stays before the hourly clean-up "
 		"deletes it, counted from when it ended. A grab that an import, a blocklist entry or a kept event still "
 		"names, or whose download is still at its client, is kept, and so are the 5 latest of each movie and "
-		"series. 0: kept forever, which is the default; a year (365d) is a reasonable choice.",
-		AXIS_SETTING_ZERO_OFF, "0",
+		"series. The default is a year (365d); 0 keeps them forever.",
+		AXIS_SETTING_ZERO_OFF, "365d",
 		(gint64)AXIS_HISTORY_MIN_DAYS * 24 * 3600, (gint64)AXIS_HISTORY_MAX_DAYS * 24 * 3600, 0, 0, NULL
 	},
 	{
@@ -545,8 +544,8 @@ static const AxisSettingInfo setting_table[] = {
 		"Keep finished downloads on the Downloads page for",
 		"How long a download that finished, failed or was removed stays listed before the hourly clean-up deletes "
 		"it, counted from when it ended. A download that a grab or an import still names, or whose folder is still "
-		"to be cleaned up, is kept. 0: kept forever, which is the default; a year (365d) is a reasonable choice.",
-		AXIS_SETTING_ZERO_OFF, "0",
+		"to be cleaned up, is kept. The default is a year (365d); 0 keeps them forever.",
+		AXIS_SETTING_ZERO_OFF, "365d",
 		(gint64)AXIS_HISTORY_MIN_DAYS * 24 * 3600, (gint64)AXIS_HISTORY_MAX_DAYS * 24 * 3600, 0, 0, NULL
 	},
 	{
@@ -555,9 +554,8 @@ static const AxisSettingInfo setting_table[] = {
 		"How long an import that was imported or dismissed stays, with its files and decisions, before the hourly "
 		"clean-up deletes it, counted from when it ended. An import that a file in the library came by, that "
 		"retired a file to the recycle folder, that has work left at its download client, or that is the latest of "
-		"its movie or series is kept. 0: kept forever, which is the default; a year (365d) is a reasonable "
-		"choice.",
-		AXIS_SETTING_ZERO_OFF, "0",
+		"its movie or series is kept. The default is a year (365d); 0 keeps them forever.",
+		AXIS_SETTING_ZERO_OFF, "365d",
 		(gint64)AXIS_HISTORY_MIN_DAYS * 24 * 3600, (gint64)AXIS_HISTORY_MAX_DAYS * 24 * 3600, 0, 0, NULL
 	},
 	{ NULL, 0, NULL, NULL, 0, NULL, 0, 0, 0, 0, NULL }
