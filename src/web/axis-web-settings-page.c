@@ -434,6 +434,7 @@ settings_page(
 		g_autofree gchar *anchor = NULL;
 		g_autofree gchar *card_title = NULL;
 		HtmxNode *clears;
+		HtmxNode *presets;
 
 		if (table == NULL || table[0].key == NULL || !axis_module_registry_is_enabled(registry, module_id))
 			continue;
@@ -455,6 +456,10 @@ settings_page(
 			if (back != NULL)
 				ADD(card, axis_web_setup_back_note(back));
 		}
+		presets = back_module == NULL ? axis_web_settings_presets_row(self->settings, request, module_id) :
+			NULL;
+		if (presets != NULL)
+			axis_web_auth_add(card, presets);
 		axis_web_auth_add(card, axis_web_settings_form_new(self->settings, request, module_id,
 			axis_module_registry_get_name(registry, i), table, &form));
 
@@ -775,4 +780,5 @@ axis_web_settings_register_settings_page(
 		handle_save, self);
 	axis_web_route_full(web, HTMX_METHOD_POST, "/admin/settings/:module/clear",
 		AXIS_WEB_ROUTE_ADMIN, handle_clear, self);
+	axis_web_settings_register_presets(self, web);
 }

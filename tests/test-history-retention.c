@@ -1218,6 +1218,7 @@ typedef struct
 	SoupSession        *session;
 	guint16             port;
 	gchar              *admin;
+	gchar              *viewer;
 } Page;
 
 static void
@@ -1255,6 +1256,7 @@ page_setup(Page *fx, gconstpointer data)
 	g_assert_true(axis_module_registry_start_all(fx->registry, &error));
 	g_assert_no_error(error);
 	fx->admin = axis_web_auth_open_test_session(fx->auth, "root", AXIS_USER_ROLE_ADMIN);
+	fx->viewer = axis_web_auth_open_test_session(fx->auth, "viewer", AXIS_USER_ROLE_USER);
 	fx->port = axis_test_web_port(fx->server);
 	fx->session = soup_session_new_with_options("timeout", 20, "idle-timeout", 20, NULL);
 }
@@ -1281,6 +1283,7 @@ page_teardown(Page *fx, gconstpointer data)
 	axis_db_pool_free(fx->pool);
 	axis_test_db_free(fx->db);
 	g_free(fx->admin);
+	g_free(fx->viewer);
 	axis_test_log_reset();
 }
 
@@ -1372,6 +1375,163 @@ test_settings_page(Page *fx, gconstpointer data)
 	g_assert_cmpint(axis_settings_get_duration(fx->settings, AXIS_HISTORY_SETTING_KEEP_EVENTS), ==, 0);
 }
 
+/* The words of the button marked as the current choice, or NULL. */
+static gchar *
+marked_choice(const gchar *body)
+{
+	const gchar *mark = strstr(body, "preset-current");
+	const gchar *open;
+	const gchar *close;
+
+	if (mark == NULL)
+		return NULL;
+	g_assert_null(strstr(mark + 1, "preset-current"));
+	open = strchr(mark, '>');
+	g_assert_nonnull(open);
+	close = strchr(open, '<');
+	g_assert_nonnull(close);
+	return g_strndup(open + 1, (gsize)(close - open - 1));
+}
+
+static AxisTestReply
+post_preset(
+	Page        *fx,
+	const gchar *cookie,
+	const gchar *preset,
+	gboolean     with_token
+){
+	AxisTestReply page = axis_test_web_request(fx->session, fx->port, "GET", "/", cookie, NULL, NULL);
+	g_autofree gchar *token = axis_test_web_csrf_token(page.body);
+	g_autofree gchar *form = g_strdup_printf("preset=%s", preset);
+	const gchar *extra[3];
+
+	g_assert_nonnull(token);
+	axis_test_reply_clear(&page);
+	extra[0] = "X-CSRF-Token";
+	extra[1] = token;
+	extra[2] = NULL;
+	return axis_test_web_request(fx->session, fx->port, "POST", "/admin/settings/history/keep", cookie,
+		with_token ? extra : NULL, form);
+}
+
+static void
+assert_all_four(
+	Page   *fx,
+	gint64  seconds
+){
+	g_assert_cmpint(axis_settings_get_duration(fx->settings, AXIS_HISTORY_SETTING_KEEP_EVENTS), ==, seconds);
+	g_assert_cmpint(axis_settings_get_duration(fx->settings, AXIS_HISTORY_SETTING_KEEP_GRABS), ==, seconds);
+	g_assert_cmpint(axis_settings_get_duration(fx->settings, AXIS_HISTORY_SETTING_KEEP_DOWNLOADS), ==, seconds);
+	g_assert_cmpint(axis_settings_get_duration(fx->settings, AXIS_HISTORY_SETTING_KEEP_IMPORTS), ==, seconds);
+}
+
+/* Each quick choice sets all four times and is then the one marked; the
+ * four fields show the new values. */
+static void
+test_presets_set_all_four(Page *fx, gconstpointer data)
+{
+	static const struct
+	{
+		const gchar *value;
+		const gchar *label;
+		gint64       days;
+	} cases[] = {
+		{ "30d", "1 month", 30 }, { "90d", "3 months", 90 }, { "180d", "6 months", 180 },
+		{ "365d", "1 year", 365 }, { "0", "Forever", 0 },
+	};
+	AxisTestReply reply;
+	guint i;
+
+	if (fx->db == NULL)
+		return;
+	reply = axis_test_web_request(fx->session, fx->port, "GET", "/admin/settings", fx->admin, NULL, NULL);
+	assert_contains(reply.body, "Keep history for");
+	for (i = 0; i < G_N_ELEMENTS(cases); i++)
+		assert_contains(reply.body, cases[i].label);
+	axis_test_reply_clear(&reply);
+
+	for (i = 0; i < G_N_ELEMENTS(cases); i++) {
+		g_autofree gchar *marked = NULL;
+		g_autofree gchar *field = g_strdup_printf("value=\"%s\"", cases[i].value);
+
+		/* Start from a different value each time, so that a change is seen. */
+		reply = post_history(fx, "40d", "50d", "60d", "70d");
+		g_assert_cmpuint(reply.status, ==, 303);
+		axis_test_reply_clear(&reply);
+
+		reply = post_preset(fx, fx->admin, cases[i].value, TRUE);
+		g_assert_cmpuint(reply.status, ==, 303);
+		g_assert_nonnull(strstr(axis_test_reply_header(&reply, "Location"), "done=saved"));
+		axis_test_reply_clear(&reply);
+		assert_all_four(fx, cases[i].days * 86400);
+
+		reply = axis_test_web_request(fx->session, fx->port, "GET", "/admin/settings", fx->admin, NULL, NULL);
+		marked = marked_choice(reply.body);
+		g_assert_cmpstr(marked, ==, cases[i].label);
+		assert_contains(reply.body, field);
+		axis_test_reply_clear(&reply);
+	}
+}
+
+/* Mixed values, or the same value that no button offers, show Custom and
+ * mark nothing. */
+static void
+test_presets_custom(Page *fx, gconstpointer data)
+{
+	AxisTestReply reply;
+
+	if (fx->db == NULL)
+		return;
+	reply = post_history(fx, "90d", "90d", "90d", "180d");
+	g_assert_cmpuint(reply.status, ==, 303);
+	axis_test_reply_clear(&reply);
+	reply = axis_test_web_request(fx->session, fx->port, "GET", "/admin/settings", fx->admin, NULL, NULL);
+	assert_contains(reply.body, "Custom");
+	g_assert_null(strstr(reply.body, "preset-current"));
+	axis_test_reply_clear(&reply);
+
+	reply = post_history(fx, "100d", "100d", "100d", "100d");
+	g_assert_cmpuint(reply.status, ==, 303);
+	axis_test_reply_clear(&reply);
+	reply = axis_test_web_request(fx->session, fx->port, "GET", "/admin/settings", fx->admin, NULL, NULL);
+	assert_contains(reply.body, "Custom");
+	g_assert_null(strstr(reply.body, "preset-current"));
+	axis_test_reply_clear(&reply);
+}
+
+/* An unknown choice, a non-administrator and a missing token are refused,
+ * and nothing is changed. */
+static void
+test_presets_refused(Page *fx, gconstpointer data)
+{
+	static const gchar *const unknown[] = { "7d", "1y", "", "-1", "365", "0d" };
+	AxisTestReply reply;
+	guint i;
+
+	if (fx->db == NULL)
+		return;
+	reply = post_history(fx, "90d", "90d", "90d", "90d");
+	g_assert_cmpuint(reply.status, ==, 303);
+	axis_test_reply_clear(&reply);
+
+	for (i = 0; i < G_N_ELEMENTS(unknown); i++) {
+		reply = post_preset(fx, fx->admin, unknown[i], TRUE);
+		g_assert_cmpuint(reply.status, ==, 400);
+		axis_test_reply_clear(&reply);
+		assert_all_four(fx, 90 * 86400);
+	}
+
+	reply = post_preset(fx, fx->viewer, "0", TRUE);
+	g_assert_cmpuint(reply.status, ==, 403);
+	axis_test_reply_clear(&reply);
+	assert_all_four(fx, 90 * 86400);
+
+	reply = post_preset(fx, fx->admin, "0", FALSE);
+	g_assert_cmpuint(reply.status, ==, 403);
+	axis_test_reply_clear(&reply);
+	assert_all_four(fx, 90 * 86400);
+}
+
 /* ── Registration ───────────────────────────────────────────────── */
 
 #define ADD(name, func) AXIS_TEST_ADD_DB_CASE("/history/" name, Fixture, NULL, func)
@@ -1421,6 +1581,12 @@ main(int argc, char **argv)
 	g_test_add_func("/history/left-holes-words", test_left_holes_words);
 	ADD("job/follows-the-settings", test_job_follows_the_settings);
 	g_test_add("/history/settings-page", Page, NULL, page_setup, test_settings_page, page_teardown);
+	g_test_add("/history/settings-page/presets", Page, NULL, page_setup, test_presets_set_all_four,
+		page_teardown);
+	g_test_add("/history/settings-page/presets-custom", Page, NULL, page_setup, test_presets_custom,
+		page_teardown);
+	g_test_add("/history/settings-page/presets-refused", Page, NULL, page_setup, test_presets_refused,
+		page_teardown);
 
 	return g_test_run();
 }

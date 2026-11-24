@@ -55,3 +55,26 @@ A grab SHALL go only after the events and imports that named it, and a download 
 #### Scenario: A row that went is gone with what was its own
 - **WHEN** an old import that nothing names is deleted
 - **THEN** its files, its actions and its assignments go with it, and nothing else
+
+### Requirement: Quick choices set all four keeping times
+The **History settings** card SHALL have a row, "Keep history for", with one button for each of 1 month (30 days), 3 months (90 days), 6 months (180 days), 1 year (365 days) and Forever (0). A button SHALL save its value to all four keeping times in one request, which only an administrator can make and which needs the CSRF token, and the page SHALL show the card again with the new values. The button that matches all four current values SHALL be marked as the current one; when the four differ or match no button, no button SHALL be marked and the row SHALL say "Custom". A request that names any other value SHALL be refused and SHALL change nothing. The four fields SHALL stay, so that each kind can have its own time.
+
+#### Scenario: A quick choice
+- **WHEN** an administrator selects 3 months
+- **THEN** all four keeping times are 90 days, and the 3 months button is marked as the current one
+
+#### Scenario: Forever
+- **WHEN** an administrator selects Forever
+- **THEN** all four keeping times are 0, and nothing of any kind is deleted for age
+
+#### Scenario: Different times
+- **WHEN** the four keeping times are not all the same, or are the same but not one of the five choices
+- **THEN** no button is marked and the row says "Custom"
+
+#### Scenario: A value that is not offered
+- **WHEN** a request names a time that is not one of the five choices
+- **THEN** it is refused, and no keeping time changes
+
+#### Scenario: Not an administrator, or no token
+- **WHEN** a request comes from someone who is not an administrator, or without the CSRF token
+- **THEN** it is refused, and no keeping time changes
