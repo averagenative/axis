@@ -103,8 +103,7 @@ static const gchar facts_select[] =
 	" m.root_id, lr.name, lr.volume_id, v.name, v.state,"
 	" m.monitored, m.min_availability, m.added_by, " US("m.added_at") ", " US("m.last_search_at") ", "
 	US("m.next_search_at") ", m.search_floor_s,"
-	" (SELECT j.state::text FROM job j WHERE j.dedupe_key = '" AXIS_MOVIES_SEARCH_KEY_PREFIX "' || m.id::text"
-	"   AND j.state IN ('queued', 'running') LIMIT 1),"
+	" sj.state,"
 	" g.id, g.release_name, g.quality, g.manual, g.grabbed_by, " US("g.created_at") ", " US("g.completed_at") ","
 	" g.download_id, d.state, d.size_bytes, d.done_bytes, d.rate_bps, d.eta_s, d.stalled,"
 	" " US("coalesce(d.progress_at, d.sent_at, d.created_at)") ", d.problem, d.message, d.client_name, dv.name,"
@@ -159,7 +158,17 @@ static const gchar facts_select[] =
 	" LEFT JOIN LATERAL (SELECT ii.id, ii.state, ii.reason, ii.reason_text FROM import ii"
 	"   WHERE g.download_id IS NOT NULL AND ii.download_id = g.download_id ORDER BY ii.id DESC LIMIT 1) idl ON true"
 	" LEFT JOIN LATERAL (SELECT ii.id, ii.state, ii.reason, ii.reason_text FROM import ii"
-	"   WHERE ii.module = '" AXIS_MOVIES_MODULE_ID "' AND ii.owner_id = m.id ORDER BY ii.id DESC LIMIT 1) iow ON true";
+	"   WHERE ii.module = '" AXIS_MOVIES_MODULE_ID "' AND ii.owner_id = m.id ORDER BY ii.id DESC LIMIT 1) iow ON true"
+	/*
+	 * The searches queued or running, read once and joined (a key has one
+	 * such job at most: job_dedupe_key_idx).  Looked up once a film, the
+	 * planner chose job_live_idx for it and read every job that waits or
+	 * runs for each film: 0.06 ms a film with 300 such jobs, 1.2 s of the
+	 * scheduler's statement for 20,000 films.
+	 */
+	" LEFT JOIN (SELECT jj.dedupe_key, min(jj.state::text) AS state FROM job jj WHERE jj.dedupe_key IS NOT NULL"
+	"   AND jj.state IN ('queued', 'running') AND jj.dedupe_key LIKE '" AXIS_MOVIES_SEARCH_KEY_PREFIX "%'"
+	"   GROUP BY jj.dedupe_key) sj ON sj.dedupe_key = '" AXIS_MOVIES_SEARCH_KEY_PREFIX "' || m.id::text";
 
 static const gchar facts_order[] = " ORDER BY lower(t.title), t.year, m.id";
 
