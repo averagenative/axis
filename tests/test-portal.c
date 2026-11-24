@@ -786,14 +786,14 @@ static void
 test_config_service_links(void)
 {
 	static const gchar *const links[] = {
-		"AXIS_PORTAL_SERVICE_HOST", "10.96.0.7",
+		"AXIS_PORTAL_SERVICE_HOST", "10.0.0.7",
 		"AXIS_PORTAL_SERVICE_PORT", "7802",
 		"AXIS_PORTAL_SERVICE_PORT_HTTP", "7802",
-		"AXIS_PORTAL_PORT", "tcp://10.96.0.7:7802",
-		"AXIS_PORTAL_PORT_7802_TCP", "tcp://10.96.0.7:7802",
+		"AXIS_PORTAL_PORT", "tcp://10.0.0.7:7802",
+		"AXIS_PORTAL_PORT_7802_TCP", "tcp://10.0.0.7:7802",
 		"AXIS_PORTAL_PORT_7802_TCP_PROTO", "tcp",
 		"AXIS_PORTAL_PORT_7802_TCP_PORT", "7802",
-		"AXIS_PORTAL_PORT_7802_TCP_ADDR", "10.96.0.7",
+		"AXIS_PORTAL_PORT_7802_TCP_ADDR", "10.0.0.7",
 		"AXIS_PORTAL_PORT_53_UDP", "udp://[fd00::7]:53",
 		NULL
 	};
@@ -810,7 +810,7 @@ test_config_service_links(void)
 		{ "AXIS_PORTAL_PORT_7802_TCP_PROTO", "http", "AXIS_PORTAL_PORT_7802_TCP_PROTO, which" },
 		{ "AXIS_PORTAL_PORT_99999_TCP_PORT", "7802", "AXIS_PORTAL_PORT_99999_TCP_PORT, which" },
 		/* Another Service's links, and a setting that is not one. */
-		{ "AXIS_PORTAL_API_SERVICE_HOST", "10.96.0.8", "enableServiceLinks: false" },
+		{ "AXIS_PORTAL_API_SERVICE_HOST", "10.0.0.9", "enableServiceLinks: false" },
 		{ "AXIS_PORTAL_DATABASE_URL", "postgresql://axis@db/axis", "the environment has AXIS_PORTAL_DATABASE_URL" },
 		{ "AXIS_PORTAL_TIMEOUT_2", "zz-five", "the environment has AXIS_PORTAL_TIMEOUT_2" },
 		/* A name that might be a token pasted by mistake is not printed. */
