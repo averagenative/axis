@@ -9,12 +9,12 @@ never types anything into a request, and never chooses a library folder or a
 quality profile. A request waits for an administrator, and while it waits
 Axis adds nothing and searches for nothing.
 
-Requests work inside Axis's own pages, for the accounts that you create. A
-person with a **User** account still sees the other pages of Axis. A separate
-request portal for people outside your network is planned. Axis already has
-the part of it that runs inside Axis: the **Requester** role and the page
-**Request portal**. The portal program itself is not part of Axis yet. See
-[Prepare for the request portal](#prepare-for-the-request-portal-administrators).
+Requests work in two places. Inside Axis's own pages, a person with a
+**User** account asks with a **Request** button, and still sees the other
+pages of Axis. In the request portal, a separate small site, a person with a
+**Requester** account can ask and can see nothing else. The request portal
+is optional and has not been reviewed for exposure to the internet. See
+[Set up the request portal](#set-up-the-request-portal-administrators).
 
 ## Before you begin
 
@@ -204,14 +204,97 @@ the requests of that account that still wait. If another person follows one
 of them, that person takes it over as for a withdrawal. Approved requests
 and the titles that they added stay as they are.
 
-## Prepare for the request portal (administrators)
+## Set up the request portal (administrators)
 
-The request portal is a separate program for people outside your network. It
-is not part of Axis yet. What follows is the part that Axis has today. You do
-not need any of it to use requests inside Axis's own pages.
+The request portal is a separate program, `axis-portal`, with pages of its
+own: a login, a search, a page for each title, and **My requests**. A person
+who uses it needs a **Requester** account, and sees nothing else of Axis. You
+do not need the portal to use requests inside Axis's own pages.
 
-**Do not make any of this reachable from the internet.** The portal's
-interface to Axis has not been reviewed for that, and no program uses it yet.
+**The request portal has not been reviewed for exposure to the internet.**
+The portal, its interface to Axis and the **Requester** role have not had
+their independent security review. Until the deployment guide says that the
+review has passed, let the portal be reached only from a network you trust,
+such as your home network or a VPN. Do not open it to the internet.
+
+The portal runs in a container of its own, behind a reverse proxy with
+HTTPS. It holds one secret, its token, and has no access to the database or
+to your media. Allow about 30 minutes for the setup.
+
+### Before you begin
+
+- Axis runs in containers from one of the deployment examples: Traefik with
+  Compose, Kubernetes, or Podman Quadlet. The minimal and full-stack Compose
+  examples have no reverse proxy with HTTPS, so they have no portal.
+- Your image contains `axis-portal`: a release after 0.1.0-rc2, or an image
+  that you build with `make container`.
+- You have a host name for the portal, such as `requests.example.com`,
+  besides the one for Axis.
+- You set the defaults for requests. See [Set where approved titles
+  go](#set-where-approved-titles-go-administrators).
+
+### The steps
+
+Each deployment example has the commands for its own files. The steps are
+the same in all of them:
+
+1. Switch on the daemon's portal listener, and start Axis again. The example
+   says which lines to add. On the **Request portal** page (**System**, then
+   **Request portal**), **The portal's listener** then says "On: the portal
+   API is answered on port 7801".
+2. On that page, select **Make a token**. Axis shows the token once. Copy
+   it.
+3. Give the token to the portal as a secret file. The example says where the
+   file goes. Never put the token in a command line or in a compose file.
+4. Create a requester account. See [The Requester role](#the-requester-role).
+   Give the username and the password to the person.
+5. Start the portal.
+6. Open `https://requests.example.com/login`, with your host name. The page
+   shows a **Username** field and a **Password** field. Log in as the
+   requester.
+
+The commands for each example:
+
+- [Traefik with Compose](../deploy/examples/traefik/README.md#the-request-portal)
+- [Kubernetes](../deploy/examples/kubernetes/README.md#the-request-portal)
+- [Podman Quadlet](../deploy/examples/quadlet/README.md#the-request-portal)
+
+When you finish, you have a requester account, a portal token, the portal
+running, and a login page at your own address.
+
+[The request portal](../deploy/README.md#the-request-portal) in the
+deployment guide explains the networks, what the reverse proxy must do, and
+what someone who takes over the portal can and cannot do.
+
+### What a requester does in the portal
+
+1. Open the portal's address and log in.
+2. Search for a title with the search box, or pick one from the lists on the
+   first page.
+3. Open the title. The page shows its state, as in [Ask for a
+   movie](#ask-for-a-movie-users).
+4. Select **Request**. For a series, choose the whole series, the first
+   season, the latest season, or the seasons that you tick.
+5. Open **My requests** to see what became of each request. To take back a
+   request that still waits, select **Withdraw**.
+
+A requester cannot change a password in the portal. You set it on the
+**Users** page.
+
+### Two rules for administrators
+
+- **Never type an administrator's password into the portal.** The portal's
+  login accepts requesters only. Whoever controls the portal sees every
+  password that is typed into it.
+- **Axis refuses a login from the portal's address.** For 24 hours after the
+  portal last called Axis, Axis refuses a login at its own login page from
+  the address that the portal called from. Axis answers as for a wrong
+  password. A session that you already have keeps working. If you are
+  refused although your password is right, the Axis log has a line that
+  begins with `login refused: client=` and says that the address presented a
+  portal token. Log in from another address. If the portal and your browser
+  reach Axis from the same address, stop the portal, restart Axis, and log
+  in.
 
 ### The Requester role
 
@@ -251,7 +334,7 @@ person](#set-limits-and-automatic-approval-for-a-person-administrators).
 
 ### The Request portal page
 
-Open **System**, then **Request portal**. The page shows two things.
+Open **System**, then **Request portal**. The page shows three things.
 
 - **The portal's listener** says whether Axis answers the portal's interface.
   It is off by default. To switch it on, set `portal_listen_port` in the
@@ -263,9 +346,15 @@ Open **System**, then **Request portal**. The page shows two things.
   unless you set `portal_listen_host` (or `AXIS_PORTAL_LISTEN_HOST`) to an
   address of its own. Use the address that Axis has on the network it shares
   with the portal alone, so that nothing else on your network reaches it.
+- **Limits** shows what the requests made through the portal count today
+  against the daily limit, how many logins through the portal failed in the
+  last hour, and how often each of the two limits was reached in the last 24
+  hours. Axis keeps these counts of reached limits in memory, so a restart of
+  Axis clears them.
 - **Tokens** lists the tokens that a portal identifies itself with. A token
   opens the portal's interface and nothing else, and by itself it acts as no
-  one: every action also needs the session of a requester who logged in.
+  one: every action also needs the session of a requester who logged in. The
+  **From** column shows the address that last used each token.
 
 To make a token, select **Make a token**. Axis shows the token once. Copy it
 then: Axis keeps only a hash of it and cannot show it again. At most four
@@ -291,6 +380,18 @@ everyone.
 Axis also limits how often a portal can call it: 600 calls a minute for a
 token and 120 for each person. Axis tells a portal that calls more often to
 wait.
+
+Axis counts the logins that fail through the portal. After 30 failures in an
+hour, over all usernames, Axis admits one login a minute from a browser that
+it does not remember, until the hour has passed. A browser that logged in
+before is not held to this limit.
+
+When the portal reaches the daily limit for requests or the hourly limit for
+failed logins, Axis shows a notice under **Needs attention**, in the group
+**Worth a look**, for 24 hours. The notice says which limit was reached and
+how often, and links to the **Request portal** page. It names no account. A
+limit that is reached again and again can mean that someone guesses
+passwords, or that someone controls the portal.
 
 Axis hides some titles from requesters: a title that Axis stored before this
 version, and a title that came from an import or from a list that you
@@ -329,9 +430,19 @@ ask for the title either.
   not been tried on a phone.
 - The **Requester** role, the tokens and the portal's interface are covered
   by the test suite, under the sanitizers: what a token opens, what a
-  requester's session opens, and what each answer holds. They have not been
-  reviewed by someone who did not write them, and no portal program has used
-  them.
-- The request portal for people outside your network is not built. Do not
-  expose Axis itself, or the portal's port, to the internet to let people ask
-  for titles.
+  requester's session opens, and what each answer holds.
+- The portal program is covered by the test suite, under the sanitizers,
+  against a stand-in for Axis and against a real Axis: its pages, its
+  cookies, its limits, and what it sends on.
+- The setup steps were run once by hand with rootless Podman: the image was
+  built, the Traefik example was started with the portal, a requester logged
+  in at the portal's host name through Traefik over HTTPS and asked for a
+  movie, and the request waited on the **Requests** page. From the portal's
+  container, PostgreSQL and the daemon's main port could not be reached.
+- Not run: Docker, the Kubernetes manifests of the portal on a cluster, a
+  reverse proxy in front of the Quadlet example, a certificate from a real
+  certificate authority, a real browser, and a phone.
+- The request portal has not been reviewed for exposure to the internet.
+  Nobody who did not write it has tried to break it. Let it be reached only
+  from a network you trust. Do not expose Axis itself, or the daemon's portal
+  port, to the internet either.
