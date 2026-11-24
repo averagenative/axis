@@ -31,7 +31,8 @@ and `linux/arm64`.
 ### Published images
 
 Images are built and pushed by the repository's one GitHub Actions workflow,
-`.github/workflows/images.yml`, when a version tag is pushed. A release
+`.github/workflows/images.yml`, when a version tag is pushed and once a
+night. A release
 candidate (a tag with a suffix, such as `v0.1.0-rc2`) and a final release
 (such as `v0.1.2`) get different tags:
 
@@ -42,14 +43,15 @@ candidate (a tag with a suffix, such as `v0.1.0-rc2`) and a final release
 | `0.1.2` | a final release | never | you want exactly this build (recommended for a server) |
 | `0.1` | a final release | to each new `0.1.x` | you want fixes without changes in behaviour |
 | `latest` | a final release | to every final release | trying things out |
+| `nightly` | the nightly build of the main branch | every night that main has a new commit | trying a change before it is released; never for a server you rely on |
 
 A release candidate never moves `0.1` or `latest`. A workflow run that
 someone starts by hand at a commit without a version tag publishes
 `sha-<commit>` only.
 
-The first published image is from the tag `v0.1.0-rc2` (`v0.1.0-rc1` has no image: its build failed). From the moment its workflow run
-finishes, the image exists as `0.1.0-rc2` and `rc`, and the examples name
-`0.1.0-rc2`. The tags `0.1.0`, `0.1` and `latest` don't exist until the first
+The first published image is from the tag `v0.1.0-rc2` (`v0.1.0-rc1` has no
+image: its build failed). It exists as `0.1.0-rc2` and `rc`, and the examples
+name `0.1.0-rc2`. The tags `0.1.0`, `0.1` and `latest` don't exist until the first
 final release. Before the run finishes, or to run your own build, build the
 image where you run it, or for both architectures on machines of your own
 ([below](#building-the-images-yourself)).

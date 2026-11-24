@@ -4,6 +4,9 @@
 # It builds images, and nothing else.  Nothing here runs on a pull request or
 # a branch push.
 #
+# Every night it also builds the main branch and publishes it as `nightly`,
+# unless main has no commit from the last day.
+#
 # On a version tag (v1.2.3, or a pre-release such as v1.2.3-rc1), or when
 # started by hand from the Actions tab, it builds deploy/Containerfile for
 # linux/amd64 and linux/arm64, each in a job of its own on a runner of that
@@ -27,6 +30,8 @@
 #   started by hand    ->  on a version tag, what a push of that tag gives;
 #                          anywhere else sha-<commit> only, the only name
 #                          such a build can have
+#   the nightly build  ->  nightly only (the main branch as it was that
+#                          night; the image's revision label names the commit)
 #
 # The version in the tag must be config.mk's: the image build stops when the
 # program it built reports another version (deploy/Containerfile).
@@ -44,6 +49,9 @@ on:
     tags:
       - "v[0-9]+.[0-9]+.[0-9]+"
       - "v[0-9]+.[0-9]+.[0-9]+-*"
+  # 07:17 UTC: off the hour, when scheduled runs start late.
+  schedule:
+    - cron: "17 7 * * *"
   workflow_dispatch:
     inputs:
       architectures:
@@ -70,19 +78,39 @@ jobs:
   plan:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
-    permissions: {}
+    permissions:
+      contents: read      # read the head commit's date
     outputs:
+      build: ${{ steps.new.outputs.build }}
       version: ${{ steps.meta.outputs.version }}
       tags: ${{ steps.meta.outputs.tags }}
       labels: ${{ steps.meta.outputs.labels }}
       day: ${{ steps.day.outputs.day }}
     steps:
+      # A nightly run builds only when main's head commit is from the last
+      # day (26 hours, to allow a late start); every other run builds.
+      - name: Is there anything new
+        id: new
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          build=true
+          if [ "${GITHUB_EVENT_NAME}" = schedule ]; then
+              when=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}" --jq .commit.committer.date)
+              age=$(( $(date -u +%s) - $(date -u -d "$when" +%s) ))
+              echo "the head commit is ${age} seconds old"
+              [ "$age" -le 93600 ] || build=false
+          fi
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+
       # The tag policy in the header.  type=semver gives nothing off a tag,
       # and leaves {{major}}.{{minor}} out for a pre-release by itself; rc
       # and latest are told apart by the hyphen in the tag's name; the commit
       # names a build only where no version tag does.  The first line is
       # also the `version` output, which the builds below are given:
-      # 1.2.3-rc1 or 1.2.3 on a tag, sha-<commit> anywhere else.
+      # 1.2.3-rc1 or 1.2.3 on a tag, nightly at night, sha-<commit> anywhere
+      # else.
       # TODO: pin to a commit SHA.
       - name: Tags and labels
         id: meta
@@ -96,7 +124,8 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=rc,enable=${{ startsWith(github.ref, 'refs/tags/v') && contains(github.ref_name, '-') }}
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
-            type=sha,format=short,enable=${{ !startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=nightly,enable=${{ github.event_name == 'schedule' }}
+            type=sha,format=short,enable=${{ github.event_name != 'schedule' && !startsWith(github.ref, 'refs/tags/v') }}
           labels: |
             org.opencontainers.image.title=Axis
             org.opencontainers.image.licenses=AGPL-3.0-or-later
@@ -114,6 +143,7 @@ jobs:
   # gives it one.
   build:
     needs: plan
+    if: ${{ needs.plan.outputs.build == 'true' }}
     strategy:
       fail-fast: false
       matrix:
@@ -185,7 +215,7 @@ jobs:
   # one architecture failed too, with the other alone.
   publish:
     needs: [plan, build]
-    if: ${{ !cancelled() && needs.plan.result == 'success' }}
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.build == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:

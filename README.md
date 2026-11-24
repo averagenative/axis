@@ -110,11 +110,10 @@ You need Linux, `git`, and Docker with the Compose plugin or Podman with
 `podman compose`.
 
 The image is `ghcr.io/averagenative/axis`. The release candidate is published
-under the tag `0.1.0-rc2` and under the moving tag `rc`, by a workflow that
-runs when the tag `v0.1.0-rc2` is pushed to this repository. The image exists
-only after that workflow run has finished. If the pull in step 2 says that
-the image is not found, build the image yourself instead. The tags `0.1` and
-`latest` appear with the first final release.
+under the tag `0.1.0-rc2` and under the moving tag `rc`, for amd64 and
+arm64. The tags `0.1` and `latest` appear with the first final release.
+The tag `nightly` is the main branch as it was last night, for trying a
+change before it is released.
 
 1. Get the source, which holds the example files:
 
