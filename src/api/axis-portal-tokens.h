@@ -98,8 +98,9 @@ axis_portal_tokens_lookup(
  *
  * Remembers that the token @id was used now, from @address.
  *
- * Returns: %TRUE when that should be written to the database (at most once a
- *   minute for a token, and when the address changed)
+ * Returns: %TRUE when that should be written to the database: at most once a
+ *   minute for a token, whatever the address (the address written is the one
+ *   of the request that writes)
  */
 gboolean
 axis_portal_tokens_note_use(

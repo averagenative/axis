@@ -63,6 +63,84 @@ cached_free(gpointer data)
 	g_free(cached);
 }
 
+/*
+ * A budget of so many operations a minute for each key (a token's id, a
+ * person's), in bounded memory: for each key one time, when its budget would
+ * be whole again (the generic cell rate algorithm).  @limit operations may
+ * come at once, and then one each minute / @limit.  Main loop.
+ */
+typedef struct
+{
+	GHashTable *keys;	/* gint64* key -> gint64* the time its budget is whole */
+	guint       limit;
+} Budget;
+
+static void
+budget_init(
+	Budget *budget,
+	guint   limit
+){
+	budget->keys = g_hash_table_new_full(g_int64_hash, g_int64_equal, g_free, g_free);
+	budget->limit = limit;
+}
+
+static void
+budget_clear(Budget *budget)
+{
+	g_clear_pointer(&budget->keys, g_hash_table_unref);
+}
+
+/* Takes one operation from @key's budget: 0, or how long until it may
+ * (and nothing is taken). */
+static gint64
+budget_take(
+	Budget *budget,
+	gint64  key,
+	gint64  now
+){
+	gint64 interval = MINUTE_US / budget->limit;
+	gint64 tolerance = MINUTE_US - interval;
+	gint64 *whole = g_hash_table_lookup(budget->keys, &key);
+	gint64 next;
+
+	if (whole == NULL) {
+		gint64 *stored = g_new(gint64, 1);
+
+		/* Room: a key whose budget is whole again says nothing, and goes.
+		 * While every key is in use a new one waits: the table never grows
+		 * past its bound, and no key loses what it has used. */
+		if (g_hash_table_size(budget->keys) >= AXIS_PORTAL_BUDGET_MAX_KEYS) {
+			GHashTableIter iter;
+			gpointer value;
+
+			g_hash_table_iter_init(&iter, budget->keys);
+			while (g_hash_table_iter_next(&iter, NULL, &value)) {
+				if (*(const gint64 *)value <= now)
+					g_hash_table_iter_remove(&iter);
+			}
+		}
+		if (g_hash_table_size(budget->keys) >= AXIS_PORTAL_BUDGET_MAX_KEYS) {
+			g_free(stored);
+			return interval;
+		}
+		*stored = key;
+		whole = g_new(gint64, 1);
+		*whole = now;
+		g_hash_table_insert(budget->keys, stored, whole);
+	}
+	next = MAX(*whole, now);
+	if (next - now > tolerance)
+		return next - now - tolerance;
+	*whole = next + interval;
+	return 0;
+}
+
+static gint64
+wait_seconds(gint64 wait_us)
+{
+	return MAX((wait_us + G_USEC_PER_SEC - 1) / G_USEC_PER_SEC, 1);
+}
+
 struct _AxisPortalApi
 {
 	AxisDbPool               *pool;
@@ -75,11 +153,18 @@ struct _AxisPortalApi
 	AxisPortalApiServingFunc  serving;
 	gpointer                  serving_data;
 	gint64                    time_offset_us;
+	gint64                    frozen_us;	/* tests: the clock stopped there; 0: it runs */
+	GThreadPool              *threads;	/* the operations' own */
 	guint                     pending;	/* requests being handled */
 	gboolean                  stopping;
+	/* Every operation's budgets (main loop). */
+	Budget                    by_token;
+	Budget                    by_person;
+	gint64                    token_noted_us;	/* when a refusal by one was last written down */
+	gint64                    person_noted_us;
 	/* The search budget (main loop). */
 	GQueue                    searches;	/* gint64*: when each search that asked the provider was */
-	GHashTable               *by_person;	/* gint64* account -> GQueue* of gint64* */
+	GHashTable               *searches_by_person;	/* gint64* account -> GQueue* of gint64* */
 	/* The searches kept (any thread). */
 	GMutex                    cache_lock;
 	GHashTable               *cache;	/* (cache_lock) key -> Cached* */
@@ -104,7 +189,7 @@ gate_free(gpointer data)
 static gint64
 now_monotonic(AxisPortalApi *self)
 {
-	return g_get_monotonic_time() + self->time_offset_us;
+	return self->frozen_us != 0 ? self->frozen_us : g_get_monotonic_time() + self->time_offset_us;
 }
 
 /* ── Answers ────────────────────────────────────────────────────── */
@@ -241,12 +326,6 @@ portal_gate(
 		htmx_context_set_response(context, busy());
 		return;
 	}
-	wait = axis_login_throttle_check(self->by_address, address, now);
-	if (wait > 0) {
-		htmx_context_set_response(context, refusal(429, "throttled", "too many wrong tokens from this address; wait",
-			MAX((wait + G_USEC_PER_SEC - 1) / G_USEC_PER_SEC, 1)));
-		return;
-	}
 	/* Nothing is taken from an address: not a token, not anything else. */
 	if (message == NULL || soup_server_message_get_uri(message) == NULL ||
 	    g_uri_get_query(soup_server_message_get_uri(message)) != NULL) {
@@ -255,13 +334,22 @@ portal_gate(
 	}
 
 	/* As a list: two Authorization headers join with a comma, which makes
-	 * no well-formed token. */
+	 * no well-formed token.  The token is looked up first: a valid one is
+	 * never held to its address's count of wrong ones, which anyone who
+	 * shares the address (a proxy, a gateway) could fill. */
 	authorization = soup_message_headers_get_list(soup_server_message_get_request_headers(message), "Authorization");
 	if (authorization != NULL && g_ascii_strncasecmp(authorization, "Bearer ", 7) == 0)
 		token = authorization + 7;
 	if (token == NULL || !axis_portal_tokens_lookup(self->tokens, token, &id)) {
-		HtmxResponse *response = refusal(401, "unauthorized", "a portal token is required", 0);
+		HtmxResponse *response;
 
+		wait = axis_login_throttle_check(self->by_address, address, now);
+		if (wait > 0) {
+			htmx_context_set_response(context, refusal(429, "throttled", "too many wrong tokens from this address; "
+				"wait", wait_seconds(wait)));
+			return;
+		}
+		response = refusal(401, "unauthorized", "a portal token is required", 0);
 		if (token != NULL) {
 			axis_login_throttle_fail(self->by_address, address, now);
 			/* The token is never written anywhere; the address is. */
@@ -270,6 +358,21 @@ portal_gate(
 		}
 		htmx_response_add_header(response, "WWW-Authenticate", "Bearer");
 		htmx_context_set_response(context, response);
+		return;
+	}
+	/* The token's budget: every request that presents it, whatever it asks,
+	 * so that a portal in the wrong hands cannot keep the daemon busy. */
+	wait = budget_take(&self->by_token, id, now);
+	if (wait > 0) {
+		/* Written down once a minute at most: a flood is not a flood of
+		 * lines. */
+		if (self->token_noted_us == 0 || now - self->token_noted_us >= MINUTE_US) {
+			self->token_noted_us = now;
+			g_message("portal API: a portal token used its budget of %d operations a minute; its requests are "
+				"refused for now", AXIS_PORTAL_TOKEN_OPS_A_MINUTE);
+		}
+		htmx_context_set_response(context, refusal(429, "token-limit", "too many requests with this token; wait",
+			wait_seconds(wait)));
 		return;
 	}
 
@@ -319,6 +422,7 @@ portal_gate(
 typedef struct
 {
 	AxisPortalApi     *api;
+	GMainContext      *context;	/* where the answer is given */
 	AxisPortalOp       op;
 	AxisPortalRequest *req;
 	gint64             user_id;
@@ -343,6 +447,7 @@ static void
 work_free(Work *work)
 {
 	g_clear_object(&work->deferred);
+	g_clear_pointer(&work->context, g_main_context_unref);
 	axis_portal_request_free(work->req);
 	g_free(work->user_name);
 	g_free(work->address);
@@ -440,6 +545,9 @@ reply_requests_error(
 		break;
 	case AXIS_REQUESTS_ERROR_PORTAL_FULL:
 		reply_error(work, 429, "portal-limit", error->message, until_tomorrow());
+		break;
+	case AXIS_REQUESTS_ERROR_PORTAL_SHARE:
+		reply_error(work, 429, "portal-share", error->message, until_tomorrow());
 		break;
 	case AXIS_REQUESTS_ERROR_KIND_OFF:
 		reply_error(work, 409, "kind-off", error->message, 0);
@@ -581,10 +689,40 @@ id_array_text(const GArray *ids)
 	return g_string_free(text, FALSE);
 }
 
+/* The ids of @sql's first column, for the one parameter @ids, as a set. */
+static gboolean
+id_set(
+	AxisPortalApi  *self,
+	const gchar    *sql,
+	const GArray   *ids,
+	GHashTable    **set,
+	GError        **error
+){
+	g_autofree gchar *array = id_array_text(ids);
+	g_autoptr(AxisDbResult) result = NULL;
+	const gchar *params[] = { array };
+	guint i;
+
+	*set = g_hash_table_new_full(g_int64_hash, g_int64_equal, g_free, NULL);
+	if (ids->len == 0)
+		return TRUE;
+	if (!axis_db_pool_exec(self->pool, sql, 1, params, &result, error))
+		return FALSE;
+	for (i = 0; i < axis_db_result_get_n_rows(result); i++) {
+		gint64 *id = g_new0(gint64, 1);
+
+		axis_db_result_get_int64(result, i, 0, id);
+		g_hash_table_add(*set, id);
+	}
+	return TRUE;
+}
+
 /*
- * Which of @ids are titles their provider marks as adult: none of them is
- * ever in an answer, however it came to be stored and whatever the search's
- * own setting says.  Read from the record itself, here, for every answer.
+ * Which of @ids are titles their provider marks as adult, or whose mark is
+ * not known yet (stored before migration 0084, or from no provider's answer):
+ * none of them is ever in an answer, however it came to be stored and
+ * whatever the search's own setting says.  Read from the record itself, here,
+ * for every answer.
  */
 static gboolean
 adult_titles(
@@ -593,24 +731,24 @@ adult_titles(
 	GHashTable    **adult,
 	GError        **error
 ){
-	g_autofree gchar *array = id_array_text(ids);
-	g_autoptr(AxisDbResult) result = NULL;
-	const gchar *params[] = { array };
-	guint i;
+	return id_set(self, "SELECT id FROM meta_title WHERE id = ANY ($1::bigint[]) AND adult IS NOT FALSE", ids, adult,
+		error);
+}
 
-	*adult = g_hash_table_new_full(g_int64_hash, g_int64_equal, g_free, NULL);
-	if (ids->len == 0)
-		return TRUE;
-	if (!axis_db_pool_exec(self->pool, "SELECT id FROM meta_title WHERE id = ANY ($1::bigint[]) AND adult", 1, params,
-	                       &result, error))
+/* Whether a stored title may be in an answer at all: its mark is known and
+ * says not adult, and its kind can be asked for now. */
+static gboolean
+title_shown(
+	AxisPortalApi       *self,
+	const AxisMetaTitle *title
+){
+	if (title->adult || !title->adult_known)
 		return FALSE;
-	for (i = 0; i < axis_db_result_get_n_rows(result); i++) {
-		gint64 *id = g_new0(gint64, 1);
-
-		axis_db_result_get_int64(result, i, 0, id);
-		g_hash_table_add(*adult, id);
-	}
-	return TRUE;
+	if (title->kind == AXIS_META_KIND_FILM)
+		return axis_requests_kind_on(self->requests, AXIS_REQUEST_MOVIE);
+	if (title->kind == AXIS_META_KIND_SERIES)
+		return axis_requests_kind_on(self->requests, AXIS_REQUEST_SERIES);
+	return FALSE;
 }
 
 /*
@@ -631,6 +769,7 @@ write_titles(
 	g_autoptr(GArray) ids = g_array_new(FALSE, FALSE, sizeof(gint64));
 	g_autoptr(GHashTable) states = NULL;
 	g_autoptr(GHashTable) adult = NULL;
+	g_autoptr(GHashTable) requesters = NULL;
 	g_autoptr(GPtrArray) record_seasons = NULL;
 	g_autofree const gchar **providers = g_new0(const gchar *, titles->len + 1);
 	g_autofree const gchar **refs = g_new0(const gchar *, titles->len + 1);
@@ -652,6 +791,25 @@ write_titles(
 	if (!adult_titles(self, ids, &adult, error) ||
 	    !axis_requests_title_states(self->requests, ids, &states, error))
 		return FALSE;
+	/* Whose names an answer may carry: a requester's only.  The name of an
+	 * account that can log in to the engine's interface (an ordinary user's,
+	 * an administrator's) is never handed to the portal. */
+	if (show_who) {
+		g_autoptr(GArray) makers = g_array_new(FALSE, FALSE, sizeof(gint64));
+		GHashTableIter iter;
+		gpointer value;
+
+		g_hash_table_iter_init(&iter, states);
+		while (g_hash_table_iter_next(&iter, NULL, &value)) {
+			const AxisRequestTitleState *state = value;
+
+			if (state->asked_by_id != 0)
+				g_array_append_val(makers, state->asked_by_id);
+		}
+		if (!id_set(self, "SELECT id FROM app_user WHERE id = ANY ($1::bigint[]) AND role = 'requester'", makers,
+		            &requesters, error))
+			return FALSE;
+	}
 	/* Whether the daemon holds each poster.  Nothing is fetched on a
 	 * requester's account. */
 	if (titles->len > 0)
@@ -663,9 +821,9 @@ write_titles(
 		AxisRequestTitleView view;
 		AxisPortalTitle *item;
 
-		if (g_hash_table_contains(adult, &title->id) || title->adult)
-			continue;
-		if (title->kind != AXIS_META_KIND_FILM && title->kind != AXIS_META_KIND_SERIES)
+		/* Marked, not known, or of a kind that cannot be asked for: as if
+		 * it did not exist. */
+		if (g_hash_table_contains(adult, &title->id) || !title_shown(self, title))
 			continue;
 		item = &out[n++];
 		item->id = title->id;
@@ -675,9 +833,10 @@ write_titles(
 		item->overview = title->overview != NULL ? title->overview : "";
 		item->has_poster = hashes[i] != NULL;
 		item->state = title_state_name(state != NULL ? state->state : AXIS_REQUEST_STATE_CAN);
-		/* A name only while the setting shows names to everyone who asks:
-		 * with it off, no answer carries one. */
-		if (state != NULL && show_who) {
+		/* A name only while the setting shows names to everyone who asks
+		 * (with it off, no answer carries one), and only a requester's. */
+		if (state != NULL && show_who && requesters != NULL &&
+		    g_hash_table_contains(requesters, &state->asked_by_id)) {
 			axis_request_title_view(state, work->user_id, FALSE, TRUE, &view);
 			item->asked_by = view.asked_by;
 		}
@@ -1064,7 +1223,8 @@ op_title(Work *work)
 		reply_busy(work, error);
 		return;
 	}
-	/* A title the adult filter excludes is one that does not exist. */
+	/* A title the adult filter excludes (marked, or its mark not known), or
+	 * of a kind that cannot be asked for, is one that does not exist. */
 	if (written == 0) {
 		g_free(axis_portal_writer_finish(w));
 		reply_not_found(work);
@@ -1095,7 +1255,10 @@ op_art(Work *work)
 		reply_busy(work, error);
 		return;
 	}
-	if (title == NULL || title->adult || g_hash_table_contains(adult, &work->req->id) || title->poster_ref == NULL) {
+	/* Marked, not known, or of a kind that cannot be asked for: as for a
+	 * number never given. */
+	if (title == NULL || !title_shown(self, title) || g_hash_table_contains(adult, &work->req->id) ||
+	    title->poster_ref == NULL) {
 		reply_not_found(work);
 		return;
 	}
@@ -1240,14 +1403,16 @@ note_token(Work *work)
 		g_debug("portal API: a token's use could not be written down: %s", error->message);
 }
 
+static gboolean work_finished(gpointer user_data);
+
+/* On a thread of the API's own pool. */
 static void
 work_thread(
-	GTask        *task,
-	gpointer      source,
-	gpointer      task_data,
-	GCancellable *cancellable
+	gpointer data,
+	gpointer user_data
 ){
-	Work *work = task_data;
+	Work *work = data;
+	GSource *source;
 
 	if (work->note_token)
 		note_token(work);
@@ -1284,15 +1449,18 @@ work_thread(
 	}
 	if (work->body == NULL && work->bytes == NULL)
 		reply_error(work, 500, "internal", "the request could not be answered", 0);
-	g_task_return_boolean(task, TRUE);
+	/* The answer is given on the main loop that took the request: never
+	 * here, even when that loop is idle (g_main_context_invoke() would run
+	 * it on this thread then). */
+	source = g_idle_source_new();
+	g_source_set_callback(source, work_finished, work, NULL);
+	g_source_attach(source, work->context);
+	g_source_unref(source);
 }
 
-static void
-work_finished(
-	GObject      *source,
-	GAsyncResult *result,
-	gpointer      user_data
-){
+static gboolean
+work_finished(gpointer user_data)
+{
 	Work *work = user_data;
 	HtmxResponse *response;
 
@@ -1314,6 +1482,7 @@ work_finished(
 	g_object_unref(response);
 	work->api->pending--;
 	work_free(work);
+	return G_SOURCE_REMOVE;
 }
 
 /* ── The search budget (main loop) ──────────────────────────────── */
@@ -1379,7 +1548,7 @@ search_admit(
 	Work          *work
 ){
 	gint64 now = now_monotonic(self);
-	GQueue *mine = g_hash_table_lookup(self->by_person, &work->user_id);
+	GQueue *mine = g_hash_table_lookup(self->searches_by_person, &work->user_id);
 	guint to_ask = 0;
 	gint64 wait;
 	guint k;
@@ -1389,11 +1558,11 @@ search_admit(
 
 		/* Bounded by the accounts; those with nothing in the last minute
 		 * are dropped when the table has grown. */
-		if (g_hash_table_size(self->by_person) >= 4096)
-			g_hash_table_remove_all(self->by_person);
+		if (g_hash_table_size(self->searches_by_person) >= 4096)
+			g_hash_table_remove_all(self->searches_by_person);
 		*key = work->user_id;
 		mine = g_queue_new();
-		g_hash_table_insert(self->by_person, key, mine);
+		g_hash_table_insert(self->searches_by_person, key, mine);
 	}
 	/* Each person's own: every search counts, answered from memory or not. */
 	wait = times_wait(mine, AXIS_PORTAL_SEARCHES_A_MINUTE, 1, now);
@@ -1516,7 +1685,6 @@ handle_operation(
 	const gchar *data = NULL;
 	gsize length = 0;
 	gint64 user_id = 0;
-	GTask *task;
 	Work *work;
 
 	/* Only what the gate let through, as the operation the path names. */
@@ -1535,9 +1703,24 @@ handle_operation(
 		return refusal(422, "malformed", "the body is not one JSON object within the limits", 0);
 
 	/* The person, from the proof and from nothing else, before anything
-	 * else of the body is judged. */
-	if (axis_portal_op_needs_proof(op) && !axis_web_auth_portal_person(self->auth, req->proof, &user_id, &name))
-		return no_proof();
+	 * else of the body is judged; and the person's budget, which every
+	 * operation of theirs takes from, whatever it asks. */
+	if (axis_portal_op_needs_proof(op)) {
+		gint64 now = now_monotonic(self);
+		gint64 wait;
+
+		if (!axis_web_auth_portal_person(self->auth, req->proof, &user_id, &name))
+			return no_proof();
+		wait = budget_take(&self->by_person, user_id, now);
+		if (wait > 0) {
+			if (self->person_noted_us == 0 || now - self->person_noted_us >= MINUTE_US) {
+				self->person_noted_us = now;
+				g_message("portal API: %s used the budget of %d operations a minute; their requests are refused "
+					"for now", name, AXIS_PORTAL_PERSON_OPS_A_MINUTE);
+			}
+			return refusal(429, "person-limit", "too many requests for this person; wait", wait_seconds(wait));
+		}
+	}
 	if (!req->valid)
 		return refusal(422, "invalid", req->problem != NULL ? req->problem : "the body is not the operation's", 0);
 
@@ -1572,13 +1755,13 @@ handle_operation(
 	}
 	work->note_token = axis_portal_tokens_note_use(self->tokens, gate->token, gate->address, g_get_monotonic_time());
 	work->deferred = htmx_response_new_deferred();
+	work->context = g_main_context_ref_thread_default();
 	refused = g_object_ref(work->deferred);
 
+	/* On the API's own threads: however many arrive, they wait for those,
+	 * never for the threads the engine's own pages use. */
 	self->pending++;
-	task = g_task_new(NULL, NULL, work_finished, work);
-	g_task_set_task_data(task, work, NULL);
-	g_task_run_in_thread(task, work_thread);
-	g_object_unref(task);
+	g_thread_pool_push(self->threads, work, NULL);
 	return refused;
 }
 
@@ -1607,9 +1790,14 @@ axis_portal_api_new(
 	self->by_address = axis_login_throttle_new(AXIS_PORTAL_TOKEN_FREE_FAILURES, THROTTLE_BASE_US, THROTTLE_MAX_US,
 		THROTTLE_FORGET_US, THROTTLE_MAX_KEYS);
 	g_queue_init(&self->searches);
-	self->by_person = g_hash_table_new_full(g_int64_hash, g_int64_equal, g_free, times_free);
+	self->searches_by_person = g_hash_table_new_full(g_int64_hash, g_int64_equal, g_free, times_free);
+	budget_init(&self->by_token, AXIS_PORTAL_TOKEN_OPS_A_MINUTE);
+	budget_init(&self->by_person, AXIS_PORTAL_PERSON_OPS_A_MINUTE);
 	g_mutex_init(&self->cache_lock);
 	self->cache = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, cached_free);
+	/* Not exclusive: its threads are made when there is work, and never
+	 * more than these at once. */
+	self->threads = g_thread_pool_new(work_thread, self, AXIS_PORTAL_API_THREADS, FALSE, NULL);
 	return self;
 }
 
@@ -1671,9 +1859,13 @@ axis_portal_api_free(AxisPortalApi *self)
 	if (self == NULL)
 		return;
 	axis_portal_api_stop(self);
+	/* Nothing is in flight now: the pool's threads have nothing to do. */
+	g_thread_pool_free(self->threads, FALSE, TRUE);
 	axis_login_throttle_free(self->by_address);
 	g_queue_clear_full(&self->searches, g_free);
-	g_hash_table_unref(self->by_person);
+	g_hash_table_unref(self->searches_by_person);
+	budget_clear(&self->by_token);
+	budget_clear(&self->by_person);
 	g_hash_table_unref(self->cache);
 	g_mutex_clear(&self->cache_lock);
 	axis_requests_unref(self->requests);
@@ -1690,4 +1882,22 @@ axis_portal_api_set_time_offset(
 	g_return_if_fail(self != NULL);
 
 	self->time_offset_us = offset_us;
+}
+
+void
+axis_portal_api_freeze_clock(
+	AxisPortalApi *self,
+	gint64         at_us
+){
+	g_return_if_fail(self != NULL);
+
+	self->frozen_us = at_us;
+}
+
+gint64
+axis_portal_api_now(AxisPortalApi *self)
+{
+	g_return_val_if_fail(self != NULL, 0);
+
+	return now_monotonic(self);
 }

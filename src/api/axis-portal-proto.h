@@ -44,6 +44,9 @@ G_BEGIN_DECLS
 #define AXIS_PORTAL_LIST_MAX_BYTES      16
 #define AXIS_PORTAL_MAX_ID              G_GINT64_CONSTANT(999999999999999)
 #define AXIS_PORTAL_MAX_PAGE            100
+/* A search has no more pages than the engine's search asks the provider for
+ * (axis_meta_search_page()). */
+#define AXIS_PORTAL_SEARCH_MAX_PAGE     2
 #define AXIS_PORTAL_MAX_SEASONS         100
 #define AXIS_PORTAL_MAX_SEASON_NUMBER   10000
 
@@ -107,7 +110,8 @@ axis_portal_op_needs_proof(AxisPortalOp op);
  *   (@device nullable; @password wiped when freed)
  * @query: search
  * @has_kind, @kind: search (optional), browse and request
- * @page: 1 when the body gives none
+ * @page: 1 when the body gives none; a search's at most
+ *   %AXIS_PORTAL_SEARCH_MAX_PAGE
  * @list: browse
  * @id: a title: title, art, request
  * @seasons: request, for a series: AXIS_PORTAL_SEASONS_*; -1 for a movie

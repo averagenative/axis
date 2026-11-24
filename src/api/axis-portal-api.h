@@ -15,15 +15,17 @@
  *    as one that does not exist (web/axis-web-auth.c).
  *  - The gate, for every request, in this order: a path that is not under
  *    the prefix does not exist (404); the daemon serves (503 while it does
- *    not hold its database); the client's address is not throttled for wrong
- *    tokens (429, before its token is looked at); no query string (400,
- *    whatever it carries: a token is taken from the Authorization header
- *    alone); a portal token (401, a wrong one counted against the address);
- *    nothing a browser sends (Origin, Sec-Fetch-Site, Sec-Fetch-Mode or
- *    Cookie: 403); POST (405); a JSON body (415) of at most
- *    AXIS_PORTAL_MAX_REQUEST_BYTES (413); an operation that exists (404).
- *    Every refusal is JSON; none redirects, none sets a cookie.  The client's
- *    address is the connection's own: forwarding headers are not read here.
+ *    not hold its database); no query string (400, whatever it carries: a
+ *    token is taken from the Authorization header alone); a portal token:
+ *    without a valid one, the client's address is not throttled for wrong
+ *    tokens (429) and the request is refused (401, a wrong token counted
+ *    against the address), while a valid token is never held to its
+ *    address's count; the token's budget of operations (429); nothing a
+ *    browser sends (Origin, Sec-Fetch-Site, Sec-Fetch-Mode or Cookie: 403);
+ *    POST (405); a JSON body (415) of at most AXIS_PORTAL_MAX_REQUEST_BYTES
+ *    (413); an operation that exists (404).  Every refusal is JSON; none
+ *    redirects, none sets a cookie.  The client's address is the
+ *    connection's own: forwarding headers are not read here.
  *  - A portal token alone acts as no one.  Every operation but hello and
  *    login needs the session proof of the person it is for
  *    (web/axis-web-auth-portal.h), checked before anything else of the body:
@@ -33,22 +35,33 @@
  *    member its operation does not define is refused whole (422).
  *  - Every operation checks its object itself: a request is the caller's or
  *    does not exist (404, the same answer as for an identifier never issued);
- *    a title its provider marks as adult does not exist either.
+ *    a title its provider marks as adult, or whose mark is not known yet, or
+ *    of a kind that cannot be asked for now, does not exist either.
  *  - An answer carries the members api/axis-portal-proto.h writes and no
  *    others: nothing of a file, a path, a release, an indexer, a download
  *    client, a quality profile, a library folder, a job, a setting, the
  *    daemon's version, a role, or an account other than as "asked_by" while
- *    requests.show_who_asked is on.
+ *    requests.show_who_asked is on, and then only a requester's name (never
+ *    that of an account that can log in to the engine's interface).
  *  - The daemon's own limits, counted here from its own records and clocks:
- *    the login's (web/axis-web-auth-portal.h); %AXIS_PORTAL_SEARCHES_A_MINUTE
- *    searches a minute for a person and %AXIS_PORTAL_SEARCHES_IN_ALL in all
- *    that ask the provider, and the same search answered from memory for
- *    %AXIS_PORTAL_SEARCH_CACHE_S; each person's quota and the portal's daily
- *    ceiling (requests/axis-requests.h).  A refusal by a limit is 429 with
- *    the time to wait, and does nothing.
+ *    %AXIS_PORTAL_TOKEN_OPS_A_MINUTE operations of any kind a minute for a
+ *    token, and %AXIS_PORTAL_PERSON_OPS_A_MINUTE for a person (every
+ *    operation that carries a valid proof, counted before its body is
+ *    judged); the login's (web/axis-web-auth-portal.h);
+ *    %AXIS_PORTAL_SEARCHES_A_MINUTE searches a minute for a person and
+ *    %AXIS_PORTAL_SEARCHES_IN_ALL in all that ask the provider, and the same
+ *    search answered from memory for %AXIS_PORTAL_SEARCH_CACHE_S; each
+ *    person's quota, the portal's daily ceiling and one person's share of it
+ *    (requests/axis-requests.h).  A refusal by a limit is 429 with the time
+ *    to wait, and does nothing.  The budgets are kept in memory, at most
+ *    %AXIS_PORTAL_BUDGET_MAX_KEYS keys each: a key whose budget is whole
+ *    again is forgotten when room is needed, and a new key is refused while
+ *    there is none.
  *
- * Each operation that reads the database runs on a thread of its own, at most
- * %AXIS_PORTAL_API_MAX_PENDING at once (503 beyond).  Main loop thread, except
+ * Each operation that reads the database runs on a thread pool of the API's
+ * own, %AXIS_PORTAL_API_THREADS threads, so that it never holds a thread the
+ * engine's own pages use; at most %AXIS_PORTAL_API_MAX_PENDING are running
+ * or waiting for a thread at once (503 beyond).  Main loop thread, except
  * where said.
  */
 
@@ -69,6 +82,10 @@
 G_BEGIN_DECLS
 
 #define AXIS_PORTAL_API_MAX_PENDING    32
+#define AXIS_PORTAL_API_THREADS        4
+#define AXIS_PORTAL_TOKEN_OPS_A_MINUTE  600
+#define AXIS_PORTAL_PERSON_OPS_A_MINUTE 120
+#define AXIS_PORTAL_BUDGET_MAX_KEYS    4096
 #define AXIS_PORTAL_SEARCHES_A_MINUTE  10
 #define AXIS_PORTAL_SEARCHES_IN_ALL    30
 #define AXIS_PORTAL_SEARCH_CACHE_S     600
@@ -155,6 +172,18 @@ axis_portal_api_set_time_offset(
 	AxisPortalApi *self,
 	gint64         offset_us
 );
+
+/* Stops that clock at @at_us (monotonic, offset included); 0: it runs
+ * again. */
+void
+axis_portal_api_freeze_clock(
+	AxisPortalApi *self,
+	gint64         at_us
+);
+
+/* The clock of the API's own throttles and budgets, now. */
+gint64
+axis_portal_api_now(AxisPortalApi *self);
 
 /* The operations' names, %NULL-ended: what the router holds. */
 const gchar *const *

@@ -303,6 +303,9 @@ read_members(
 		request->query = g_strdup(text);
 		if (axis_json_member(root, "kind") != NULL && !kind_member(request, root))
 			return FALSE;
+		/* Refused here, before the search budgets count it. */
+		if (request->page > AXIS_PORTAL_SEARCH_MAX_PAGE)
+			return refuse(request, "a search has two pages at most");
 		break;
 	case AXIS_PORTAL_BROWSE:
 		if ((text = string_member(request, root, "list", AXIS_PORTAL_LIST_MAX_BYTES)) == NULL)

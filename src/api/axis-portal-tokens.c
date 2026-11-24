@@ -173,8 +173,9 @@ axis_portal_tokens_note_use(
 
 		if (entry->id != id)
 			continue;
-		if (entry->noted_us == 0 || now_us - entry->noted_us >= NOTE_EVERY_US ||
-		    g_strcmp0(entry->address, address) != 0) {
+		/* Once a minute whatever the address: two portals with one token, or
+		 * one whose address changes, do not write a row each request. */
+		if (entry->noted_us == 0 || now_us - entry->noted_us >= NOTE_EVERY_US) {
 			entry->noted_us = now_us != 0 ? now_us : 1;
 			g_free(entry->address);
 			entry->address = g_strdup(address);

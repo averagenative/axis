@@ -44,6 +44,7 @@
 #include "web/axis-web.h"
 #include "web/axis-web-auth.h"
 #include "web/axis-web-auth-portal.h"
+#include "web/axis-web-auth-private.h"
 #include "web/axis-web-downloads.h"
 #include "web/axis-web-hub.h"
 #include "web/axis-web-indexers.h"
@@ -905,6 +906,18 @@ test_gate(Fixture *fx, gconstpointer data)
 	axis_secret_free(g_steal_pointer(&second));
 	/* No log line holds a token. */
 	g_assert_cmpuint(axis_test_log_count(G_LOG_LEVEL_MESSAGE, "*Bearer*"), ==, 0);
+
+	/* A token's use is written down once a minute, whatever the address:
+	 * two portals with one token write no row a request. */
+	{
+		gint64 later = g_get_monotonic_time() + G_GINT64_CONSTANT(600) * G_USEC_PER_SEC;
+
+		g_assert_true(axis_portal_tokens_note_use(fx->tokens, second_id, "192.0.2.10", later));
+		g_assert_false(axis_portal_tokens_note_use(fx->tokens, second_id, "192.0.2.11", later + G_USEC_PER_SEC));
+		g_assert_false(axis_portal_tokens_note_use(fx->tokens, second_id, "192.0.2.10", later + 2 * G_USEC_PER_SEC));
+		g_assert_true(axis_portal_tokens_note_use(fx->tokens, second_id, "192.0.2.11",
+			later + G_GINT64_CONSTANT(61) * G_USEC_PER_SEC));
+	}
 }
 
 /* Scenario: Shown once, stored as a hash; and the page's own revoking. */
@@ -988,7 +1001,8 @@ test_token_page(Fixture *fx, gconstpointer data)
 	g_free(expect(fx, "hello", "{}", 200));
 }
 
-/* Scenarios: Wrong tokens are throttled; Throttled. */
+/* Scenarios: Wrong tokens are throttled; Throttled; and a valid token is
+ * never held to its address's count. */
 static void
 test_token_throttle(Fixture *fx, gconstpointer data)
 {
@@ -1001,21 +1015,30 @@ test_token_throttle(Fixture *fx, gconstpointer data)
 		assert_status(&reply, 401);
 		axis_test_reply_clear(&reply);
 	}
-	/* From now on the address waits, and its token is not looked at: a
-	 * valid one is told to wait too. */
+	/* From now on the address waits, with a wrong token and with none. */
 	reply = send_to(fx, fx->portal_port, "POST", API "hello", wrong, NULL, "{}", NULL);
 	assert_status(&reply, 429);
 	assert_api_reply(&reply);
+	assert_holds(reply.body, "\"error\":\"throttled\"");
 	g_assert_nonnull(axis_test_reply_header(&reply, "Retry-After"));
 	axis_test_reply_clear(&reply);
-	reply = send_to(fx, fx->portal_port, "POST", API "hello", fx->token, NULL, "{}", NULL);
+	reply = send_to(fx, fx->portal_port, "POST", API "hello", NULL, NULL, "{}", NULL);
+	assert_status(&reply, 429);
+	axis_test_reply_clear(&reply);
+	/* The portal's valid token, from the same address (a proxy or a gateway
+	 * shared with whoever sent the wrong ones), is looked up first and
+	 * answered; and it clears nothing of the address's count. */
+	g_free(expect(fx, "hello", "{}", 200));
+	reply = send_to(fx, fx->portal_port, "POST", API "hello", wrong, NULL, "{}", NULL);
 	assert_status(&reply, 429);
 	axis_test_reply_clear(&reply);
 	g_assert_cmpuint(axis_test_log_count(G_LOG_LEVEL_MESSAGE, "*carried a token that is not a portal's*"), ==,
 		AXIS_PORTAL_TOKEN_FREE_FAILURES + 1);
 	/* The delay passes. */
 	axis_portal_api_set_time_offset(fx->api, G_GINT64_CONSTANT(3600) * G_USEC_PER_SEC);
-	g_free(expect(fx, "hello", "{}", 200));
+	reply = send_to(fx, fx->portal_port, "POST", API "hello", wrong, NULL, "{}", NULL);
+	assert_status(&reply, 401);
+	axis_test_reply_clear(&reply);
 }
 
 /* ── The scope ──────────────────────────────────────────────────── */
@@ -1042,8 +1065,10 @@ path_of(const gchar *pattern)
 	return g_string_free(path, FALSE);
 }
 
-/* Scenarios: Every other route of the daemon; A new route is closed to the
- * token; A portal token elsewhere. */
+/* Scenarios: Every other route of the daemon (here: every route of the test's
+ * daemon, the shell's, the accounts' and the modules of the requests'
+ * fixture, not every module of axisd); A new route is closed to the token; A
+ * portal token elsewhere. */
 static void
 test_every_route(Fixture *fx, gconstpointer data)
 {
@@ -1159,6 +1184,9 @@ test_members(Fixture *fx, gconstpointer data)
 			body = g_strdup_printf("{%s\"%s\":3}", base, foreign[i]);
 			g_free(expect(fx, operations[o], body, 422));
 		}
+		/* A minute for each operation: what is tried here is more than a
+		 * person's and a token's budgets have in one. */
+		axis_portal_api_set_time_offset(fx->api, (gint64)(o + 1) * 61 * G_USEC_PER_SEC);
 	}
 	/* Nothing was done by any of them, and nothing was fetched. */
 	g_assert_cmpint(N("SELECT count(*) FROM request"), ==, 0);
@@ -1247,7 +1275,9 @@ test_login(Fixture *fx, gconstpointer data)
 	g_assert_cmpuint(axis_test_log_count(G_LOG_LEVEL_MESSAGE, "*audit: portal login: user=robin reported_client="
 		"198.51.100.20*"), ==, 1);
 
-	/* Every failure: one status, one body, one password hash. */
+	/* Every failure: one status, one body, and one call of the password
+	 * check (counted; the time each takes is not measured, and the stored
+	 * hashes here have the dummy's limits). */
 	axis_web_auth_wait_writes(fx->auth);
 	sessions = N("SELECT count(*) FROM web_session");
 	for (i = 0; i < G_N_ELEMENTS(failures); i++) {
@@ -1537,10 +1567,36 @@ test_account_changes(Fixture *fx, gconstpointer data)
 	assert_holds(reply.body, "must not contain the username");
 	axis_test_reply_clear(&reply);
 
-	/* A role change ends them too: vic becomes an ordinary user. */
+	/* A role change ends them too: vic becomes an ordinary user.  The
+	 * password vic typed into the portal opens nothing else: the change
+	 * needs a new one, held to the rule of the new role, and not the old. */
 	g_free(path);
 	path = g_strdup_printf("/admin/users/%" G_GINT64_FORMAT "/role", fx->vic);
-	reply = admin_post(fx, admin, "/admin/users", path, "role=user");
+	reply = axis_test_web_request(fx->session, fx->port, "GET", "/admin/users", admin, NULL, NULL);
+	assert_status(&reply, 200);
+	{
+		g_autofree gchar *field = g_strdup_printf("id=\"role-user-password-%" G_GINT64_FORMAT "\"", fx->vic);
+
+		assert_holds(reply.body, field);
+	}
+	axis_test_reply_clear(&reply);
+	{
+		static const gchar *const refused[] = {
+			"role=user", "role=user&password=", "role=user&password=short", "role=admin",
+			"role=user&password=" OTHER_PASSWORD, NULL
+		};
+		guint i;
+
+		for (i = 0; refused[i] != NULL; i++) {
+			reply = admin_post(fx, admin, "/admin/users", path, refused[i]);
+			assert_status(&reply, 400);
+			axis_test_reply_clear(&reply);
+		}
+		g_assert_cmpint(N("SELECT count(*) FROM app_user WHERE id = %" G_GINT64_FORMAT " AND role = 'requester'",
+			fx->vic), ==, 1);
+		g_free(expect(fx, "whoami", vic_body, 200));
+	}
+	reply = admin_post(fx, admin, "/admin/users", path, "role=user&password=a-new-password-of-vics");
 	assert_status(&reply, 303);
 	axis_test_reply_clear(&reply);
 	g_free(expect(fx, "whoami", vic_body, 401));
@@ -1548,10 +1604,16 @@ test_account_changes(Fixture *fx, gconstpointer data)
 		g_autofree gchar *body = login_body("vic", OTHER_PASSWORD, "198.51.100.22");
 		g_autofree gchar *as_user = NULL;
 
-		/* No longer a requester: no login here, and one at the engine. */
+		/* No longer a requester: no login here.  At the engine's own login
+		 * the password the portal saw fails, and the new one opens. */
 		g_free(expect(fx, "login", body, 401));
-		as_user = engine_session(fx, "vic", OTHER_PASSWORD);
+		reply = engine_login(fx, "vic", OTHER_PASSWORD);
+		assert_status(&reply, 401);
+		axis_test_reply_clear(&reply);
+		as_user = engine_session(fx, "vic", "a-new-password-of-vics");
 		g_assert_nonnull(as_user);
+		g_assert_cmpuint(axis_test_log_count(G_LOG_LEVEL_MESSAGE, "*role changed: user=vic role=user (with a new "
+			"password)*"), ==, 1);
 	}
 
 	/* And the other way: uma, logged in at the engine, is made a requester.
@@ -1763,18 +1825,31 @@ test_answers(Fixture *fx, gconstpointer data)
 		g_autofree gchar *c = g_strdup_printf("{\"proof\":\"%s\",\"query\":\"or\\nchard\",\"kind\":\"movie\"}", robin);
 		g_autofree gchar *d = g_strdup_printf("{\"proof\":\"%s\",\"query\":\"   \",\"kind\":\"movie\"}", robin);
 		g_autofree gchar *e = g_strdup_printf("{\"proof\":\"%s\",\"query\":\"%s\",\"kind\":\"movie\"}", robin, exact);
+		/* A page the engine's search does not ask for: refused by the reader,
+		 * before the search budgets count it, and for what it is. */
+		g_autofree gchar *third = g_strdup_printf("{\"proof\":\"%s\",\"query\":\"orchard\",\"kind\":\"movie\","
+			"\"page\":3}", robin);
+		g_autofree gchar *second_page = g_strdup_printf("{\"proof\":\"%s\",\"query\":\"orchard\",\"kind\":\"movie\","
+			"\"page\":2}", robin);
+		g_autofree gchar *refused = NULL;
 		guint asked = axis_test_plex_count(fx->r->fa->api, "/search/film");
 
 		g_free(expect(fx, "search", a, 422));
 		g_free(expect(fx, "search", b, 422));
 		g_free(expect(fx, "search", c, 422));
 		g_free(expect(fx, "search", d, 422));
+		refused = expect(fx, "search", third, 422);
+		assert_holds(refused, "two pages at most");
 		g_assert_cmpuint(axis_test_plex_count(fx->r->fa->api, "/search/film"), ==, asked);
+		g_free(expect(fx, "search", second_page, 200));
+		asked = axis_test_plex_count(fx->r->fa->api, "/search/film");
 		g_free(expect(fx, "search", e, 200));
 		g_assert_cmpuint(axis_test_plex_count(fx->r->fa->api, "/search/film"), ==, asked + 1);
 	}
 
-	/* Browse answers from what is stored and asks nobody. */
+	/* Browse answers from what is stored and asks nobody.  (The fixture's
+	 * provider offers no list, so the answer holds no title: the adult
+	 * filter and the members of a title are not seen through browse here.) */
 	{
 		g_autofree gchar *browse = g_strdup_printf("{\"proof\":\"%s\",\"list\":\"popular\",\"kind\":\"movie\"}", robin);
 		g_autofree gchar *recommended = g_strdup_printf("{\"proof\":\"%s\",\"list\":\"recommended\","
@@ -1824,10 +1899,28 @@ test_answers(Fixture *fx, gconstpointer data)
 		g_autofree gchar *d = expect(fx, "art", never, 404);
 		g_autofree gchar *e = ask_movie(fx, robin, annex, 404);
 		g_autofree gchar *f = ask_movie(fx, robin, 987654, 404);
+		/* Asked for as the other kind, the number says no more: not "the
+		 * title is not a series". */
+		g_autofree gchar *as_series = g_strdup_printf("{\"proof\":\"%s\",\"id\":%" G_GINT64_FORMAT ",\"kind\":\"series\","
+			"\"seasons\":\"all\"}", robin, annex);
+		g_autofree gchar *never_series = g_strdup_printf("{\"proof\":\"%s\",\"id\":987654,\"kind\":\"series\","
+			"\"seasons\":[1]}", robin);
+		g_autofree gchar *g = expect(fx, "request", as_series, 404);
+		g_autofree gchar *h = expect(fx, "request", never_series, 404);
+		g_autofree gchar *k = NULL;
 
 		g_assert_cmpstr(a, ==, b);
 		g_assert_cmpstr(c, ==, d);
 		g_assert_cmpstr(e, ==, f);
+		g_assert_cmpstr(g, ==, f);
+		g_assert_cmpstr(h, ==, f);
+		/* Nor whether it is closed to requests: not "closed". */
+		N("INSERT INTO request_closed_title (title_id, kind, closed_by) VALUES (%" G_GINT64_FORMAT ", 'movie', 'root')"
+			" RETURNING title_id", annex);
+		k = ask_movie(fx, robin, annex, 404);
+		g_assert_cmpstr(k, ==, f);
+		g_free(expect(fx, "request", as_series, 404));
+		N("DELETE FROM request_closed_title WHERE title_id = %" G_GINT64_FORMAT " RETURNING title_id", annex);
 		g_assert_cmpint(N("SELECT count(*) FROM request"), ==, 0);
 	}
 
@@ -1959,6 +2052,38 @@ test_answers(Fixture *fx, gconstpointer data)
 		g_autofree gchar *off_ask = NULL;
 
 		assert_holds(on, "\"asked_by\":\"robin\"");
+		/* An ordinary user's request, and an administrator's: the title says
+		 * that it is requested, and never by whom.  Those names log in to
+		 * the engine's interface. */
+		{
+			gint64 kiln = N("SELECT id FROM meta_title WHERE provider_id = '" AXIS_TEST_REQUESTS_KILN "'");
+			const gint64 makers[] = { fx->uma, fx->r->admin };
+			const gint64 titles[] = { ledger, kiln };
+			guint m;
+
+			for (m = 0; m < G_N_ELEMENTS(makers); m++) {
+				g_autofree gchar *body = g_strdup_printf("{\"proof\":\"%s\",\"id\":%" G_GINT64_FORMAT "}", sam,
+					titles[m]);
+				g_autofree gchar *shown = NULL;
+				AxisRequestMade made;
+				AxisRequestAsk ask;
+
+				memset(&ask, 0, sizeof(ask));
+				ask.user_id = makers[m];
+				ask.title_id = titles[m];
+				ask.kind = AXIS_REQUEST_MOVIE;
+				g_assert_true(axis_requests_ask(fx->r->requests, &ask, &made, &error));
+				g_assert_no_error(error);
+				g_assert_cmpint(made.outcome, ==, AXIS_REQUEST_MADE);
+				axis_request_made_clear(&made);
+				shown = expect(fx, "title", body, 200);
+				assert_lacks(shown, "asked_by");
+				assert_lacks(shown, "uma");
+				assert_lacks(shown, "root");
+				g_assert_true(strstr(shown, "\"state\":\"requested\"") != NULL ||
+					strstr(shown, "\"state\":\"approved\"") != NULL);
+			}
+		}
 		g_assert_true(axis_settings_set(fx->r->settings, AXIS_REQUESTS_SETTING_SHOW_WHO, "false", &error));
 		g_assert_no_error(error);
 		off = expect(fx, "title", one, 200);
@@ -2349,6 +2474,393 @@ test_request_limits(Fixture *fx, gconstpointer data)
 	g_assert_cmpint(N("SELECT count(*) FROM request WHERE via = 'portal'"), ==, 2);
 }
 
+/* The public id of the request an answer of `request` made. */
+static gchar *
+made_id(const gchar *answer)
+{
+	g_autoptr(JsonObject) object = object_of(answer);
+
+	g_assert_cmpstr(json_object_get_string_member(object, "outcome"), ==, "made");
+	return g_strdup(json_object_get_string_member(json_object_get_object_member(object, "request"), "id"));
+}
+
+/*
+ * Scenario: one person's share of the portal's day (review of P2, S4).  A
+ * requester who asks and withdraws again and again uses up their own share,
+ * a third of requests.portal_per_day, withdrawn requests included, and then
+ * is refused with a refusal of its own; the others can still ask.
+ */
+static void
+test_portal_share(Fixture *fx, gconstpointer data)
+{
+	g_autofree gchar *robin = login(fx, "robin", ROBIN_PASSWORD);
+	g_autofree gchar *sam = login(fx, "sam", SAM_PASSWORD);
+	gint64 orchard = film(fx, AXIS_TEST_REQUESTS_ORCHARD);
+	gint64 ledger = film(fx, AXIS_TEST_REQUESTS_LEDGER);
+	gint64 share = AXIS_REQUESTS_PORTAL_SHARE_OF(AXIS_REQUESTS_PORTAL_A_DAY);
+	g_autofree gchar *refused = NULL;
+	g_autofree gchar *me = NULL;
+	gint64 i;
+
+	g_assert_cmpint(share, ==, 10);
+	for (i = 0; i < share; i++) {
+		g_autofree gchar *made = ask_movie(fx, robin, orchard, 200);
+		g_autofree gchar *id = made_id(made);
+		g_autofree gchar *withdraw = g_strdup_printf("{\"proof\":\"%s\",\"request\":\"%s\"}", robin, id);
+
+		g_free(expect(fx, "withdraw", withdraw, 200));
+	}
+	/* robin's quota has every one of them back, and holds no request. */
+	{
+		g_autofree gchar *who = proof_body(robin);
+
+		me = expect(fx, "whoami", who, 200);
+		assert_holds(me, "\"left\":5");
+	}
+	g_assert_cmpint(N("SELECT count(*) FROM request WHERE decision IN ('waiting', 'approved')"), ==, 0);
+	refused = ask_movie(fx, robin, orchard, 429);
+	assert_holds(refused, "\"error\":\"portal-share\"");
+	assert_holds(refused, "\"wait\":");
+	assert_holds(refused, "one person's share of the portal's day is 10");
+	g_assert_cmpint(N("SELECT count(*) FROM request WHERE via = 'portal'"), ==, share);
+	/* The portal's day is not used up: sam asks for both. */
+	{
+		g_autofree gchar *a = ask_movie(fx, sam, orchard, 200);
+		g_autofree gchar *b = ask_movie(fx, sam, ledger, 200);
+
+		assert_holds(a, "\"outcome\":\"made\"");
+		assert_holds(b, "\"outcome\":\"made\"");
+	}
+	g_assert_cmpint(N("SELECT count(*) FROM request WHERE via = 'portal' AND requested_by = %" G_GINT64_FORMAT,
+		fx->r->sam), ==, 2);
+	/* And robin follows what sam asked for: that makes no row, and is not
+	 * refused. */
+	{
+		g_autofree gchar *follow = ask_movie(fx, robin, ledger, 200);
+
+		assert_holds(follow, "\"outcome\":\"followed\"");
+	}
+}
+
+/*
+ * Scenario: a title whose adult mark is not known (review of P2, S2): stored
+ * before migration 0084, or from no provider's answer.  For a requester it is
+ * a number never given, for every operation and whatever the kind it is asked
+ * for as; a search answered from memory leaves it out; and once a provider's
+ * answer about it says it is not adult, it is shown and can be asked for.
+ */
+static void
+test_mark_not_known(Fixture *fx, gconstpointer data)
+{
+	g_autoptr(GError) error = NULL;
+	g_autofree gchar *robin = login(fx, "robin", ROBIN_PASSWORD);
+	g_autofree gchar *search = g_strdup_printf("{\"proof\":\"%s\",\"query\":\"lantern orchard\",\"kind\":\"movie\"}",
+		robin);
+	g_autofree gchar *again = g_strdup_printf("{\"proof\":\"%s\",\"query\":\"the lantern orchard\",\"kind\":\"movie\"}",
+		robin);
+	g_autofree gchar *never = g_strdup_printf("{\"proof\":\"%s\",\"id\":987654}", robin);
+	g_autofree gchar *found = expect(fx, "search", search, 200);
+	gint64 orchard = N("SELECT id FROM meta_title WHERE provider_id = '" AXIS_TEST_REQUESTS_ORCHARD "'");
+	g_autofree gchar *one = g_strdup_printf("{\"proof\":\"%s\",\"id\":%" G_GINT64_FORMAT "}", robin, orchard);
+	g_autofree gchar *as_series = g_strdup_printf("{\"proof\":\"%s\",\"id\":%" G_GINT64_FORMAT ",\"kind\":\"series\","
+		"\"seasons\":\"all\"}", robin, orchard);
+	g_autofree gchar *not_found = expect(fx, "title", never, 404);
+	g_autofree gchar *no_art = expect(fx, "art", never, 404);
+	g_autofree gchar *never_asked = ask_movie(fx, robin, 987654, 404);
+	g_autofree gchar *hash = NULL;
+	gint64 asked;
+
+	assert_holds(found, "The Lantern Orchard");
+	g_assert_cmpint(N("SELECT count(*) FROM meta_title WHERE id = %" G_GINT64_FORMAT " AND adult = false", orchard), ==,
+		1);
+	/* Its poster is held, so that art would answer it. */
+	N("UPDATE meta_title SET poster_ref = '/p101.png' WHERE id = %" G_GINT64_FORMAT " RETURNING id", orchard);
+	g_assert_true(axis_meta_artwork_fetch(fx->r->meta, "fixture", "/p101.png", AXIS_META_ART_POSTER_SMALL, &hash,
+		&error));
+	g_assert_no_error(error);
+	g_free(expect(fx, "art", one, 200));
+
+	/* As a title stored before the migration has it. */
+	N("UPDATE meta_title SET adult = NULL WHERE id = %" G_GINT64_FORMAT " RETURNING id", orchard);
+	{
+		g_autofree gchar *a = expect(fx, "title", one, 404);
+		g_autofree gchar *b = expect(fx, "art", one, 404);
+		g_autofree gchar *c = ask_movie(fx, robin, orchard, 404);
+		g_autofree gchar *d = expect(fx, "request", as_series, 404);
+		g_autofree gchar *from_memory = NULL;
+
+		g_assert_cmpstr(a, ==, not_found);
+		g_assert_cmpstr(b, ==, no_art);
+		g_assert_cmpstr(c, ==, never_asked);
+		g_assert_cmpstr(d, ==, never_asked);
+		/* The same search, from memory: the provider is not asked, and the
+		 * title is not among the answers. */
+		asked = axis_test_plex_count(fx->r->fa->api, "/search/film");
+		from_memory = expect(fx, "search", search, 200);
+		g_assert_cmpuint(axis_test_plex_count(fx->r->fa->api, "/search/film"), ==, asked);
+		assert_lacks(from_memory, "The Lantern Orchard");
+		assert_holds(from_memory, "Saltmarsh Ledger");
+	}
+	g_assert_cmpint(N("SELECT count(*) FROM request"), ==, 0);
+	/* The engine's own ask path refuses an ordinary user the same way, and
+	 * lets an administrator ask. */
+	{
+		AxisRequestMade made;
+		AxisRequestAsk ask;
+
+		memset(&ask, 0, sizeof(ask));
+		ask.user_id = fx->uma;
+		ask.title_id = orchard;
+		ask.kind = AXIS_REQUEST_MOVIE;
+		g_assert_false(axis_requests_ask(fx->r->requests, &ask, &made, &error));
+		g_assert_error(error, AXIS_REQUESTS_ERROR, AXIS_REQUESTS_ERROR_NOT_FOUND);
+		g_clear_error(&error);
+		axis_request_made_clear(&made);
+	}
+
+	/* Another search asks the provider, whose answer says the title is not
+	 * adult: from now on it is shown, and can be asked for. */
+	{
+		g_autofree gchar *answered = expect(fx, "search", again, 200);
+		g_autofree gchar *shown = NULL;
+		g_autofree gchar *made = NULL;
+
+		g_assert_cmpuint(axis_test_plex_count(fx->r->fa->api, "/search/film"), ==, asked + 1);
+		assert_holds(answered, "The Lantern Orchard");
+		g_assert_cmpint(N("SELECT count(*) FROM meta_title WHERE id = %" G_GINT64_FORMAT " AND adult = false", orchard),
+			==, 1);
+		shown = expect(fx, "title", one, 200);
+		assert_holds(shown, "The Lantern Orchard");
+		g_free(expect(fx, "art", one, 200));
+		made = ask_movie(fx, robin, orchard, 200);
+		assert_holds(made, "\"outcome\":\"made\"");
+	}
+}
+
+/*
+ * Scenario: a kind that cannot be asked for (review of P2, M6).  While the TV
+ * module is off, a series is a number never given for title and art, as it
+ * is not offered by search and browse.
+ */
+static void
+test_kind_off(Fixture *fx, gconstpointer data)
+{
+	g_autoptr(GError) error = NULL;
+	g_autofree gchar *robin = login(fx, "robin", ROBIN_PASSWORD);
+	gint64 harbour = series(fx, AXIS_TEST_REQUESTS_HARBOUR);
+	gint64 orchard = film(fx, AXIS_TEST_REQUESTS_ORCHARD);
+	g_autofree gchar *of_series = g_strdup_printf("{\"proof\":\"%s\",\"id\":%" G_GINT64_FORMAT "}", robin, harbour);
+	g_autofree gchar *of_film = g_strdup_printf("{\"proof\":\"%s\",\"id\":%" G_GINT64_FORMAT "}", robin, orchard);
+	g_autofree gchar *never = g_strdup_printf("{\"proof\":\"%s\",\"id\":987654}", robin);
+	g_autofree gchar *not_found = expect(fx, "title", never, 404);
+	g_autofree gchar *no_art = expect(fx, "art", never, 404);
+
+	g_free(expect(fx, "title", of_series, 200));
+	g_assert_true(axis_module_registry_set_enabled(fx->registry, AXIS_TV_MODULE_ID, FALSE, &error));
+	g_assert_no_error(error);
+	g_assert_false(axis_requests_kind_on(fx->r->requests, AXIS_REQUEST_SERIES));
+	{
+		g_autofree gchar *a = expect(fx, "title", of_series, 404);
+		g_autofree gchar *b = expect(fx, "art", of_series, 404);
+		g_autofree gchar *hello = expect(fx, "hello", "{}", 200);
+
+		g_assert_cmpstr(a, ==, not_found);
+		g_assert_cmpstr(b, ==, no_art);
+		assert_lacks(hello, "\"series\"");
+	}
+	/* A movie is answered as before. */
+	g_free(expect(fx, "title", of_film, 200));
+}
+
+/*
+ * Scenario: every operation's budgets (review of P2, S3).  A person has
+ * AXIS_PORTAL_PERSON_OPS_A_MINUTE operations a minute, whatever they ask, and
+ * a token AXIS_PORTAL_TOKEN_OPS_A_MINUTE; beyond either the answer is 429 with
+ * the time to wait, the operation is not done, and the others are not held to
+ * it.  The clock is stopped, so that the counts are exact.
+ */
+#define MINUTE_US (G_GINT64_CONSTANT(60) * G_USEC_PER_SEC)
+
+static void
+test_operation_budgets(Fixture *fx, gconstpointer data)
+{
+	g_autoptr(GError) error = NULL;
+	g_autofree gchar *robin = NULL;
+	g_autofree gchar *sam = NULL;
+	g_autofree gchar *robin_body = NULL;
+	g_autofree gchar *sam_body = NULL;
+	g_autofree gchar *second = NULL;
+	gint64 second_id = 0;
+	gint64 now = axis_portal_api_now(fx->api);
+	/* What the token's budget gets back while robin's gets one. */
+	gint64 refilled = (MINUTE_US / AXIS_PORTAL_PERSON_OPS_A_MINUTE) / (MINUTE_US / AXIS_PORTAL_TOKEN_OPS_A_MINUTE);
+	AxisTestReply reply;
+	gint64 used = 0;
+	gint64 i;
+
+	axis_portal_api_freeze_clock(fx->api, now);
+	/* (The two logins are the token's first two operations.) */
+	robin = login(fx, "robin", ROBIN_PASSWORD);
+	sam = login(fx, "sam", SAM_PASSWORD);
+	robin_body = proof_body(robin);
+	sam_body = proof_body(sam);
+	used = 2;
+	/* A person's: every operation with their proof takes one, a body that
+	 * is not the operation's too. */
+	for (i = 0; i < AXIS_PORTAL_PERSON_OPS_A_MINUTE; i++) {
+		if (i % 2 == 0) {
+			g_free(expect(fx, "whoami", robin_body, 200));
+		} else {
+			g_autofree gchar *wrong = g_strdup_printf("{\"proof\":\"%s\",\"user\":\"sam\"}", robin);
+
+			g_free(expect(fx, "requests", wrong, 422));
+		}
+		used++;
+	}
+	reply = call(fx, "whoami", robin_body);
+	assert_status(&reply, 429);
+	assert_api_reply(&reply);
+	assert_holds(reply.body, "\"error\":\"person-limit\"");
+	assert_holds(reply.body, "\"wait\":");
+	g_assert_nonnull(axis_test_reply_header(&reply, "Retry-After"));
+	axis_test_reply_clear(&reply);
+	used++;
+	{
+		g_autofree gchar *list = expect(fx, "requests", robin_body, 429);
+
+		assert_holds(list, "person-limit");
+		used++;
+	}
+	g_assert_cmpuint(axis_test_log_count(G_LOG_LEVEL_MESSAGE, "*robin used the budget of*"), ==, 1);
+	/* sam is not held to robin's, and robin's comes back a little at a
+	 * time: one each minute / the budget. */
+	g_free(expect(fx, "whoami", sam_body, 200));
+	used++;
+	axis_portal_api_freeze_clock(fx->api, now + MINUTE_US / AXIS_PORTAL_PERSON_OPS_A_MINUTE);
+	g_free(expect(fx, "whoami", robin_body, 200));
+	g_free(expect(fx, "whoami", robin_body, 429));
+	used += 2;
+
+	/* A token's: what is left of its minute (and of what came back in the
+	 * moment above), then 429 for anything it asks, hello and login too;
+	 * another token is not held to it. */
+	g_assert_cmpint(refilled, ==, 5);
+	for (i = used; i < AXIS_PORTAL_TOKEN_OPS_A_MINUTE + refilled; i++)
+		g_free(expect(fx, "hello", "{}", 200));
+	{
+		g_autofree gchar *body = login_body("sam", SAM_PASSWORD, "198.51.100.20");
+		g_autofree gchar *a = expect(fx, "hello", "{}", 429);
+		g_autofree gchar *b = expect(fx, "login", body, 429);
+		g_autofree gchar *c = expect(fx, "whoami", sam_body, 429);
+
+		assert_holds(a, "\"error\":\"token-limit\"");
+		assert_holds(b, "\"error\":\"token-limit\"");
+		assert_holds(c, "\"error\":\"token-limit\"");
+	}
+	g_assert_true(axis_portal_tokens_create(fx->tokens, fx->r->t->pool, "root", &second, &second_id, &error));
+	g_assert_no_error(error);
+	reply = send_to(fx, fx->portal_port, "POST", API "whoami", second, NULL, sam_body, NULL);
+	assert_status(&reply, 200);
+	axis_test_reply_clear(&reply);
+	axis_secret_free(g_steal_pointer(&second));
+	g_assert_cmpuint(axis_test_log_count(G_LOG_LEVEL_MESSAGE, "*portal token used its budget*"), ==, 1);
+
+	/* Two minutes later both are whole again. */
+	axis_portal_api_freeze_clock(fx->api, now + 2 * MINUTE_US);
+	g_free(expect(fx, "hello", "{}", 200));
+	g_free(expect(fx, "whoami", robin_body, 200));
+	axis_portal_api_freeze_clock(fx->api, 0);
+}
+
+/* The engine's own password work, held until the test lets it go. */
+typedef struct
+{
+	GMutex   lock;
+	GCond    cond;
+	gboolean open;
+	guint    after;
+} Blocker;
+
+static void
+blocked_work(
+	AxisWebAuth *auth,
+	gpointer     data
+){
+	Blocker *blocker = data;
+
+	g_mutex_lock(&blocker->lock);
+	while (!blocker->open)
+		g_cond_wait(&blocker->cond, &blocker->lock);
+	g_mutex_unlock(&blocker->lock);
+}
+
+static void
+blocked_after(
+	AxisWebAuth *auth,
+	gpointer     data,
+	gboolean     skipped
+){
+	Blocker *blocker = data;
+
+	blocker->after++;
+}
+
+/*
+ * A login through the portal while the engine's own queue of password work is
+ * full (review of P2, "could not be judged"): the login is answered busy
+ * before the handler returns its deferred response, and htmx-glib writes that
+ * answer then.  The request is answered at once, 503 with a time to wait, and
+ * does not hang; no hash is begun, and nothing is left waiting.
+ */
+static void
+test_engine_queue_full(Fixture *fx, gconstpointer data)
+{
+	g_autofree gchar *body = login_body("robin", ROBIN_PASSWORD, "198.51.100.20");
+	gboolean hashing = TRUE;
+	AxisTestReply reply;
+	Blocker blocker;
+	guint queued = 0;
+	guint hashes;
+	gint64 began;
+
+	memset(&blocker, 0, sizeof(blocker));
+	g_mutex_init(&blocker.lock);
+	g_cond_init(&blocker.cond);
+	axis_web_auth_wait_writes(fx->auth);
+	while (g_main_context_iteration(NULL, FALSE))
+		;
+	while (axis_web_auth_run(fx->auth, blocked_work, blocked_after, &blocker))
+		queued++;
+	/* Nothing else was waiting: the whole queue is the test's. */
+	g_assert_cmpuint(queued, ==, AXIS_WEB_AUTH_MAX_PENDING);
+
+	hashes = axis_password_verify_count();
+	began = g_get_monotonic_time();
+	reply = call(fx, "login", body);
+	assert_status(&reply, 503);
+	assert_api_reply(&reply);
+	assert_holds(reply.body, "\"error\":\"busy\"");
+	g_assert_nonnull(axis_test_reply_header(&reply, "Retry-After"));
+	axis_test_reply_clear(&reply);
+	g_assert_cmpint(g_get_monotonic_time() - began, <, 10 * G_USEC_PER_SEC);
+	g_assert_cmpuint(axis_password_verify_count(), ==, hashes);
+	g_assert_cmpuint(axis_web_auth_portal_waiting(fx->auth, &hashing), ==, 0);
+	g_assert_false(hashing);
+	/* The other operations are answered meanwhile. */
+	g_free(expect(fx, "hello", "{}", 200));
+
+	/* The engine's work goes on; then a login is answered as before. */
+	g_mutex_lock(&blocker.lock);
+	blocker.open = TRUE;
+	g_cond_broadcast(&blocker.cond);
+	g_mutex_unlock(&blocker.lock);
+	while (blocker.after < queued)
+		g_main_context_iteration(NULL, TRUE);
+	g_free(login(fx, "robin", ROBIN_PASSWORD));
+	g_mutex_clear(&blocker.lock);
+	g_cond_clear(&blocker.cond);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -2372,6 +2884,11 @@ main(int argc, char **argv)
 	AXIS_TEST_ADD_DB_CASE("/portal/api/hashing/queue-bounded", Fixture, NULL, test_hashing);
 	AXIS_TEST_ADD_DB_CASE("/portal/api/limits/search-budget", Fixture, NULL, test_search_budget);
 	AXIS_TEST_ADD_DB_CASE("/portal/api/limits/daily-ceiling", Fixture, NULL, test_request_limits);
+	AXIS_TEST_ADD_DB_CASE("/portal/api/limits/one-persons-share", Fixture, NULL, test_portal_share);
+	AXIS_TEST_ADD_DB_CASE("/portal/api/limits/operation-budgets", Fixture, NULL, test_operation_budgets);
+	AXIS_TEST_ADD_DB_CASE("/portal/api/fields/mark-not-known", Fixture, NULL, test_mark_not_known);
+	AXIS_TEST_ADD_DB_CASE("/portal/api/fields/kind-off", Fixture, NULL, test_kind_off);
+	AXIS_TEST_ADD_DB_CASE("/portal/api/login/engine-queue-full", Fixture, NULL, test_engine_queue_full);
 
 	return g_test_run();
 }
