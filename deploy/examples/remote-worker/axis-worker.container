@@ -24,7 +24,7 @@ After=network-online.target
 [Container]
 ContainerName=axis-worker
 # EDIT: the same version as Axis on the server.
-Image=ghcr.io/averagenative/axis:0.1.0-rc1
+Image=ghcr.io/averagenative/axis:0.1.0-rc2
 Entrypoint=/usr/bin/axis-worker
 # Your own user inside the container: it can read your token file, and
 # what it writes through the mounts is written as you.

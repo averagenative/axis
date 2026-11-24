@@ -138,6 +138,11 @@ GIT_SHA         := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknow
 # where your changed source is (the licence's section 13).  An http or
 # https address, with no quote, space, '|', '&' or '\' in it.
 SOURCE_URL      ?= https://github.com/averagenative/axis
+# An empty value counts as none given: an image build that passes no
+# SOURCE_URL hands make an empty one in the environment.
+ifeq ($(strip $(SOURCE_URL)),)
+    override SOURCE_URL := https://github.com/averagenative/axis
+endif
 ifneq ($(filter-out http://% https://%,$(SOURCE_URL))$(word 2,$(SOURCE_URL)),)
     $(error SOURCE_URL must be one http or https address)
 endif

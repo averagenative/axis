@@ -15,7 +15,7 @@ What Axis is not:
 - **Not a media server.** Plex and Jellyfin stay your players. Axis tells
   them which folder changed.
 - **Not finished.** Axis is early software. Its first public version is a
-  release candidate, 0.1.0-rc1. Do not point it at a library you care about
+  release candidate, 0.1.0-rc2. Do not point it at a library you care about
   yet. See [Status](#status).
 
 Axis is a single daemon, `axisd`, with a PostgreSQL database and a
@@ -110,8 +110,8 @@ You need Linux, `git`, and Docker with the Compose plugin or Podman with
 `podman compose`.
 
 The image is `ghcr.io/averagenative/axis`. The release candidate is published
-under the tag `0.1.0-rc1` and under the moving tag `rc`, by a workflow that
-runs when the tag `v0.1.0-rc1` is pushed to this repository. The image exists
+under the tag `0.1.0-rc2` and under the moving tag `rc`, by a workflow that
+runs when the tag `v0.1.0-rc2` is pushed to this repository. The image exists
 only after that workflow run has finished. If the pull in step 2 says that
 the image is not found, build the image yourself instead. The tags `0.1` and
 `latest` appear with the first final release.
@@ -129,7 +129,7 @@ the image is not found, build the image yourself instead. The tags `0.1` and
      there is nothing to change:
 
      ```sh
-     docker pull ghcr.io/averagenative/axis:0.1.0-rc1    # or: podman pull
+     docker pull ghcr.io/averagenative/axis:0.1.0-rc2    # or: podman pull
      ```
 
    - **Build the image yourself.** This also needs GNU Make. It doesn't need

@@ -44,7 +44,7 @@ podman run -d --name axis --network axis \
     -v /path/to/disk1:/media/disk1:ro \
     --health-cmd '/usr/bin/axisd --healthcheck' --health-interval 15s \
     --stop-timeout 45 --restart unless-stopped \
-    ghcr.io/averagenative/axis:0.1.0-rc1
+    ghcr.io/averagenative/axis:0.1.0-rc2
 ```
 
 Lines to edit in the last command: `-v /path/to/disk1:/media/disk1:ro` (one
@@ -98,7 +98,7 @@ docker run -d --name axis --network axis \
     -v /path/to/disk1:/media/disk1:ro \
     --health-cmd '/usr/bin/axisd --healthcheck' --health-interval 15s \
     --stop-timeout 45 --restart unless-stopped \
-    ghcr.io/averagenative/axis:0.1.0-rc1
+    ghcr.io/averagenative/axis:0.1.0-rc2
 ```
 
 ## The first administrator

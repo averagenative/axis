@@ -14,8 +14,8 @@ Works with Docker Compose and Podman Compose.
 In `compose.yaml`, every line to change is marked `EDIT`:
 
 - `image:` (both services): the image is published as
-  `ghcr.io/averagenative/axis` from the tag `v0.1.0-rc1` on. The example
-  names the release candidate, `0.1.0-rc1`. The minor line (`0.1`) and
+  `ghcr.io/averagenative/axis` from the tag `v0.1.0-rc2` on. The example
+  names the release candidate, `0.1.0-rc2`. The minor line (`0.1`) and
   `latest` exist from the first final release on (see
   [Published images](../../README.md#published-images)). To use an image
   that you built with `make container`, set

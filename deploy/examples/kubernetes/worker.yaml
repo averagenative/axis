@@ -37,7 +37,7 @@ spec:
       containers:
         - name: axis-worker
           # EDIT: the same image as axisd.
-          image: ghcr.io/averagenative/axis:0.1.0-rc1
+          image: ghcr.io/averagenative/axis:0.1.0-rc2
           command: ["/usr/bin/axis-worker"]
           env:
             # EDIT: the daemon through the ingress, over TLS.  The worker

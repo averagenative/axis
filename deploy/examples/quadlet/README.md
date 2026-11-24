@@ -67,7 +67,7 @@ from the files, and says which line it does not understand.
 
 Change the tag on the `Image=` line when you move to another version, run
 `systemctl --user daemon-reload`, pull the image (`podman pull
-ghcr.io/averagenative/axis:0.1.0-rc1` for the tag the example names), and
+ghcr.io/averagenative/axis:0.1.0-rc2` for the tag the example names), and
 run `systemctl --user restart axis.service`. Take a database backup first
 (../../README.md, "Backing up the database"). To go back, restore it into a
 newly created empty database, never with `pg_restore --clean` over the old

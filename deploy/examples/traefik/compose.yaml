@@ -59,7 +59,7 @@ services:
 
   axis:
     # EDIT: the published image, or AXIS_IMAGE=localhost/axis:latest.
-    image: ${AXIS_IMAGE:-ghcr.io/averagenative/axis:0.1.0-rc1}
+    image: ${AXIS_IMAGE:-ghcr.io/averagenative/axis:0.1.0-rc2}
     restart: unless-stopped
     user: "${PUID:-1000}:${PGID:-1000}"
     read_only: true

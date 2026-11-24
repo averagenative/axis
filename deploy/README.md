@@ -32,12 +32,12 @@ and `linux/arm64`.
 
 Images are built and pushed by the repository's one GitHub Actions workflow,
 `.github/workflows/images.yml`, when a version tag is pushed. A release
-candidate (a tag with a suffix, such as `v0.1.0-rc1`) and a final release
+candidate (a tag with a suffix, such as `v0.1.0-rc2`) and a final release
 (such as `v0.1.2`) get different tags:
 
 | Tag | Published by | Moves? | Use it when |
 | --- | --- | --- | --- |
-| `0.1.0-rc1` | a release candidate | never | you want exactly this release candidate |
+| `0.1.0-rc2` | a release candidate | never | you want exactly this release candidate |
 | `rc` | a release candidate | to each new release candidate | you want to try what the next release will be |
 | `0.1.2` | a final release | never | you want exactly this build (recommended for a server) |
 | `0.1` | a final release | to each new `0.1.x` | you want fixes without changes in behaviour |
@@ -47,9 +47,9 @@ A release candidate never moves `0.1` or `latest`. A workflow run that
 someone starts by hand at a commit without a version tag publishes
 `sha-<commit>` only.
 
-The first public tag is `v0.1.0-rc1`. From the moment its workflow run
-finishes, the image exists as `0.1.0-rc1` and `rc`, and the examples name
-`0.1.0-rc1`. The tags `0.1.0`, `0.1` and `latest` don't exist until the first
+The first published image is from the tag `v0.1.0-rc2` (`v0.1.0-rc1` has no image: its build failed). From the moment its workflow run
+finishes, the image exists as `0.1.0-rc2` and `rc`, and the examples name
+`0.1.0-rc2`. The tags `0.1.0`, `0.1` and `latest` don't exist until the first
 final release. Before the run finishes, or to run your own build, build the
 image where you run it, or for both architectures on machines of your own
 ([below](#building-the-images-yourself)).
@@ -57,11 +57,11 @@ image where you run it, or for both architectures on machines of your own
 Each image's labels name the commit it was built from
 (`org.opencontainers.image.revision`), its version and its source; `axisd
 --version` in the image prints the version and commit too, and for a release
-candidate the version includes the suffix (`axisd 0.1.0-rc1`). Images are
+candidate the version includes the suffix (`axisd 0.1.0-rc2`). Images are
 signed with cosign, keyless, by the workflow's identity:
 
 ```sh
-cosign verify ghcr.io/averagenative/axis:0.1.0-rc1 \
+cosign verify ghcr.io/averagenative/axis:0.1.0-rc2 \
     --certificate-identity-regexp '^https://github.com/averagenative/axis/' \
     --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
@@ -83,8 +83,8 @@ This builds `deploy/Containerfile` and tags the result
 `localhost/axis:<version>` and `localhost/axis:latest`. Point an example at it
 with `AXIS_IMAGE=localhost/axis:latest` (Compose) or by changing its `image`
 line. To build a release candidate, add its suffix: `make container
-VERSION_SUFFIX=-rc1` builds `localhost/axis:0.1.0-rc1`, and the programs in
-it report `0.1.0-rc1`.
+VERSION_SUFFIX=-rc2` builds `localhost/axis:0.1.0-rc2`, and the programs in
+it report `0.1.0-rc2`.
 
 The footer of every page in the web interface has a **Source** link, and the
 image has an `org.opencontainers.image.source` label. Both name the address
@@ -142,7 +142,7 @@ The login is yours, done beforehand; nothing in the repository holds a
 secret. A push needs a committed working tree, and uses the workflow's tag
 policy: at a commit tagged `vX.Y.Z` (which must be `config.mk`'s version)
 `X.Y.Z`, `X.Y` and `latest`; at a commit tagged as a release candidate, such
-as `v0.1.0-rc1` (build it with `VERSION_SUFFIX=-rc1`), `0.1.0-rc1` and `rc`;
+as `v0.1.0-rc2` (build it with `VERSION_SUFFIX=-rc2`), `0.1.0-rc2` and `rc`;
 at any other commit `sha-<commit>` only (`bash deploy/images.sh tags` prints
 them). Images pushed this way are not signed; the workflow's are.
 

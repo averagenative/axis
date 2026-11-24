@@ -61,10 +61,10 @@ spec:
           type: RuntimeDefault
       containers:
         - name: axisd
-          # EDIT: the published image (the release candidate 0.1.0-rc1 for
+          # EDIT: the published image (the release candidate 0.1.0-rc2 for
           # now; the minor line "0.1" exists from the first final release
           # on), or one you built and pushed to your own registry.
-          image: ghcr.io/averagenative/axis:0.1.0-rc1
+          image: ghcr.io/averagenative/axis:0.1.0-rc2
           ports:
             - name: http
               containerPort: 7800

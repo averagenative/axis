@@ -130,7 +130,7 @@ already on disk** (optional). You do not need any of them to look at your librar
   for real under Podman (`make check-examples`). The Kubernetes manifests
   run on kind.
 - The tag-triggered image workflow has never run. The first image is
-  published when the tag `v0.1.0-rc1` is pushed and its workflow run
+  published when the tag `v0.1.0-rc2` is pushed and its workflow run
   finishes. Until then, you build the image from a checkout.
 - Adding a disk that is mounted read-only (the change
   `add-volume-read-only`) is built and tested on generated data. It has not

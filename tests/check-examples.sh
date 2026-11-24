@@ -1000,7 +1000,7 @@ part_quadlet() {
 	# What a reader edits, and the prefix on every name so that nothing here
 	# can be mistaken for a real installation.
 	edit "$dir/axis.container" \
-		-e 's|^Image=ghcr.io/averagenative/axis:0.1.0-rc1$|Image='"$image"'|' \
+		-e 's|^Image=ghcr.io/averagenative/axis:0.1.0-rc2$|Image='"$image"'|' \
 		-e 's|^PublishPort=127.0.0.1:7800:7800$|PublishPort=127.0.0.1:'"$port"':7800|' \
 		-e 's|/path/to/disk1|'"$work"'/quadlet-media|' \
 		-e 's|^# \(SecurityLabelDisable=true\)$|\1|' \

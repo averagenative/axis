@@ -17,7 +17,7 @@ services:
   axis:
     # EDIT: the published image, or AXIS_IMAGE=localhost/axis:latest for one
     # built with `make container`.
-    image: ${AXIS_IMAGE:-ghcr.io/averagenative/axis:0.1.0-rc1}
+    image: ${AXIS_IMAGE:-ghcr.io/averagenative/axis:0.1.0-rc2}
     restart: unless-stopped
     # The same user and group as the download clients below, so that the
     # files each one writes the others can read, link and rename.

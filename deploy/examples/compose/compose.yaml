@@ -21,10 +21,10 @@
 
 services:
   axis:
-    # EDIT: the published image (the release candidate 0.1.0-rc1 for now; the
+    # EDIT: the published image (the release candidate 0.1.0-rc2 for now; the
     # minor line "0.1" exists from the first final release on), or the one
     # `make container` builds locally: AXIS_IMAGE=localhost/axis:latest
-    image: ${AXIS_IMAGE:-ghcr.io/averagenative/axis:0.1.0-rc1}
+    image: ${AXIS_IMAGE:-ghcr.io/averagenative/axis:0.1.0-rc2}
     restart: unless-stopped
 
     # Never root.  PUID and PGID pick the user and group; the image works with
@@ -95,7 +95,7 @@ services:
   # 127.0.0.1, which is this container pair's own loopback: the token never
   # crosses a network, and plain http is allowed only for that.
   worker:
-    image: ${AXIS_IMAGE:-ghcr.io/averagenative/axis:0.1.0-rc1}
+    image: ${AXIS_IMAGE:-ghcr.io/averagenative/axis:0.1.0-rc2}
     entrypoint: ["/usr/bin/axis-worker"]
     profiles: ["worker"]
     restart: unless-stopped

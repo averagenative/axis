@@ -11,7 +11,7 @@ After=axis-postgres.service
 [Container]
 ContainerName=axis
 # EDIT: the published image, or localhost/axis:latest from `make container`.
-Image=ghcr.io/averagenative/axis:0.1.0-rc1
+Image=ghcr.io/averagenative/axis:0.1.0-rc2
 Network=axis.network
 # The web interface on this machine only; 0.0.0.0:7800:7800 offers it to
 # the network once the first administrator exists.
