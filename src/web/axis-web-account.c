@@ -22,6 +22,10 @@
 
 #define USERNAME_RULES AXIS_USERNAME_RULES
 
+/* The refusal of a requester's change of role without a new password. */
+#define REQUESTER_NEW_PASSWORD "A requester's password was typed into the request portal, so the account takes " \
+	"another role only with a new password: type one beside the button."
+
 /* ── Shared ─────────────────────────────────────────────────────── */
 
 static gchar *
@@ -77,6 +81,36 @@ action_form(
 		axis_web_auth_add(form, axis_web_auth_hidden(hidden_name, hidden_value));
 	axis_web_auth_add(form, axis_web_auth_button(label, css_class));
 
+	return form;
+}
+
+/* A requester's change of role: the role, a new password for it, and one
+ * button. */
+static HtmxNode *
+role_form_with_password(
+	HtmxRequest *request,
+	const gchar *action,
+	gint64       user_id,
+	const gchar *role,
+	const gchar *label
+){
+	HtmxNode *form = axis_web_auth_post_form(request, action);
+	g_autofree gchar *input_id = g_strdup_printf("role-%s-password-%" G_GINT64_FORMAT, role, user_id);
+	HtmxInput *input = htmx_input_new(HTMX_INPUT_PASSWORD);
+	HtmxLabel *text = htmx_label_new_for(input_id);
+
+	htmx_element_add_class(HTMX_ELEMENT(form), "inline-form");
+	axis_web_auth_add(form, axis_web_auth_hidden("role", role));
+	htmx_element_add_class(HTMX_ELEMENT(text), "visually-hidden");
+	htmx_node_set_text_content(HTMX_NODE(text), "New password for the new role");
+	htmx_element_set_id(HTMX_ELEMENT(input), input_id);
+	htmx_input_set_name(input, "password");
+	htmx_input_set_required(input, TRUE);
+	htmx_input_set_placeholder(input, "New password for the new role");
+	htmx_element_set_attribute(HTMX_ELEMENT(input), "autocomplete", "new-password");
+	axis_web_auth_add(form, text);
+	axis_web_auth_add(form, input);
+	axis_web_auth_add(form, axis_web_auth_button(label, NULL));
 	return form;
 }
 
@@ -741,11 +775,18 @@ user_actions(
 
 	htmx_element_add_class(HTMX_ELEMENT(actions), "actions");
 
-	/* The two roles the account does not have. */
-	if (user->role != AXIS_USER_ROLE_USER)
+	/* The two roles the account does not have.  A requester's password went
+	 * through the request portal, so a requester takes another role only
+	 * with a new password, set in the same step. */
+	if (user->role == AXIS_USER_ROLE_REQUESTER) {
+		axis_web_auth_add(actions, role_form_with_password(request, role, user->id, "user", "Change role to user"));
+		axis_web_auth_add(actions, role_form_with_password(request, role, user->id, "admin",
+			"Change role to administrator"));
+	} else if (user->role != AXIS_USER_ROLE_USER) {
 		axis_web_auth_add(actions, action_form(request, role, "role", "user", "Change role to user", NULL));
-	if (user->role != AXIS_USER_ROLE_ADMIN)
+	} else {
 		axis_web_auth_add(actions, action_form(request, role, "role", "admin", "Change role to administrator", NULL));
+	}
 	if (user->role != AXIS_USER_ROLE_REQUESTER)
 		axis_web_auth_add(actions, action_form(request, role, "role", "requester", "Change role to requester",
 			NULL));
@@ -827,7 +868,7 @@ users_page(
 		"settings and start searches, downloads, imports and conversions; users can look, and "
 		"can ask for a movie or a series while the Requests module is on, but change nothing else. A requester "
 		"cannot log in here at all: the account is for the request portal only, and its password needs at least 12 "
-		"characters."));
+		"characters. A requester given another role gets a new password in the same step."));
 	axis_web_notice_begin(&place, request, error, g_strdup(message), HTMX_NODE(content));
 	htmx_element_set_id(HTMX_ELEMENT(accounts), "accounts");
 	axis_web_notice_put(&place, accounts, "accounts");
@@ -1027,6 +1068,9 @@ typedef struct
 	UserOp        op;
 	gint64        id;
 	AxisUserRole  role;
+	gchar        *password;	/* a requester's change of role: the new one (secret) */
+	gboolean      with_password;	/* one was given */
+	gboolean      same_password;	/* it is the one the account has */
 	gchar        *name;
 	AxisUser     *result;
 	GError       *error;
@@ -1037,10 +1081,35 @@ user_work_free(gpointer data)
 {
 	UserWork *work = data;
 
+	axis_secret_free(work->password);
 	g_free(work->name);
 	axis_user_free(work->result);
 	g_clear_error(&work->error);
 	g_free(work);
+}
+
+/* A requester given another role: the hash of the new password, which must
+ * not be the one the request portal saw; %NULL (and *@same set, or the
+ * error) when there is none to give. */
+static gchar *
+new_role_password(
+	AxisWebAuth  *auth,
+	UserWork     *work,
+	GError      **error
+){
+	g_autoptr(AxisUser) user = NULL;
+	gchar *stored = NULL;
+	gboolean same;
+
+	if (!axis_user_store_get(auth->pool, work->id, &user, &stored, error))
+		return NULL;
+	same = user != NULL && axis_password_verify(stored, work->password);
+	axis_secret_free(stored);
+	if (same) {
+		work->same_password = TRUE;
+		return NULL;
+	}
+	return axis_password_hash(work->password, error);
 }
 
 static void
@@ -1057,7 +1126,18 @@ user_work(
 			work->op == USER_DISABLE, &work->error);
 		break;
 	case USER_ROLE:
-		work->result = axis_user_store_set_role(auth->pool, work->id, work->role, &work->error);
+		if (work->password != NULL) {
+			gchar *hash = new_role_password(auth, work, &work->error);
+
+			axis_secret_free(work->password);
+			work->password = NULL;
+			if (hash == NULL)
+				break;
+			work->result = axis_user_store_set_role(auth->pool, work->id, work->role, hash, &work->error);
+			g_free(hash);
+		} else {
+			work->result = axis_user_store_set_role(auth->pool, work->id, work->role, NULL, &work->error);
+		}
 		break;
 	case USER_DELETE:
 		axis_user_store_delete(auth->pool, work->id, &work->error);
@@ -1103,8 +1183,17 @@ user_done(
 	}
 	if (g_error_matches(work->error, AXIS_USER_ERROR, AXIS_USER_ERROR_NOT_FOUND))
 		return not_found(request);
+	/* The account became a requester between the page and the change. */
+	if (g_error_matches(work->error, AXIS_USER_ERROR, AXIS_USER_ERROR_NEEDS_PASSWORD))
+		return users_page(request, 409, TRUE, REQUESTER_NEW_PASSWORD);
 	if (work->error != NULL)
 		return axis_web_internal_error(request, work->error);
+	if (work->same_password) {
+		axis_web_auth_audit("role change refused, the requester's own password: user=%s by=%s client=%s",
+			work->name, state->username, state->client_address);
+		return users_page(request, 400, TRUE, "The new password must not be the one the account has now: that one "
+			"was typed into the request portal.");
+	}
 
 	if (work->op == USER_DELETE)
 		axis_session_store_remove_user(auth->sessions, work->id);
@@ -1124,8 +1213,9 @@ user_done(
 		break;
 	case USER_ROLE:
 		done = "role";
-		axis_web_auth_audit("role changed: user=%s role=%s by=%s client=%s", work->name,
-			axis_user_role_to_string(work->role), state->username, state->client_address);
+		axis_web_auth_audit("role changed: user=%s role=%s%s by=%s client=%s", work->name,
+			axis_user_role_to_string(work->role), work->with_password ? " (with a new password)" : "", state->username,
+			state->client_address);
 		break;
 	case USER_DELETE:
 	default:
@@ -1164,6 +1254,7 @@ user_change(
 ){
 	gint64 id = param_id(params);
 	const AxisUser *target = id != 0 ? axis_session_store_get_user(auth->sessions, id) : NULL;
+	const gchar *password = NULL;
 	UserWork *work;
 	AxisUserRole role = AXIS_USER_ROLE_USER;
 
@@ -1171,11 +1262,26 @@ user_change(
 		return not_found(request);
 	if (op == USER_ROLE && !parse_role(htmx_request_get_form_value(request, "role"), &role))
 		return users_page(request, 400, TRUE, "Choose a role.");
+	/* A requester's password was typed into the request portal, which faces
+	 * the internet: it must open nothing else, so another role comes with a
+	 * new password, held to the rule of that role. */
+	if (op == USER_ROLE && target->role == AXIS_USER_ROLE_REQUESTER && role != AXIS_USER_ROLE_REQUESTER) {
+		const gchar *problem;
+
+		password = htmx_request_get_form_value(request, "password");
+		if (password == NULL || password[0] == '\0')
+			return users_page(request, 400, TRUE, REQUESTER_NEW_PASSWORD);
+		problem = axis_auth_check_password(password);
+		if (problem != NULL)
+			return users_page(request, 400, TRUE, problem);
+	}
 
 	work = g_new0(UserWork, 1);
 	work->op = op;
 	work->id = id;
 	work->role = role;
+	work->password = g_strdup(password);
+	work->with_password = password != NULL;
 	work->name = g_strdup(target->username);
 
 	return axis_web_auth_dispatch(auth, request, user_work, user_done, work, user_work_free);

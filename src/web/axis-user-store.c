@@ -445,6 +445,7 @@ typedef struct
 {
 	const gchar *id;
 	Change       change;
+	const gchar *hash;	/* a role change: the new password's, or NULL */
 	AxisUser    *result;	/* out */
 } UserChange;
 
@@ -504,7 +505,7 @@ user_change_body(
 ){
 	UserChange *op = data;
 	g_autoptr(AxisDbResult) result = NULL;
-	const gchar *params[2];
+	const gchar *params[3];
 	const gchar *sql = NULL;
 	const gchar *role = change_role(op->change);
 	gboolean ends_sessions = op->change == CHANGE_DISABLE;
@@ -518,10 +519,14 @@ user_change_body(
 
 	params[0] = op->id;
 	params[1] = role;
+	params[2] = NULL;
 	/* A change of the role: the row is locked, and only a role that differs
-	 * moves the account to a new epoch and ends its sessions. */
+	 * moves the account to a new epoch and ends its sessions.  A requester's
+	 * password went through the request portal: leaving the role, the
+	 * account takes a new one, or does not leave it. */
 	if (role != NULL) {
 		g_autoptr(AxisDbResult) current = NULL;
+		const gchar *was;
 
 		if (!axis_db_conn_exec(conn, "SELECT role FROM app_user WHERE id = $1 FOR UPDATE", 1, params, &current, error))
 			return FALSE;
@@ -530,8 +535,18 @@ user_change_body(
 				"the account no longer exists");
 			return FALSE;
 		}
-		ends_sessions = g_strcmp0(axis_db_result_get_text(current, 0, 0), role) != 0;
-		n_params = 2;
+		was = axis_db_result_get_text(current, 0, 0);
+		ends_sessions = g_strcmp0(was, role) != 0;
+		/* (A role this build does not know reads as a requester's.) */
+		if (ends_sessions && g_strcmp0(was, "admin") != 0 && g_strcmp0(was, "user") != 0) {
+			if (op->hash == NULL) {
+				g_set_error_literal(error, AXIS_USER_ERROR, AXIS_USER_ERROR_NEEDS_PASSWORD,
+					"a requester given another role needs a new password");
+				return FALSE;
+			}
+			params[2] = op->hash;
+		}
+		n_params = 3;
 	}
 
 	switch (op->change) {
@@ -547,7 +562,7 @@ user_change_body(
 	case CHANGE_MAKE_USER:
 	case CHANGE_MAKE_REQUESTER:
 		sql = "UPDATE app_user SET auth_epoch = auth_epoch + CASE WHEN role <> $2 THEN 1 ELSE 0 END, role = $2, "
-		      "updated_at = now() WHERE id = $1 RETURNING " USER_COLUMNS;
+		      "password_hash = coalesce($3, password_hash), updated_at = now() WHERE id = $1 RETURNING " USER_COLUMNS;
 		break;
 	case CHANGE_DELETE:
 		sql = "DELETE FROM app_user WHERE id = $1 RETURNING " USER_COLUMNS;
@@ -577,6 +592,7 @@ user_change(
 	AxisDbPool   *pool,
 	gint64        id,
 	Change        change,
+	const gchar  *hash,
 	GError      **error
 ){
 	gchar id_text[32];
@@ -586,6 +602,7 @@ user_change(
 	memset(&op, 0, sizeof(op));
 	op.id = id_text;
 	op.change = change;
+	op.hash = hash;
 
 	if (!in_transaction(pool, user_change_body, &op, error)) {
 		axis_user_free(op.result);
@@ -602,7 +619,7 @@ axis_user_store_set_disabled(
 	gboolean      disabled,
 	GError      **error
 ){
-	return user_change(pool, id, disabled ? CHANGE_DISABLE : CHANGE_ENABLE, error);
+	return user_change(pool, id, disabled ? CHANGE_DISABLE : CHANGE_ENABLE, NULL, error);
 }
 
 AxisUser *
@@ -610,10 +627,11 @@ axis_user_store_set_role(
 	AxisDbPool   *pool,
 	gint64        id,
 	AxisUserRole  role,
+	const gchar  *password_hash,
 	GError      **error
 ){
 	return user_change(pool, id, role == AXIS_USER_ROLE_ADMIN ? CHANGE_MAKE_ADMIN :
-		role == AXIS_USER_ROLE_REQUESTER ? CHANGE_MAKE_REQUESTER : CHANGE_MAKE_USER, error);
+		role == AXIS_USER_ROLE_REQUESTER ? CHANGE_MAKE_REQUESTER : CHANGE_MAKE_USER, password_hash, error);
 }
 
 gboolean
@@ -687,7 +705,7 @@ axis_user_store_delete(
 	gint64        id,
 	GError      **error
 ){
-	AxisUser *deleted = user_change(pool, id, CHANGE_DELETE, error);
+	AxisUser *deleted = user_change(pool, id, CHANGE_DELETE, NULL, error);
 
 	if (deleted == NULL)
 		return FALSE;

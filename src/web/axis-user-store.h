@@ -32,13 +32,16 @@ G_BEGIN_DECLS
  *   administrator
  * @AXIS_USER_ERROR_SETUP_CLOSED: an account exists, so first-run setup
  *   cannot create one
+ * @AXIS_USER_ERROR_NEEDS_PASSWORD: a requester is given another role without
+ *   a new password (axis_user_store_set_role())
  */
 typedef enum
 {
 	AXIS_USER_ERROR_NOT_FOUND,
 	AXIS_USER_ERROR_EXISTS,
 	AXIS_USER_ERROR_LAST_ADMIN,
-	AXIS_USER_ERROR_SETUP_CLOSED
+	AXIS_USER_ERROR_SETUP_CLOSED,
+	AXIS_USER_ERROR_NEEDS_PASSWORD
 } AxisUserError;
 
 GQuark
@@ -264,12 +267,21 @@ axis_user_store_set_disabled(
 
 /**
  * axis_user_store_set_role:
+ * @password_hash: (nullable): the hash of a new password, which a change of a
+ *   requester to another role needs
  *
  * Demoting the only enabled administrator (to a user or to a requester) fails
  * with %AXIS_USER_ERROR_LAST_ADMIN.  A change of the role moves the account
  * to a new epoch and deletes its sessions of every kind, in the same
  * transaction: nothing opened under the old role outlives it.  Setting the
  * role the account has changes nothing.
+ *
+ * A requester's password was typed into the request portal, which faces the
+ * internet, so it must open nothing else: a requester given another role
+ * gets @password_hash in the same transaction, and without one the change
+ * fails with %AXIS_USER_ERROR_NEEDS_PASSWORD (checked with the row locked,
+ * whatever the caller believed the role was).  @password_hash is used for
+ * nothing else.
  *
  * Returns: (transfer full) (nullable): the account as it now is
  */
@@ -278,6 +290,7 @@ axis_user_store_set_role(
 	AxisDbPool   *pool,
 	gint64        id,
 	AxisUserRole  role,
+	const gchar  *password_hash,
 	GError      **error
 );
 
