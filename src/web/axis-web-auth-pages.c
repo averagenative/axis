@@ -454,19 +454,17 @@ handle_login(
 	Attempt attempt;
 	LoginWork *work;
 
-	/* (add-request-portal, slice P4.)  An address that presented a portal
-	 * token in the last 24 hours speaks as a portal, and is not let in as a
-	 * person: the answer of a wrong password, and the password is not
-	 * checked.  Whoever holds a portal sees every password typed into it; an
-	 * administrator's, typed there by mistake, is then of no use from the
-	 * portal's own place in the network.  No count is touched: nothing here
+	/* (add-request-portal, slice P4.)  One of the portal's addresses
+	 * (server.portal_peers) is not let in as a person: the answer of a wrong
+	 * password, and the password is not checked.  Whoever holds a portal sees
+	 * every password typed into it; an administrator's, typed there by
+	 * mistake, is then of no use from the portal's own place in the network.
+	 * The connection's own address is asked as well as the client's that a
+	 * trusted proxy names, so that neither a forged X-Forwarded-For nor a
+	 * detour through the proxy gets past.  No count is touched: nothing here
 	 * can delay a login from anywhere else. */
-	if (axis_web_auth_portal_address_known(auth, state->client_address)) {
-		axis_web_auth_audit("login refused: client=%s presented a portal token in the last 24 hours, and an "
-			"address that speaks as a portal cannot log in here (the page Request portal says more)",
-			state->client_address);
+	if (axis_web_auth_portal_bars_login(auth, state->peer_address, state->client_address, "login"))
 		return login_page(request, 401, next, typed, LOGIN_FAILED);
-	}
 
 	/* Refused before any password work, even when it would be right; the
 	 * attempts already being checked count as the failures they may be. */
@@ -678,6 +676,12 @@ handle_setup(
 
 	if (!setup_open(auth))
 		return not_found(request);
+
+	/* The first administrator is not made from one of the portal's
+	 * addresses either (see handle_login()): the answer of a wrong setup
+	 * token, whatever the token, and no count is touched. */
+	if (axis_web_auth_portal_bars_login(auth, state->peer_address, state->client_address, "setup"))
+		return setup_page(request, 403, typed, "The setup token is not correct. Copy the newest one from the Axis log.");
 
 	wait = axis_login_throttle_check(auth->by_address, state->client_address, now);
 	if (wait > 0) {

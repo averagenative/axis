@@ -256,9 +256,54 @@ page_response(Work *work)
 	axis_web_auth_add(listener, paragraph("The request portal (axis-portal) and this API have not been reviewed for "
 		"exposure to the internet. Until the documents of Axis say that the review has passed, let the portal be "
 		"reached only from a network you trust."));
-	axis_web_auth_add(listener, paragraph("An address that used a portal token in the last 24 hours speaks as a "
-		"portal: a login to Axis itself from that address is refused, as a wrong password would be. Never type an "
-		"administrator's password into the portal. The column From below shows where each token was last used."));
+	/* The portal's addresses: what they are, what they mean, and what an
+	 * administrator who was refused at the login needs to find out why. */
+	{
+		g_autofree gchar *peers = axis_web_auth_portal_peers_text(self->auth);
+		g_autofree gchar *peer = NULL;
+		g_autofree gchar *proxy = NULL;
+		gint64 last_us = 0;
+		guint barred = axis_web_auth_portal_logins_barred(self->auth, &last_us);
+
+		if (peers[0] == '\0' && self->portal_port != 0) {
+			axis_web_auth_add(listener, axis_web_auth_notice(TRUE, "The portal's addresses are not set, so the portal "
+				"API answers nobody: every request to it gets 503. Set portal_peers in the [server] section of the "
+				"configuration file, or AXIS_PORTAL_PEERS in the environment, to the address the portal connects from "
+				"and every other address the portal has, and restart Axis."));
+		} else if (peers[0] == '\0') {
+			axis_web_auth_add(listener, paragraph("The portal's addresses (portal_peers in the configuration file, "
+				"AXIS_PORTAL_PEERS in the environment) are not set. The portal API answers only the addresses in that "
+				"list."));
+		} else {
+			g_autofree gchar *text = g_strdup_printf("The portal's addresses (portal_peers in the configuration file, "
+				"AXIS_PORTAL_PEERS in the environment): %s. The portal API answers these addresses and no other. Nobody "
+				"logs in to Axis itself from one of them: such a login is refused as a wrong password would be, "
+				"whether the connection comes from the address or a trusted proxy names it as the client. Never type "
+				"an administrator's password into the portal.", peers);
+
+			axis_web_auth_add(listener, paragraph(text));
+		}
+		if (axis_web_auth_portal_peers_overlap(self->auth, &peer, &proxy)) {
+			g_autofree gchar *text = g_strdup_printf("%s is among the portal's addresses and %s among the trusted "
+				"proxies: they share an address, so every login to Axis that arrives through that proxy is refused. "
+				"Give the portal an address of its own and list only that in portal_peers, then restart Axis.", peer,
+				proxy);
+
+			axis_web_auth_add(listener, axis_web_auth_notice(TRUE, text));
+		}
+		if (barred > 0) {
+			g_autofree gchar *when = axis_web_format_time(last_us, "-");
+			g_autofree gchar *text = g_strdup_printf("A login to Axis from one of the portal's addresses was last "
+				"refused %s (%u since Axis started). The log has a line for it that names the address. If it was your "
+				"own login, your browser reaches Axis from an address in the list above: reach Axis from another "
+				"address, or correct portal_peers and restart Axis.", when, barred);
+
+			axis_web_auth_add(listener, paragraph(text));
+		} else if (peers[0] != '\0') {
+			axis_web_auth_add(listener, paragraph("No login to Axis was refused for coming from one of these addresses "
+				"since Axis started."));
+		}
+	}
 	axis_web_auth_add(content, listener);
 
 	/* The ceilings over all people: where today stands, and how often each

@@ -135,48 +135,110 @@ axis_web_auth_portal_logout(
 	const gchar *proof
 );
 
-/* (add-request-portal, slice P4.)  An address a valid portal token was
- * presented from is remembered this long after the last time, and at most
- * this many of them (the one unused longest is forgotten for a new one). */
-#define AXIS_PORTAL_ADDRESS_REMEMBERED_US (G_GINT64_CONSTANT(24) * 3600 * G_USEC_PER_SEC)
-#define AXIS_PORTAL_ADDRESSES_MAX         256
+/*
+ * (add-request-portal, slice P4, after its review.)  The portal's addresses:
+ * server.portal_peers (AXIS_PORTAL_PEERS), a list of addresses and ranges
+ * that the administrator writes.  It means two things at once:
+ *
+ *  - the portal listener answers a connection whose own address (the socket's
+ *    peer; that listener reads no forwarding header) is in the list, and no
+ *    other: any other peer is refused before its token is looked at, and
+ *    counts for nothing.  While the list is empty, it answers nobody;
+ *  - no login at the engine's own interface (and no first setup) is taken
+ *    when the connection's own address or the client's address, as the
+ *    trusted proxies resolve it, is in the list.  Both are asked: a peer that
+ *    is a listed proxy as well cannot forward its own address away.  The
+ *    answer is that of a wrong password, no password is checked and no count
+ *    is touched.  A session that exists is not affected.
+ *
+ * Nothing is learnt and nothing expires: what a portal does, or a restart of
+ * the daemon, changes none of it.  A range is as wide as it is written (an
+ * IPv6 address is not widened to its /64); an IPv4-mapped IPv6 address is
+ * its IPv4 address.  So a password typed into a portal that is in the wrong
+ * hands cannot be used from the portal's own place in the network.
+ */
 
 /**
- * axis_web_auth_portal_note_address:
- * @address: (nullable): the address of the connection a valid portal token
- *   arrived on (the portal listener reads no forwarding header)
+ * axis_web_auth_set_portal_peers:
+ * @peers: (nullable): server.portal_peers, as the configuration holds it
  *
- * Remembers that @address speaks as a portal.  For
- * %AXIS_PORTAL_ADDRESS_REMEMBERED_US after the last time, a login at the
- * engine's own interface from that address is refused with the answer of a
- * wrong password, and its password is not checked: a password typed into a
- * portal that is in the wrong hands cannot be used from the portal's own
- * place in the network.  A session that exists is not affected.  Kept in
- * memory: a restart of the daemon forgets the addresses until the portal's
- * next request.  Main loop only.
+ * Before anything is served; main loop.  A host name is refused.
+ *
+ * Returns: %FALSE with @error set when @peers is not such a list (the list
+ *   then stays as it was)
  */
-void
-axis_web_auth_portal_note_address(
-	AxisWebAuth *self,
-	const gchar *address
-);
-
-/* Whether @address (a client's, as the engine's login sees it) is such an
- * address now.  Main loop only. */
 gboolean
-axis_web_auth_portal_address_known(
+axis_web_auth_set_portal_peers(
+	AxisWebAuth  *self,
+	const gchar  *peers,
+	GError      **error
+);
+
+/* Whether the list is empty: nobody is the portal.  Any thread. */
+gboolean
+axis_web_auth_portal_peers_none(AxisWebAuth *self);
+
+/* The list as written, "" when it is empty (transfer full).  Any thread. */
+gchar *
+axis_web_auth_portal_peers_text(AxisWebAuth *self);
+
+/* Whether @address (text; nullable) is one of the portal's.  Any thread. */
+gboolean
+axis_web_auth_portal_peer_listed(
 	AxisWebAuth *self,
 	const gchar *address
 );
 
-/* How many addresses are remembered now.  Main loop only. */
+/**
+ * axis_web_auth_portal_peers_overlap:
+ * @peer: (out) (transfer full) (optional): the entry of the portal's
+ *   addresses
+ * @proxy: (out) (transfer full) (optional): the entry of the trusted proxies
+ *
+ * Whether an address is both a portal's and a trusted proxy's.  Then the
+ * proxy administrators come through is refused at the login as the portal
+ * is, whoever it forwards: worth a warning.  Any thread.
+ */
+gboolean
+axis_web_auth_portal_peers_overlap(
+	AxisWebAuth  *self,
+	gchar       **peer,
+	gchar       **proxy
+);
+
+/**
+ * axis_web_auth_portal_bars_login:
+ * @peer: (nullable): the connection's own address
+ * @client: (nullable): the client's address as the trusted proxies resolve it
+ * @what: "login" or "setup", for the log
+ *
+ * Whether a login from there is refused because one of the two is a
+ * portal's address.  When it is, the refusal is counted and the log says so,
+ * naming the setting: at once the first time, then once a minute at most,
+ * with how many more there were.  Main loop only.
+ */
+gboolean
+axis_web_auth_portal_bars_login(
+	AxisWebAuth *self,
+	const gchar *peer,
+	const gchar *client,
+	const gchar *what
+);
+
+/* How many logins were refused for that since the daemon started, and when
+ * the last one was (@last_us: (out) (optional), microseconds since 1970; 0
+ * when never).  Main loop only. */
 guint
-axis_web_auth_portal_addresses(AxisWebAuth *self);
+axis_web_auth_portal_logins_barred(
+	AxisWebAuth *self,
+	gint64      *last_us
+);
 
 /**
  * axis_web_auth_portal_set_ceiling_func:
- * @func: (nullable): called on the main loop each time the failed logins of
- *   the last hour reach %AXIS_PORTAL_LOGIN_FAILURES_AN_HOUR from below
+ * @func: (nullable): called on the main loop when the failed logins of the
+ *   last hour are at %AXIS_PORTAL_LOGIN_FAILURES_AN_HOUR or over it, once an
+ *   hour at most
  *
  * Who is told that the hourly ceiling was reached (the notice and the page
  * "Request portal").

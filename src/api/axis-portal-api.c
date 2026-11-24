@@ -162,6 +162,7 @@ struct _AxisPortalApi
 	Budget                    by_person;
 	gint64                    token_noted_us;	/* when a refusal by one was last written down */
 	gint64                    person_noted_us;
+	gint64                    peer_noted_us;	/* and a refusal of an address that is not the portal's */
 	/* The search budget (main loop). */
 	GQueue                    searches;	/* gint64*: when each search that asked the provider was */
 	GHashTable               *searches_by_person;	/* gint64* account -> GQueue* of gint64* */
@@ -314,6 +315,29 @@ portal_gate(
 	gint64 id = 0;
 	Gate *gate;
 
+	/* Before anything else, the token included: this listener answers the
+	 * portal's addresses (server.portal_peers) and no other.  The address is
+	 * the connection's own; no forwarding header is read here.  While the
+	 * list is empty nobody is the portal, and everyone is told the same. */
+	if (axis_web_auth_portal_peers_none(self->auth)) {
+		htmx_context_set_response(context, refusal(503, "portal-peers", "the portal's addresses are not set on the "
+			"daemon (server.portal_peers, AXIS_PORTAL_PEERS); until they are, the portal API answers nobody", 0));
+		return;
+	}
+	if (!axis_web_auth_portal_peer_listed(self->auth, peer)) {
+		/* Nothing is counted for it and nothing it sent is read: a right
+		 * token and a wrong one are answered alike.  Written down once a
+		 * minute at most, with the address, which is what the administrator
+		 * of a portal that was just set up must list. */
+		if (self->peer_noted_us == 0 || now - self->peer_noted_us >= MINUTE_US) {
+			self->peer_noted_us = now;
+			g_message("portal API: a connection from %s was refused before its token was looked at: that address is "
+				"not one of the portal's (server.portal_peers, AXIS_PORTAL_PEERS). If it is your portal's, add it there "
+				"and restart Axis; this is said once a minute at most", peer != NULL ? peer : "an unknown address");
+		}
+		htmx_context_set_response(context, refusal(403, "not-a-portal", "this address is not one of the portal's", 0));
+		return;
+	}
 	/* This listener answers the portal API and nothing else. */
 	if (!under_prefix(path)) {
 		htmx_context_set_response(context, refusal(404, "not-found", "there is no such address", 0));
@@ -360,11 +384,6 @@ portal_gate(
 		htmx_context_set_response(context, response);
 		return;
 	}
-	/* This address speaks as a portal: no login at the engine's own
-	 * interface from it for a day (web/axis-web-auth-portal.h).  Before the
-	 * budget and everything else: whatever becomes of the request, the token
-	 * was presented. */
-	axis_web_auth_portal_note_address(self->auth, peer);
 	/* The token's budget: every request that presents it, whatever it asks,
 	 * so that a portal in the wrong hands cannot keep the daemon busy. */
 	wait = budget_take(&self->by_token, id, now);

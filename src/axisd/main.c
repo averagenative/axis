@@ -63,6 +63,7 @@
 #include "web/axis-web-arr.h"
 #include "web/axis-web-attention.h"
 #include "web/axis-web-auth.h"
+#include "web/axis-web-auth-portal.h"
 #include "web/axis-web-browser.h"
 #include "web/axis-web-compat.h"
 #include "requests/axis-requests.h"
@@ -1327,6 +1328,30 @@ serve(
 	if (auth == NULL)
 		return 1;
 	axis_web_auth_set_worker_tokens(auth, worker_tokens);
+	/* The portal's addresses (server.portal_peers): the portal listener
+	 * answers them alone, and no login to Axis itself is taken from one of
+	 * them, whether a portal listener is on or not. */
+	if (!axis_web_auth_set_portal_peers(auth, axis_config_get_portal_peers(config), &local)) {
+		g_set_error(error, AXIS_ERROR, AXIS_ERROR_CONFIG, "server.portal_peers: %s", local->message);
+		return 1;
+	}
+	{
+		g_autofree gchar *peer = NULL;
+		g_autofree gchar *proxy = NULL;
+
+		if (axis_config_get_portal_peers(config)[0] != '\0')
+			g_message("portal's addresses: %s (the portal API answers these alone, and nobody logs in to Axis itself "
+				"from them)", axis_config_get_portal_peers(config));
+		/* An address that is both: the proxy administrators come through
+		 * would be refused at the login as the portal is.  (A proxy listed by
+		 * name is compared once its name has resolved: the notice under
+		 * "Worth a look" then says the same.) */
+		if (axis_web_auth_portal_peers_overlap(auth, &peer, &proxy))
+			g_warning("server.portal_peers (AXIS_PORTAL_PEERS) and server.trusted_proxies (AXIS_TRUSTED_PROXIES) "
+				"share an address: %s is among the portal's addresses and %s among the trusted proxies. Every login to "
+				"Axis that arrives through that proxy is refused. Give the portal an address of its own and list only "
+				"that in portal_peers, or reach Axis through a proxy that is not on the portal's address", peer, proxy);
+	}
 	/* A browser that logged in stays remembered across restarts (its own
 	 * count of failed logins); without the key file, until this one stops. */
 	if (!axis_web_auth_load_device_key(auth, axis_data_dir_get_fd(data), &local)) {
@@ -1362,6 +1387,11 @@ serve(
 		}
 		g_message("portal API: listening on %s:%u (the portal API and nothing else)",
 			axis_config_get_portal_host(config), (guint)portal_port);
+		if (axis_config_get_portal_peers(config)[0] == '\0')
+			g_warning("portal API: the portal's addresses are not set, so the portal API answers 503 to everyone. Set "
+				"portal_peers in the [server] section of the configuration file, or AXIS_PORTAL_PEERS in the "
+				"environment, to the address the portal connects from (and every other address the portal has), and "
+				"restart Axis");
 	}
 
 	/* The probes share each database question among the requests that

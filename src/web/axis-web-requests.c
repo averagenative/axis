@@ -42,6 +42,7 @@
 #include <string.h>
 
 #include "web/axis-web-attention.h"
+#include "web/axis-web-auth-portal.h"
 #include "web/axis-web-auth-private.h"
 #include "web/axis-web-back.h"
 #include "web/axis-web-notice.h"
@@ -2003,6 +2004,40 @@ portal_limit_source(
 	return TRUE;
 }
 
+/*
+ * (Slice P4, after its review.)  An address is both one of the portal's
+ * (server.portal_peers) and a trusted proxy's.  A login to Axis that arrives
+ * through that proxy is then refused, whoever it is for: an administrator
+ * who set both lists to one address has locked the door they use.  Said
+ * under "Worth a look" with what to change, for as long as it holds.  Read
+ * from memory; a proxy listed by name counts once its name has resolved.
+ */
+static gboolean
+portal_overlap_source(
+	const AxisAttentionReading  *reading,
+	GPtrArray                   *items,
+	gpointer                     user_data,
+	GError                     **error
+){
+	AxisRequests *self = user_data;
+	g_autofree gchar *peer = NULL;
+	g_autofree gchar *proxy = NULL;
+	g_autofree gchar *words = NULL;
+	AxisAttentionItem *item;
+
+	if (self->auth == NULL || !axis_web_auth_portal_peers_overlap(self->auth, &peer, &proxy))
+		return TRUE;
+	words = g_strdup_printf("The request portal and a trusted reverse proxy share an address: %s is among the portal's "
+		"addresses (portal_peers) and %s among the trusted proxies. Every login to Axis that arrives through that proxy "
+		"is refused. Give the portal an address of its own, list only that in portal_peers, and restart Axis.", peer,
+		proxy);
+	item = axis_attention_item_new("requests.portal_peers_overlap", "", AXIS_ATTENTION_LOOK, 1, 0);
+	axis_attention_item_say(item, words, NULL, NULL);
+	axis_attention_item_link(item, "/admin/portal", "Open Request portal");
+	g_ptr_array_add(items, item);
+	return TRUE;
+}
+
 /* ── An account that goes ───────────────────────────────────────── */
 
 static void
@@ -2035,6 +2070,7 @@ axis_web_requests_register(
 	axis_web_add_attention_source(web, "the requests", waiting_source, self);
 	axis_web_add_attention_source(web, "the approved requests", not_added_source, self);
 	axis_web_add_attention_source(web, "the request portal's limits", portal_limit_source, self);
+	axis_web_add_attention_source(web, "the request portal's addresses", portal_overlap_source, self);
 
 	axis_web_route_full(web, HTMX_METHOD_GET, "/requests", AXIS_WEB_ROUTE_DEFAULT, handle_page, self);
 	axis_web_route_full(web, HTMX_METHOD_POST, "/requests", AXIS_WEB_ROUTE_DEFAULT, handle_ask, self);

@@ -159,7 +159,7 @@ static const gchar *const clean[] = {
 	"AXIS_WORKER_LEASE", "AXIS_DATA_DIR", "AXIS_ADMIN_USERNAME", "AXIS_ADMIN_PASSWORD",
 	"AXIS_ADMIN_PASSWORD_FILE", "AXIS_METRICS_TOKEN", "AXIS_METRICS_TOKEN_FILE", "AXIS_HEAD_TIMEOUT",
 	"AXIS_BODY_TIMEOUT", "AXIS_IDLE_TIMEOUT", "AXIS_MAX_CONNECTIONS", "AXIS_MAX_CONNECTIONS_PER_ADDRESS",
-	"AXIS_PORTAL_LISTEN_PORT", NULL
+	"AXIS_PORTAL_LISTEN_PORT", "AXIS_PORTAL_LISTEN_HOST", "AXIS_PORTAL_PEERS", NULL
 };
 
 /* The process id of the daemon the test started last: what answers a
@@ -2060,7 +2060,7 @@ test_portal_listener(Fixture *fx, gconstpointer data)
 	guint16 port = pick_free_port();
 	guint16 portal = pick_free_port();
 	g_autofree gchar *portal_text = g_strdup_printf("%u", (guint)portal);
-	const gchar *env[] = { "AXIS_PORTAL_LISTEN_PORT", NULL, NULL };
+	const gchar *env[] = { "AXIS_PORTAL_LISTEN_PORT", NULL, NULL, NULL, NULL, NULL, NULL };
 	g_autofree gchar *body = NULL;
 	guint status;
 
@@ -2079,7 +2079,34 @@ test_portal_listener(Fixture *fx, gconstpointer data)
 	g_assert_null(strstr(fx->stderr_text, "portal API: listening"));
 	g_clear_object(&fx->proc);
 
+	/* (Slice P4, after its review.)  A listener and nobody named as the
+	 * portal (server.portal_peers is empty): it answers 503 to everyone,
+	 * whatever is asked and whatever is presented, and the log says at start
+	 * what to set. */
 	env[1] = portal_text;
+	spawn_axisd_env(fx, port, axis_test_db_get_url(fx->db), env, NULL, NULL);
+	body = http_get(port, "/healthz", &status, NULL);
+	g_assert_cmpuint(status, ==, SOUP_STATUS_OK);
+	g_clear_pointer(&body, g_free);
+	g_assert_cmpuint(get_with_authorization(portal, "/api/v1/portal/hello", bearer, &body), ==, 503);
+	g_assert_nonnull(strstr(body, "\"error\":\"portal-peers\""));
+	g_assert_nonnull(strstr(body, "AXIS_PORTAL_PEERS"));
+	g_clear_pointer(&body, g_free);
+	g_assert_cmpuint(get_with_authorization(portal, "/api/v1/portal/hello", NULL, NULL), ==, 503);
+	g_assert_cmpuint(get_with_authorization(portal, "/healthz", NULL, NULL), ==, 503);
+	stop_and_expect_zero(fx);
+	g_assert_nonnull(strstr(fx->stderr_text, "the portal's addresses are not set, so the portal API answers 503 to "
+		"everyone"));
+	g_assert_nonnull(strstr(fx->stderr_text, "AXIS_PORTAL_PEERS"));
+	g_assert_null(strstr(fx->stderr_text, "share an address"));
+	g_clear_object(&fx->proc);
+
+	/* This machine's own address is the portal's, and (a mistake the daemon
+	 * warns of at start) a trusted proxy's too. */
+	env[2] = "AXIS_PORTAL_PEERS";
+	env[3] = "127.0.0.1, 192.0.2.16/28";
+	env[4] = "AXIS_TRUSTED_PROXIES";
+	env[5] = "127.0.0.0/8";
 	spawn_axisd_env(fx, port, axis_test_db_get_url(fx->db), env, NULL, NULL);
 	body = http_get(port, "/healthz", &status, NULL);
 	g_assert_cmpuint(status, ==, SOUP_STATUS_OK);
@@ -2101,6 +2128,10 @@ test_portal_listener(Fixture *fx, gconstpointer data)
 	g_assert_cmpuint(get_with_authorization(port, "/api/v1/portal/hello", bearer, NULL), ==, 404);
 	stop_and_expect_zero(fx);
 	g_assert_nonnull(strstr(fx->stderr_text, "portal API: listening on 127.0.0.1:"));
+	g_assert_nonnull(strstr(fx->stderr_text, "portal's addresses: 127.0.0.1, 192.0.2.16/28"));
+	g_assert_null(strstr(fx->stderr_text, "the portal's addresses are not set"));
+	g_assert_nonnull(strstr(fx->stderr_text, "share an address: 127.0.0.1 is among the portal's addresses and "
+		"127.0.0.0/8 among the trusted proxies"));
 	g_assert_null(strstr(fx->stderr_text, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"));
 	g_assert_true(port_is_closed(portal));
 }

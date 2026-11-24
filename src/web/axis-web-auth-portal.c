@@ -62,7 +62,8 @@ axis_web_auth_portal_init(AxisWebAuth *self)
 		AXIS_AUTH_THROTTLE_MAX_US, AXIS_AUTH_THROTTLE_FORGET_US, AXIS_AUTH_THROTTLE_MAX_KEYS);
 	g_queue_init(&self->portal_failures);
 	g_queue_init(&self->portal_waiting);
-	self->portal_addresses = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
+	/* Nobody's, until the configuration says whose. */
+	self->portal_peers = axis_proxy_list_parse("", NULL);
 }
 
 void
@@ -74,93 +75,130 @@ axis_web_auth_portal_clear(AxisWebAuth *self)
 	axis_login_throttle_free(self->portal_by_owner);
 	g_queue_clear_full(&self->portal_failures, g_free);
 	g_queue_clear_full(&self->portal_waiting, (GDestroyNotify)login_free);
-	g_clear_pointer(&self->portal_addresses, g_hash_table_unref);
+	g_clear_pointer(&self->portal_peers, axis_proxy_list_free);
 }
 
-/* ── The addresses that speak as a portal ───────────────────────── */
+/* ── The portal's addresses ─────────────────────────────────────── */
 
-void
-axis_web_auth_portal_note_address(
-	AxisWebAuth *self,
-	const gchar *address
+gboolean
+axis_web_auth_set_portal_peers(
+	AxisWebAuth  *self,
+	const gchar  *peers,
+	GError      **error
 ){
-	g_autofree gchar *key = axis_proxy_address_key(address != NULL ? address : "");
-	gint64 now = axis_web_auth_now_monotonic(self);
-	gint64 *when;
+	AxisProxyList *list;
 
-	if (key == NULL || key[0] == '\0')
-		return;
-	when = g_hash_table_lookup(self->portal_addresses, key);
-	if (when != NULL) {
-		*when = now;
-		return;
-	}
-	/* Room for a new one: those whose time has run out go, and then, when
-	 * the table is still full, the one unused longest.  Whoever presents the
-	 * token from many addresses keeps the ones it used last, its own of this
-	 * moment among them. */
-	if (g_hash_table_size(self->portal_addresses) >= AXIS_PORTAL_ADDRESSES_MAX) {
-		GHashTableIter iter;
-		gpointer name;
-		gpointer value;
-		const gchar *oldest = NULL;
-		gint64 oldest_us = G_MAXINT64;
+	g_return_val_if_fail(self != NULL, FALSE);
 
-		g_hash_table_iter_init(&iter, self->portal_addresses);
-		while (g_hash_table_iter_next(&iter, &name, &value)) {
-			if (now - *(gint64 *)value >= AXIS_PORTAL_ADDRESS_REMEMBERED_US) {
-				g_hash_table_iter_remove(&iter);
-			} else if (*(gint64 *)value < oldest_us) {
-				oldest_us = *(gint64 *)value;
-				oldest = name;
-			}
-		}
-		if (g_hash_table_size(self->portal_addresses) >= AXIS_PORTAL_ADDRESSES_MAX && oldest != NULL)
-			g_hash_table_remove(self->portal_addresses, oldest);
+	list = axis_proxy_list_parse(peers != NULL ? peers : "", error);
+	if (list == NULL)
+		return FALSE;
+	if (axis_proxy_list_has_names(list)) {
+		g_set_error_literal(error, AXIS_PROXY_ERROR, AXIS_PROXY_ERROR_INVALID,
+			"the portal's addresses are IP addresses and CIDR ranges only, never a host name");
+		axis_proxy_list_free(list);
+		return FALSE;
 	}
-	when = g_new(gint64, 1);
-	*when = now;
-	g_hash_table_insert(self->portal_addresses, g_steal_pointer(&key), when);
-	/* Said once for an address: an administrator who is refused there finds
-	 * the reason in the log. */
-	g_message("portal API: %s presented a portal token; a login to Axis itself from that address is refused until "
-		"24 hours after its last request", address);
+	axis_proxy_list_free(self->portal_peers);
+	self->portal_peers = list;
+	return TRUE;
 }
 
 gboolean
-axis_web_auth_portal_address_known(
+axis_web_auth_portal_peers_none(AxisWebAuth *self)
+{
+	g_return_val_if_fail(self != NULL, TRUE);
+
+	return axis_proxy_list_get_length(self->portal_peers) == 0;
+}
+
+gchar *
+axis_web_auth_portal_peers_text(AxisWebAuth *self)
+{
+	g_return_val_if_fail(self != NULL, NULL);
+
+	return axis_proxy_list_to_string(self->portal_peers);
+}
+
+gboolean
+axis_web_auth_portal_peer_listed(
 	AxisWebAuth *self,
 	const gchar *address
 ){
-	g_autofree gchar *key = axis_proxy_address_key(address != NULL ? address : "");
-	gint64 *when;
+	AxisIpAddress parsed;
 
-	if (key == NULL || key[0] == '\0')
+	g_return_val_if_fail(self != NULL, FALSE);
+
+	/* (The parser folds an IPv4-mapped IPv6 address to its IPv4 address,
+	 * and the list was read by the same parser.) */
+	return address != NULL && axis_ip_address_parse(address, &parsed) &&
+		axis_proxy_list_contains(self->portal_peers, &parsed);
+}
+
+gboolean
+axis_web_auth_portal_peers_overlap(
+	AxisWebAuth  *self,
+	gchar       **peer,
+	gchar       **proxy
+){
+	g_return_val_if_fail(self != NULL, FALSE);
+
+	return axis_proxy_lists_overlap(self->portal_peers, self->trusted, peer, proxy);
+}
+
+gboolean
+axis_web_auth_portal_bars_login(
+	AxisWebAuth *self,
+	const gchar *peer,
+	const gchar *client,
+	const gchar *what
+){
+	gboolean by_peer = axis_web_auth_portal_peer_listed(self, peer);
+	gboolean by_client = !by_peer && axis_web_auth_portal_peer_listed(self, client);
+	gint64 now = axis_web_auth_now_monotonic(self);
+	g_autofree gchar *more = NULL;
+
+	if (!by_peer && !by_client)
 		return FALSE;
-	when = g_hash_table_lookup(self->portal_addresses, key);
-	if (when == NULL)
-		return FALSE;
-	if (axis_web_auth_now_monotonic(self) - *when >= AXIS_PORTAL_ADDRESS_REMEMBERED_US) {
-		g_hash_table_remove(self->portal_addresses, key);
-		return FALSE;
+
+	self->portal_refused++;
+	self->portal_refused_at = axis_web_auth_now(self);
+	/* One line, then one a minute at most: whoever holds the portal can try
+	 * as often as it likes, and the log is not its to fill.  The line names
+	 * the rule and the setting, so that an administrator who is refused from
+	 * their own desk finds out why. */
+	if (self->portal_refused_told_us != 0 && now - self->portal_refused_told_us < ADMIT_EVERY_US) {
+		self->portal_refused_untold++;
+		return TRUE;
 	}
+	more = self->portal_refused_untold > 0 ? g_strdup_printf(" (and %u more such refusals since this was last said)",
+		self->portal_refused_untold) : g_strdup("");
+	if (by_peer)
+		axis_web_auth_audit("%s refused: the connection came from %s, one of the request portal's addresses "
+			"(server.portal_peers, AXIS_PORTAL_PEERS), and nobody logs in to Axis itself from those, whatever is "
+			"forwarded. The browser was told what a wrong password is told. If this was your own login, reach Axis "
+			"from an address that is not in that list, or take the address out of it and restart Axis%s", what, peer,
+			more);
+	else
+		axis_web_auth_audit("%s refused: the client %s, as a trusted proxy names it, is one of the request portal's "
+			"addresses (server.portal_peers, AXIS_PORTAL_PEERS), and nobody logs in to Axis itself from those. The "
+			"browser was told what a wrong password is told. If this was your own login, reach Axis from an address "
+			"that is not in that list, or take the address out of it and restart Axis%s", what, client, more);
+	self->portal_refused_told_us = now;
+	self->portal_refused_untold = 0;
 	return TRUE;
 }
 
 guint
-axis_web_auth_portal_addresses(AxisWebAuth *self)
-{
-	GHashTableIter iter;
-	gpointer value;
-	gint64 now = axis_web_auth_now_monotonic(self);
-	guint n = 0;
+axis_web_auth_portal_logins_barred(
+	AxisWebAuth *self,
+	gint64      *last_us
+){
+	g_return_val_if_fail(self != NULL, 0);
 
-	g_hash_table_iter_init(&iter, self->portal_addresses);
-	while (g_hash_table_iter_next(&iter, NULL, &value)) {
-		if (now - *(gint64 *)value < AXIS_PORTAL_ADDRESS_REMEMBERED_US)
-			n++;
-	}
-	return n;
+	if (last_us != NULL)
+		*last_us = self->portal_refused_at;
+	return self->portal_refused;
 }
 
 void
@@ -215,11 +253,12 @@ failures_add(
 	failures_trim(self, now);
 	*when = now;
 	g_queue_push_tail(&self->portal_failures, when);
-	/* The ceiling is reached by the failure that fills the hour: the ones
-	 * admitted beyond it, one a minute, reach nothing anew, and failures that
-	 * arrive just as fast as old ones are forgotten reach it once an hour,
-	 * not at each of them. */
-	if (g_queue_get_length(&self->portal_failures) == AXIS_PORTAL_LOGIN_FAILURES_AN_HOUR &&
+	/* The ceiling is reached by the failure that fills the hour, and is
+	 * told once an hour for as long as the hour stays full: the ones admitted
+	 * beyond it, one a minute, keep it at the ceiling or over it, and a flow
+	 * of guesses that goes on for a day is told of in each of its hours, not
+	 * in the first alone. */
+	if (g_queue_get_length(&self->portal_failures) >= AXIS_PORTAL_LOGIN_FAILURES_AN_HOUR &&
 	    (self->portal_ceiling_told_us == 0 || now - self->portal_ceiling_told_us >= HOUR_US)) {
 		self->portal_ceiling_told_us = now;
 		if (self->portal_ceiling != NULL)

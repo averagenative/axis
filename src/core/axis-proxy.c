@@ -685,6 +685,86 @@ axis_proxy_list_contains(
 	return found;
 }
 
+/* An address or range as it is written: "192.0.2.7", "10.0.0.0/8". */
+static gchar *
+range_text(const Range *range)
+{
+	g_autofree gchar *text = axis_ip_address_to_string(&range->address);
+
+	return range->prefix != family_bits(range->address.family) ? g_strdup_printf("%s/%u", text, range->prefix) :
+		g_strdup(text);
+}
+
+gboolean
+axis_proxy_lists_overlap(
+	const AxisProxyList  *self,
+	const AxisProxyList  *other,
+	gchar               **entry,
+	gchar               **other_entry
+){
+	AxisProxyList *names = (AxisProxyList *)other;
+	gboolean found = FALSE;
+	gint64 now = 0;
+	guint i;
+
+	if (entry != NULL)
+		*entry = NULL;
+	if (other_entry != NULL)
+		*other_entry = NULL;
+	if (self == NULL || other == NULL)
+		return FALSE;
+
+	if (other->names > 0) {
+		now = axis_proxy_list_now(names);
+		g_mutex_lock(&names->lock);
+	}
+	for (i = 0; !found && i < self->ranges->len; i++) {
+		const Range *mine = &g_array_index(self->ranges, Range, i);
+		guint j;
+
+		/* A name of @self stands for nothing here: see the header. */
+		if (mine->name != NULL)
+			continue;
+		for (j = 0; !found && j < other->ranges->len; j++) {
+			const Range *theirs = &g_array_index(other->ranges, Range, j);
+			AxisIpAddress a;
+			AxisIpAddress b;
+			guint k;
+
+			if (theirs->name != NULL) {
+				if (name_state(theirs, now) != AXIS_PROXY_NAME_RESOLVED &&
+				    name_state(theirs, now) != AXIS_PROXY_NAME_KEPT)
+					continue;
+				for (k = 0; !found && k < theirs->found->len; k++) {
+					a = g_array_index(theirs->found, AxisIpAddress, k);
+					if (a.family != mine->address.family)
+						continue;
+					mask_address(&a, mine->prefix);
+					found = memcmp(a.bytes, mine->address.bytes, sizeof(a.bytes)) == 0;
+				}
+			} else if (theirs->address.family == mine->address.family) {
+				/* Two ranges share an address exactly when the wider one
+				 * holds the other's first. */
+				a = mine->address;
+				b = theirs->address;
+				mask_address(&a, MIN(mine->prefix, theirs->prefix));
+				mask_address(&b, MIN(mine->prefix, theirs->prefix));
+				found = memcmp(a.bytes, b.bytes, sizeof(a.bytes)) == 0;
+			}
+			if (found) {
+				if (entry != NULL)
+					*entry = range_text(mine);
+				if (other_entry != NULL)
+					*other_entry = theirs->name != NULL ? g_strdup(theirs->name) : range_text(theirs);
+			}
+		}
+	}
+	if (other->names > 0)
+		g_mutex_unlock(&names->lock);
+
+	return found;
+}
+
 /*
  * The entries of a comma-separated header value, trimmed of spaces and
  * tabs, in order.  Empty entries are kept (as ""), so that one is seen

@@ -181,6 +181,28 @@ axis_proxy_list_contains(
 	const AxisIpAddress *address
 );
 
+/**
+ * axis_proxy_lists_overlap:
+ * @self: (nullable): a list of addresses and ranges (a host name in it
+ *   stands for nothing here)
+ * @other: (nullable): another list; a host name in it stands for the
+ *   addresses its last lookup found
+ * @entry: (out) (transfer full) (optional): the entry of @self that shares
+ *   an address with @other, as written; %NULL when none does
+ * @other_entry: (out) (transfer full) (optional): the entry of @other
+ *
+ * Whether any address is in both lists.  Safe from any thread.
+ *
+ * Returns: %TRUE if one is (the first pair found is given)
+ */
+gboolean
+axis_proxy_lists_overlap(
+	const AxisProxyList  *self,
+	const AxisProxyList  *other,
+	gchar               **entry,
+	gchar               **other_entry
+);
+
 /*
  * Host names.  The list only keeps what lookups found: it never looks
  * anything up itself (axis-proxy-resolver.h does that), so it stays pure

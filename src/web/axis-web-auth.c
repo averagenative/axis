@@ -49,6 +49,7 @@ state_free(gpointer data)
 		return;
 
 	g_free(state->client_address);
+	g_free(state->peer_address);
 	g_free(state->forwarded_host);
 	g_free(state->username);
 	g_free(state->theme);
@@ -661,7 +662,9 @@ axis_web_auth_authorize(
  * This is the one place they are decided: the audit lines, the login and
  * worker throttles, the sessions' recorded address, the Secure flag and
  * __Host- prefix of the cookies and the cross-site check all read what it
- * stores, and nothing else reads the peer or the forwarded headers.
+ * stores, and nothing else reads the peer or the forwarded headers.  The
+ * peer's own address is stored too, for the login's rule on the portal's
+ * addresses.
  */
 static AxisAuthState *
 build_state(
@@ -695,6 +698,10 @@ build_state(
 
 	axis_proxy_resolve_full(self->trusted, peer, peer_https, forwarded_for, forwarded_proto,
 		forwarded_host, &state->client_address, &state->https, &state->forwarded_host);
+	/* Kept beside it for the one rule that asks both (the portal's addresses
+	 * at the login, axis-web-auth-portal.h): what a peer forwards cannot
+	 * take its own address away. */
+	state->peer_address = g_strdup(peer);
 
 	/* Forwarding headers nobody is trusted to send: perhaps a proxy that
 	 * should be (axis-web-auth-device.c). */

@@ -29,6 +29,7 @@
 #include "web/axis-user-store.h"
 #include "web/axis-web.h"
 #include "web/axis-web-auth.h"
+#include "web/axis-web-auth-portal.h"
 #include "web/axis-web-auth-private.h"
 
 #define ALICE_PASSWORD  "alice-secret-pw"
@@ -690,6 +691,49 @@ test_setup_with_token(Fixture *fx, gconstpointer data)
 	reply = get(fx, browser, "/setup");
 	g_assert_cmpuint(reply.status, ==, 404);
 	reply_clear(&reply);
+}
+
+/* Spec (add-request-portal, slice P4): no first setup from one of the
+ * portal's addresses.  The right setup token, from an address in
+ * server.portal_peers, is answered as a wrong one is, however often: no
+ * account is made, no count is touched (the same address, once it is no
+ * longer the portal's, sets Axis up at the first try), and the log says
+ * why, once. */
+static void
+test_setup_from_portal_address(Fixture *fx, gconstpointer data)
+{
+	g_autoptr(Client) browser = client_new(NULL);
+	g_autoptr(GError) error = NULL;
+	g_autofree gchar *token = NULL;
+	Reply reply;
+	guint i;
+
+	SKIP_WITHOUT_DB(fx);
+	start(fx);
+	token = setup_token();
+	g_assert_true(axis_web_auth_set_portal_peers(fx->auth, "127.0.0.0/30", &error));
+	g_assert_no_error(error);
+
+	/* (More often than an address has free failures.) */
+	for (i = 0; i < 25; i++) {
+		reply = post_setup(fx, browser, token, "Admin", ALICE_PASSWORD, ALICE_PASSWORD);
+		g_assert_cmpuint(reply.status, ==, 403);
+		assert_contains(reply.body, "The setup token is not correct.");
+		g_assert_null(client_cookie(browser, "axis_session"));
+		reply_clear(&reply);
+	}
+	assert_query(fx, "SELECT count(*) FROM app_user", "0");
+	g_assert_cmpuint(axis_web_auth_portal_logins_barred(fx->auth, NULL), ==, 25);
+	g_assert_cmpuint(axis_test_log_count(G_LOG_LEVEL_MESSAGE, "audit: setup refused: the connection came from "
+		"127.0.0.1, one of the request portal's addresses (server.portal_peers, AXIS_PORTAL_PEERS)*"), ==, 1);
+
+	g_assert_true(axis_web_auth_set_portal_peers(fx->auth, "", &error));
+	g_assert_no_error(error);
+	reply = post_setup(fx, browser, token, "Admin", ALICE_PASSWORD, ALICE_PASSWORD);
+	g_assert_cmpuint(reply.status, ==, 303);
+	g_assert_nonnull(client_cookie(browser, "axis_session"));
+	reply_clear(&reply);
+	assert_query(fx, "SELECT count(*) FROM app_user", "1");
 }
 
 /* Spec: Setup without the token */
@@ -3368,6 +3412,7 @@ main(int argc, char **argv)
 
 	ADD("/web-auth/setup/with-token", test_setup_with_token);
 	ADD("/web-auth/setup/without-token", test_setup_without_token);
+	ADD("/web-auth/setup/from-the-portals-address", test_setup_from_portal_address);
 	ADD("/web-auth/setup/closed", test_setup_closed);
 	ADD("/web-auth/setup/race", test_setup_race);
 	ADD("/web-auth/setup/race-in-database", test_setup_race_in_database);
