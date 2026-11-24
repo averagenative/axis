@@ -30,9 +30,15 @@
  *   6. /login: the form carries a token bound to the cookie set with it and
  *      to a key only this process has (403); failed logins from one address
  *      are refused here, before the daemon is asked (429);
- *   7. every other path needs the session cookie, once (two are none): a
- *      request without one is sent to /login, and the daemon is asked
- *      nothing;
+ *   7. every other path needs the session cookie, once (two are none), and
+ *      sealed by this portal: its value is the proof and a keyed hash of the
+ *      proof under a key derived from the portal's token, checked in
+ *      constant time.  A request without one is sent to /login, and the
+ *      daemon is asked nothing.  A session the daemon has not confirmed in
+ *      the last 15 minutes is held to its address's count of cookies the
+ *      daemon did not know (429), and its first call to the daemon spends
+ *      one of the calls that such sessions and logins share, from every
+ *      address together (429);
  *   8. a POST carries the CSRF token derived from that cookie (403);
  *   9. the route's own values are checked, its limit for the session is
  *      counted (429), and only then is the daemon asked, through the eleven
@@ -83,6 +89,23 @@ G_BEGIN_DECLS
 #define AXIS_PORTAL_THROTTLE_MAX_US       (G_GINT64_CONSTANT(15) * 60 * G_USEC_PER_SEC)
 #define AXIS_PORTAL_THROTTLE_FORGET_US    (G_GINT64_CONSTANT(24) * 3600 * G_USEC_PER_SEC)
 #define AXIS_PORTAL_THROTTLE_MAX_KEYS     10000
+/* A full table drops no address that has failures: the addresses it has no
+ * room for share one count (axis_login_throttle_share_when_full()), which
+ * is forgotten after this long without a failure. */
+#define AXIS_PORTAL_THROTTLE_SHARED_FORGET_US AXIS_PORTAL_THROTTLE_MAX_US
+
+/* Sessions the daemon confirmed (it answered a call with the proof): kept
+ * this long, at most this many.  A cookie of one is not held to its
+ * address's count of cookies the daemon did not know, and does not spend
+ * the calls below. */
+#define AXIS_PORTAL_CONFIRMED_SECONDS     (15 * 60)
+#define AXIS_PORTAL_CONFIRMED_MAX_KEPT    4096
+
+/* Calls to the daemon for sessions it has not confirmed, and logins, from
+ * every address together, in any minute: well under the 600 operations a
+ * minute the daemon allows the portal's token, so that the sessions it has
+ * confirmed keep the rest whoever sends what. */
+#define AXIS_PORTAL_UNCONFIRMED_A_MINUTE  120
 
 /* Pages waiting for the daemon at once; one more is answered 503. */
 #define AXIS_PORTAL_MAX_PENDING           256
@@ -96,6 +119,12 @@ G_BEGIN_DECLS
 #define AXIS_PORTAL_SESSION_COOKIE_PLAIN  "axis_portal_session"
 #define AXIS_PORTAL_FORM_COOKIE_PLAIN     "axis_portal_form"
 #define AXIS_PORTAL_DEVICE_COOKIE_PLAIN   "axis_portal_device"
+
+/* What the key that seals the session cookies is derived from the token
+ * for (axis_token_derive()): a fixed label, so that the token itself is
+ * never a key.  Another token is another key, and every cookie sealed with
+ * the old one is none. */
+#define AXIS_PORTAL_SEAL_KEY_PURPOSE      "axis portal cookie v1"
 
 /* The pre-login form's cookie lives long enough to fill the form in. */
 #define AXIS_PORTAL_FORM_MAX_AGE_S        1800
@@ -133,6 +162,20 @@ axis_portal_app_stop(AxisPortalApp *self);
 void
 axis_portal_app_free(AxisPortalApp *self);
 
+/**
+ * axis_portal_session_cookie:
+ * @token: the portal's token
+ * @proof: a session proof the daemon gave
+ *
+ * Returns: (transfer full): the session cookie's value for @proof, as the
+ *   portal with @token sets it: "<proof>.<seal>" (a secret)
+ */
+gchar *
+axis_portal_session_cookie(
+	const gchar *token,
+	const gchar *proof
+);
+
 /* ── For tests ────────────────────────────────────────────────── */
 
 /* Moves the clock of the throttles, the limits and what is kept. */
@@ -148,6 +191,10 @@ axis_portal_app_get_poster_bytes(AxisPortalApp *self);
 
 guint
 axis_portal_app_get_who_kept(AxisPortalApp *self);
+
+/* For how many sessions the daemon's confirmation is kept. */
+guint
+axis_portal_app_get_confirmed_kept(AxisPortalApp *self);
 
 G_END_DECLS
 

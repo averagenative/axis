@@ -295,6 +295,20 @@ axis_portal_wire_read_refusal(const gchar *data, gsize length, AxisPortalRefusal
 gboolean
 axis_portal_wire_is_proof(const gchar *text);
 
+/* The length of a session cookie's value: "<proof>.<seal>", the seal a
+ * keyed hash of the proof (axis-portal-app.h). */
+#define AXIS_PORTAL_WIRE_SESSION_COOKIE_LEN (2 * AXIS_PORTAL_PROOF_LEN + 1)
+
+/* The two parts of a session cookie's value, when it is "<proof>.<seal>"
+ * and each part has the form of a proof; %FALSE, and nothing set, for any
+ * other value.  @proof and @seal: (out) (transfer full): secrets. */
+gboolean
+axis_portal_wire_split_session_cookie(
+	const gchar  *value,
+	gchar       **proof,
+	gchar       **seal
+);
+
 /* Whether @text is a request's identifier in that form. */
 gboolean
 axis_portal_wire_is_request_id(const gchar *text);

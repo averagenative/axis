@@ -161,6 +161,33 @@ axis_portal_wire_is_proof(const gchar *text)
 }
 
 gboolean
+axis_portal_wire_split_session_cookie(
+	const gchar  *value,
+	gchar       **proof,
+	gchar       **seal
+){
+	gchar *first;
+	gchar *second;
+
+	g_return_val_if_fail(proof != NULL && seal != NULL, FALSE);
+
+	*proof = NULL;
+	*seal = NULL;
+	if (value == NULL || strlen(value) != AXIS_PORTAL_WIRE_SESSION_COOKIE_LEN || value[AXIS_PORTAL_PROOF_LEN] != '.')
+		return FALSE;
+	first = g_strndup(value, AXIS_PORTAL_PROOF_LEN);
+	second = g_strdup(value + AXIS_PORTAL_PROOF_LEN + 1);
+	if (!axis_portal_wire_is_proof(first) || !axis_portal_wire_is_proof(second)) {
+		axis_portal_wire_free(first);
+		axis_portal_wire_free(second);
+		return FALSE;
+	}
+	*proof = first;
+	*seal = second;
+	return TRUE;
+}
+
+gboolean
 axis_portal_wire_is_request_id(const gchar *text)
 {
 	return is_token(text, AXIS_PORTAL_REQUEST_ID_LEN);

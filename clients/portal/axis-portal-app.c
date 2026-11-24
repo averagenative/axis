@@ -29,6 +29,9 @@
 /* What the CSRF tokens are derived for (axis_token_derive()). */
 #define SESSION_CSRF_PURPOSE "axis portal session csrf v1"
 #define FORM_CSRF_PURPOSE    "axis portal login form v1:"
+/* What a session cookie's seal is derived for, under the key derived from
+ * the token (AXIS_PORTAL_SEAL_KEY_PURPOSE). */
+#define SEAL_PURPOSE         "axis portal session cookie seal v1:"
 
 /* The longest `next` that is kept. */
 #define NEXT_MAX 512
@@ -43,6 +46,7 @@ typedef enum
 	NOTE_DAEMON_LIMIT,
 	NOTE_TOKEN,
 	NOTE_UNREADABLE,
+	NOTE_BUDGET,
 	N_NOTES
 } Note;
 
@@ -162,11 +166,14 @@ struct _AxisPortalApp
 	guint              max_connections;
 	guint              max_per_address;
 	gchar             *form_key;	/* the key of the pre-login forms: secret, never leaves */
+	gchar             *seal_key;	/* the key that seals the session cookies: secret */
 	AxisLoginThrottle *logins;	/* failed logins, by client address */
 	AxisLoginThrottle *proofs;	/* cookies the daemon did not know, by client address */
 	Window             searches;	/* by session */
 	Window             asks;
+	gint64             unconfirmed_tat;	/* the calls for unconfirmed sessions and logins (GCRA) */
 	GHashTable        *who;		/* session key -> WhoKept* */
+	GHashTable        *confirmed;	/* session key -> gint64* until when */
 	GHashTable        *posters;	/* &Poster.id -> Poster* (owned by the queue) */
 	GQueue             poster_order;	/* Poster*, oldest first */
 	gsize              poster_bytes;
@@ -224,8 +231,10 @@ typedef struct
 	gboolean         https;
 	gboolean         secure;	/* the cookies are Secure and prefixed */
 	gchar           *back;		/* the path and query of a page, to come back to (nullable) */
-	gchar           *proof;		/* the session cookie's value, well-formed: secret */
+	gchar           *proof;		/* the proof of a session cookie this portal sealed: secret */
 	gchar           *session_key;	/* its hash: what the portal counts and keeps by */
+	gboolean         confirmed;	/* the daemon answered for it within AXIS_PORTAL_CONFIRMED_SECONDS */
+	gboolean         cookie_refused;	/* a session cookie was there, and is none */
 	gchar           *csrf;		/* the session's CSRF token */
 	gchar           *form_cookie;	/* the pre-login form's cookie value, well-formed */
 	gchar           *device;	/* the device cookie's value, of the right form: secret */
@@ -560,6 +569,158 @@ who_keep(
 	g_hash_table_replace(self->who, g_strdup(session_key), kept);
 }
 
+/* ── Sealed cookies, confirmed sessions, the shared calls ───────── */
+
+/* The seal of @proof under @key: a keyed BLAKE2b, AXIS_TOKEN_LEN
+ * characters (secret). */
+static gchar *
+seal_of(
+	const gchar *key,
+	const gchar *proof
+){
+	gchar *purpose = g_strconcat(SEAL_PURPOSE, proof, NULL);
+	gchar *seal = axis_token_derive(key, purpose);
+
+	axis_secret_free(purpose);
+	return seal;
+}
+
+static gchar *
+sealed_cookie(
+	const gchar *key,
+	const gchar *proof
+){
+	gchar *seal = seal_of(key, proof);
+	gchar *value = g_strconcat(proof, ".", seal, NULL);
+
+	axis_secret_free(seal);
+	return value;
+}
+
+gchar *
+axis_portal_session_cookie(
+	const gchar *token,
+	const gchar *proof
+){
+	gchar *key;
+	gchar *value;
+
+	g_return_val_if_fail(token != NULL && proof != NULL, NULL);
+
+	if (!axis_secret_init())
+		return NULL;
+	key = axis_token_derive(token, AXIS_PORTAL_SEAL_KEY_PURPOSE);
+	value = sealed_cookie(key, proof);
+	axis_secret_free(key);
+	return value;
+}
+
+/* The proof in a session cookie's @value when this portal sealed it, else
+ * %NULL: a cookie nobody sealed costs the daemon nothing. */
+static gchar *
+unsealed_proof(
+	AxisPortalApp *self,
+	const gchar   *value
+){
+	gchar *proof = NULL;
+	gchar *seal = NULL;
+	gchar *expected;
+	gboolean ok;
+
+	if (!axis_portal_wire_split_session_cookie(value, &proof, &seal))
+		return NULL;
+	expected = seal_of(self->seal_key, proof);
+	ok = axis_secret_equal(seal, expected);
+	axis_secret_free(expected);
+	axis_secret_free(seal);
+	if (!ok) {
+		axis_secret_free(proof);
+		return NULL;
+	}
+	return proof;
+}
+
+static gboolean
+confirmed_has(
+	AxisPortalApp *self,
+	const gchar   *session_key
+){
+	const gint64 *until = g_hash_table_lookup(self->confirmed, session_key);
+
+	if (until == NULL)
+		return FALSE;
+	if (*until <= now_us(self)) {
+		g_hash_table_remove(self->confirmed, session_key);
+		return FALSE;
+	}
+	return TRUE;
+}
+
+/* The daemon answered for @session_key.  The table is bounded: when it is
+ * full, what has run out goes, then the one that runs out first (it is
+ * then only asked of the daemon again). */
+static void
+confirmed_add(
+	AxisPortalApp *self,
+	const gchar   *session_key
+){
+	gint64 now = now_us(self);
+	gint64 *until;
+
+	if (session_key == NULL)
+		return;
+	if (!g_hash_table_contains(self->confirmed, session_key) &&
+	    g_hash_table_size(self->confirmed) >= AXIS_PORTAL_CONFIRMED_MAX_KEPT) {
+		GHashTableIter iter;
+		gpointer key;
+		gpointer value;
+		gpointer soonest = NULL;
+		gint64 soonest_us = G_MAXINT64;
+
+		g_hash_table_iter_init(&iter, self->confirmed);
+		while (g_hash_table_iter_next(&iter, &key, &value)) {
+			if (*(const gint64 *)value <= now) {
+				g_hash_table_iter_remove(&iter);
+			} else if (*(const gint64 *)value < soonest_us) {
+				soonest_us = *(const gint64 *)value;
+				soonest = key;
+			}
+		}
+		if (g_hash_table_size(self->confirmed) >= AXIS_PORTAL_CONFIRMED_MAX_KEPT && soonest != NULL)
+			g_hash_table_remove(self->confirmed, soonest);
+	}
+	until = g_new(gint64, 1);
+	*until = now + (gint64)AXIS_PORTAL_CONFIRMED_SECONDS * G_USEC_PER_SEC;
+	g_hash_table_replace(self->confirmed, g_strdup(session_key), until);
+}
+
+static void
+confirmed_drop(
+	AxisPortalApp *self,
+	const gchar   *session_key
+){
+	if (session_key != NULL)
+		g_hash_table_remove(self->confirmed, session_key);
+}
+
+/* Takes one of the calls that logins and unconfirmed sessions share, from
+ * every address together: 0, or how long until one may be taken (and
+ * nothing is).  The generic cell rate algorithm: AXIS_PORTAL_UNCONFIRMED_A_MINUTE
+ * in any minute, as many of them at once as that. */
+static gint64
+unconfirmed_take(AxisPortalApp *self)
+{
+	const gint64 interval = MINUTE_US / AXIS_PORTAL_UNCONFIRMED_A_MINUTE;
+	const gint64 tolerance = MINUTE_US - interval;
+	gint64 now = now_us(self);
+	gint64 tat = MAX(self->unconfirmed_tat, now);
+
+	if (tat - now > tolerance)
+		return tat - now - tolerance;
+	self->unconfirmed_tat = tat + interval;
+	return 0;
+}
+
 static void
 poster_remove(
 	AxisPortalApp *self,
@@ -759,6 +920,7 @@ page_session_ended(Page *page)
 	AxisPortalApp *self = page->app;
 
 	who_drop(self, page->visit.session_key);
+	confirmed_drop(self, page->visit.session_key);
 	axis_login_throttle_fail(self->proofs, page->visit.client_key, now_us(self));
 	page_finish(page, to_login(&page->visit, TRUE));
 }
@@ -1013,6 +1175,7 @@ step_asked(
 	page->who->movies = page->asked->movies;
 	page->who->seasons = page->asked->seasons;
 	who_keep(self, page->visit.session_key, page->who);
+	confirmed_add(self, page->visit.session_key);
 	page_call(page, AXIS_PORTAL_TITLE, axis_portal_wire_title(page->visit.proof, page->visit.id), step_title);
 }
 
@@ -1074,6 +1237,7 @@ step_logged_out(
 	if (!page_answered(page, status, body))
 		return;
 	who_drop(page->app, page->visit.session_key);
+	confirmed_drop(page->app, page->visit.session_key);
 	g_message("logout: a session was ended from %s", page->visit.client);
 	page_finish(page, to_login(&page->visit, TRUE));
 }
@@ -1097,6 +1261,8 @@ step_who(
 		return;
 	}
 	who_keep(page->app, page->visit.session_key, page->who);
+	confirmed_add(page->app, page->visit.session_key);
+	page->visit.confirmed = TRUE;
 	page_run(page);
 }
 
@@ -1234,8 +1400,17 @@ step_login(
 	}
 	g_message("login: %s from %s", login->name, visit->client);
 	response = see_other(page->next != NULL ? page->next : "/");
-	set_cookie(response, session_cookie_name(visit->secure), login->proof,
-		MIN(login->expires_in, AXIS_PORTAL_SESSION_MAX_AGE_S), visit->secure, "Lax");
+	{
+		gchar *value = sealed_cookie(self->seal_key, login->proof);
+		gchar *key = axis_token_hash(login->proof);
+
+		set_cookie(response, session_cookie_name(visit->secure), value,
+			MIN(login->expires_in, AXIS_PORTAL_SESSION_MAX_AGE_S), visit->secure, "Lax");
+		/* The daemon has just vouched for it. */
+		confirmed_add(self, key);
+		axis_secret_free(value);
+		g_free(key);
+	}
 	if (login->device != NULL)
 		set_cookie(response, device_cookie_name(visit->secure), login->device, AXIS_PORTAL_DEVICE_MAX_AGE_S,
 			visit->secure, "Strict");
@@ -1244,6 +1419,7 @@ step_login(
 	 * at the daemon too (nobody waits for that answer). */
 	if (visit->proof != NULL && !axis_secret_equal(visit->proof, login->proof)) {
 		who_drop(self, visit->session_key);
+		confirmed_drop(self, visit->session_key);
 		axis_portal_client_call(self->client, AXIS_PORTAL_LOGOUT, axis_portal_wire_proof(visit->proof),
 			ignore_answer, NULL);
 	}
@@ -1384,6 +1560,16 @@ handle_login(
 		note(self, NOTE_PENDING, "too many pages wait for the daemon; one was refused");
 		return unavailable();
 	}
+	/* Logins from every address together have a share of the daemon's
+	 * calls, so that a flood of them leaves the rest to the sessions the
+	 * daemon has confirmed. */
+	wait = unconfirmed_take(self);
+	if (wait > 0) {
+		axis_portal_wire_free(json);
+		note(self, NOTE_BUDGET, "login: refused from %s: the calls for logins and for sessions the daemon has not "
+			"confirmed are spent for this minute", visit->client);
+		return too_many("There are too many logins at the moment.", seconds_of(wait));
+	}
 	axis_login_throttle_begin(self->logins, visit->client_key, now);
 	page = page_new(self, visit);
 	page->next = g_steal_pointer(&next);
@@ -1501,6 +1687,17 @@ handle_session(
 	if (self->pending >= AXIS_PORTAL_MAX_PENDING) {
 		note(self, NOTE_PENDING, "too many pages wait for the daemon; one was refused");
 		return unavailable();
+	}
+	/* A session the daemon has not confirmed lately spends one of the calls
+	 * that such sessions and logins share; once it is confirmed, its pages
+	 * spend none. */
+	if (!visit->confirmed) {
+		wait = unconfirmed_take(self);
+		if (wait > 0) {
+			note(self, NOTE_BUDGET, "refused a session from %s that the daemon has not confirmed lately: the calls "
+				"for such sessions and for logins are spent for this minute", visit->client);
+			return too_many("There are too many requests at the moment.", seconds_of(wait));
+		}
 	}
 
 	page = page_new(self, visit);
@@ -1669,12 +1866,18 @@ serve(
 			g_strdup(htmx_request_get_path(request));
 	}
 
-	/* The cookies: each once, in its form, or not at all. */
+	/* The cookies: each once, in its form, or not at all.  The session's
+	 * must be one this portal sealed (checked in constant time), so that a
+	 * cookie someone made up is none, and costs the daemon nothing. */
 	cookie = cookie_of(request, session_cookie_name(visit.secure));
-	if (axis_portal_wire_is_proof(cookie)) {
-		visit.proof = g_steal_pointer(&cookie);
+	if (cookie != NULL) {
+		visit.proof = unsealed_proof(self, cookie);
+		visit.cookie_refused = visit.proof == NULL;
+	}
+	if (visit.proof != NULL) {
 		visit.session_key = axis_token_hash(visit.proof);
 		visit.csrf = axis_token_derive(visit.proof, SESSION_CSRF_PURPOSE);
+		visit.confirmed = confirmed_has(self, visit.session_key);
 	}
 	axis_secret_free(g_steal_pointer(&cookie));
 
@@ -1694,19 +1897,23 @@ serve(
 	}
 
 	/* 7. Every other path needs the session cookie.  Without one, the
-	 * daemon is asked nothing. */
+	 * daemon is asked nothing; one that this portal did not seal goes. */
 	if (visit.proof == NULL) {
-		response = to_login(&visit, FALSE);
+		response = to_login(&visit, visit.cookie_refused);
 		goto out;
 	}
 	/* An address that keeps presenting cookies the daemon does not know is
-	 * refused here for a while. */
-	wait = axis_login_throttle_check(self->proofs, visit.client_key, now_us(self));
-	if (wait > 0) {
-		note(self, NOTE_PROOF_ADDRESS, "refused %s, which presented too many session cookies the daemon did not know",
-			visit.client);
-		response = too_many("There were too many requests.", seconds_of(wait));
-		goto out;
+	 * refused here for a while; a session the daemon confirmed lately is
+	 * not, so that one device behind an address does not lock out the
+	 * others. */
+	if (!visit.confirmed) {
+		wait = axis_login_throttle_check(self->proofs, visit.client_key, now_us(self));
+		if (wait > 0) {
+			note(self, NOTE_PROOF_ADDRESS, "refused %s, which presented too many session cookies the daemon did not "
+				"know", visit.client);
+			response = too_many("There were too many requests.", seconds_of(wait));
+			goto out;
+		}
 	}
 	/* 8. A POST carries the token derived from the session cookie. */
 	if (visit.post) {
@@ -1800,13 +2007,19 @@ axis_portal_app_new(
 		axis_proxy_resolver_start(self->resolver);
 	}
 	self->form_key = axis_random_token();
+	self->seal_key = axis_token_derive(config->token, AXIS_PORTAL_SEAL_KEY_PURPOSE);
 	self->logins = axis_login_throttle_new(AXIS_PORTAL_LOGIN_FREE_FAILURES, AXIS_PORTAL_THROTTLE_BASE_US,
 		AXIS_PORTAL_THROTTLE_MAX_US, AXIS_PORTAL_THROTTLE_FORGET_US, AXIS_PORTAL_THROTTLE_MAX_KEYS);
 	self->proofs = axis_login_throttle_new(AXIS_PORTAL_PROOF_FREE_FAILURES, AXIS_PORTAL_THROTTLE_BASE_US,
 		AXIS_PORTAL_THROTTLE_MAX_US, AXIS_PORTAL_THROTTLE_FORGET_US, AXIS_PORTAL_THROTTLE_MAX_KEYS);
+	/* An address that is one of many cannot make the tables forget the
+	 * others it used. */
+	axis_login_throttle_share_when_full(self->logins, AXIS_PORTAL_THROTTLE_SHARED_FORGET_US);
+	axis_login_throttle_share_when_full(self->proofs, AXIS_PORTAL_THROTTLE_SHARED_FORGET_US);
 	window_init(&self->searches, AXIS_PORTAL_SEARCHES_A_MINUTE_HERE);
 	window_init(&self->asks, AXIS_PORTAL_ASKS_A_MINUTE_HERE);
 	self->who = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, who_kept_free);
+	self->confirmed = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
 	self->posters = g_hash_table_new(g_int64_hash, g_int64_equal);
 	g_queue_init(&self->poster_order);
 	return self;
@@ -1863,11 +2076,13 @@ axis_portal_app_free(AxisPortalApp *self)
 		axis_proxy_resolver_free(self->resolver);
 	axis_proxy_list_free(self->trusted);
 	axis_secret_free(self->form_key);
+	axis_secret_free(self->seal_key);
 	axis_login_throttle_free(self->logins);
 	axis_login_throttle_free(self->proofs);
 	g_hash_table_unref(self->searches.keys);
 	g_hash_table_unref(self->asks.keys);
 	g_hash_table_unref(self->who);
+	g_hash_table_unref(self->confirmed);
 	g_hash_table_unref(self->posters);
 	g_queue_clear_full(&self->poster_order, poster_free);
 	g_free(self);
@@ -1897,4 +2112,12 @@ axis_portal_app_get_who_kept(AxisPortalApp *self)
 	g_return_val_if_fail(self != NULL, 0);
 
 	return g_hash_table_size(self->who);
+}
+
+guint
+axis_portal_app_get_confirmed_kept(AxisPortalApp *self)
+{
+	g_return_val_if_fail(self != NULL, 0);
+
+	return g_hash_table_size(self->confirmed);
 }

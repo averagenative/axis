@@ -583,7 +583,8 @@ typedef struct
 {
 	gchar *session;	/* "name=value" of the session cookie */
 	gchar *device;	/* of the device cookie */
-	gchar *proof;	/* the session cookie's value */
+	gchar *proof;	/* the proof in the session cookie's value */
+	gchar *value;	/* that value: the proof and its seal */
 } Browser;
 
 static void
@@ -592,6 +593,7 @@ browser_clear(Browser *browser)
 	g_free(browser->session);
 	g_free(browser->device);
 	g_free(browser->proof);
+	g_free(browser->value);
 	memset(browser, 0, sizeof(*browser));
 }
 
@@ -635,8 +637,11 @@ portal_login(
 			const gchar *value = g_hash_table_lookup(reply.cookies, AXIS_PORTAL_DEVICE_COOKIE);
 
 			g_assert_nonnull(proof);
-			g_assert_cmpuint(strlen(proof), ==, AXIS_PORTAL_PROOF_LEN);
-			browser->proof = g_strdup(proof);
+			/* The proof and its seal. */
+			g_assert_cmpuint(strlen(proof), ==, 2 * AXIS_PORTAL_PROOF_LEN + 1);
+			g_assert_cmpint(proof[AXIS_PORTAL_PROOF_LEN], ==, '.');
+			browser->proof = g_strndup(proof, AXIS_PORTAL_PROOF_LEN);
+			browser->value = g_strdup(proof);
 			browser->session = g_strdup_printf("%s=%s", AXIS_PORTAL_SESSION_COOKIE, proof);
 			browser->device = value != NULL ? g_strdup_printf("%s=%s", AXIS_PORTAL_DEVICE_COOKIE, value) : NULL;
 		}
@@ -800,6 +805,7 @@ test_restart(Fixture *fx, gconstpointer data)
 	assert_has(log, "login: robin from " OUTSIDE);
 	assert_lacks(log, fx->token);
 	assert_lacks(log, robin.proof);
+	assert_lacks(log, robin.value + AXIS_PORTAL_PROOF_LEN + 1);
 	assert_lacks(log, ROBIN_PASSWORD);
 	g_assert_cmpint(run_portal(fx, health_env, "--healthcheck", NULL, &err), ==, 1);
 	g_clear_pointer(&err, g_free);
@@ -818,6 +824,34 @@ test_restart(Fixture *fx, gconstpointer data)
 	assert_status(&reply, 403);
 	reply_clear(&reply);
 	g_assert_cmpint(stop(&fx->portal), ==, 0);
+
+	/* The portal is given a new token: the cookies sealed under the old one
+	 * are none (the daemon is not asked about them), and the person logs in
+	 * again. */
+	{
+		gchar *token = axis_random_token();
+		g_autofree gchar *hash = axis_token_hash(token);
+		Browser again;
+
+		insert(fx, "INSERT INTO portal_token (token_hash, created_by) VALUES ('%s', 'root') RETURNING id", hash);
+		g_assert_true(g_file_set_contents(fx->token_file, token, -1, NULL));
+		axis_secret_free(token);
+		/* (The daemon reads the tokens it knows when it starts.) */
+		g_assert_cmpint(stop(&fx->daemon), ==, 0);
+		start_daemon(fx);
+		start_portal(fx, NULL, NULL);
+		reply = page(fx, "GET", "/requests", robin.session, NULL);
+		assert_status(&reply, 303);
+		g_assert_true(g_str_has_prefix(reply.location, "/login"));
+		reply_clear(&reply);
+		g_assert_cmpuint(portal_login(fx, "robin", ROBIN_PASSWORD, OUTSIDE, NULL, &again), ==, 303);
+		g_assert_cmpstr(again.value, !=, robin.value);
+		reply = page(fx, "GET", "/requests", again.session, NULL);
+		assert_status(&reply, 200);
+		reply_clear(&reply);
+		g_assert_cmpint(stop(&fx->portal), ==, 0);
+		browser_clear(&again);
+	}
 	browser_clear(&robin);
 }
 

@@ -662,6 +662,72 @@ test_throttle_flood_keeps_delay(void)
 	g_assert_cmpuint(axis_login_throttle_get_size(throttle), <=, 101);
 }
 
+/*
+ * Found by the review of add-request-portal P3: a sender with many
+ * addresses (an IPv6 /48 is 65,536 keys of a /64) made a full table drop the
+ * keys it had used, each with its free failures spent, and started each of
+ * them again.  With axis_login_throttle_share_when_full() no key that has
+ * failures is dropped: the new keys of a full table share one count, which
+ * the sender then spends for all of them, and the table never grows.
+ */
+static void
+test_throttle_shared_when_full(void)
+{
+	g_autoptr(AxisLoginThrottle) throttle = axis_login_throttle_new(2, 10 * SECOND, 60 * SECOND,
+		1000 * SECOND, 3);
+	gint64 now = 1;
+	guint i;
+
+	axis_login_throttle_share_when_full(throttle, 100 * SECOND);
+	/* Three keys, each with its free failures spent. */
+	for (i = 0; i < 2; i++) {
+		axis_login_throttle_fail(throttle, "a", now);
+		axis_login_throttle_fail(throttle, "b", now);
+		axis_login_throttle_fail(throttle, "c", now);
+	}
+	g_assert_cmpuint(axis_login_throttle_get_size(throttle), ==, 3);
+	g_assert_cmpint(axis_login_throttle_check(throttle, "a", now), ==, 0);
+
+	/* A hundred new keys: none is given room, none drops a key, and after
+	 * the shared free failures each of them waits. */
+	for (i = 0; i < 100; i++) {
+		g_autofree gchar *key = g_strdup_printf("rotated-%u", i);
+
+		now++;
+		if (axis_login_throttle_check(throttle, key, now) == 0)
+			axis_login_throttle_fail(throttle, key, now);
+		g_assert_cmpuint(axis_login_throttle_get_size(throttle), ==, 3);
+	}
+	g_assert_cmpint(axis_login_throttle_check(throttle, "rotated-500", now), >, 0);
+	/* The keys that were there keep what they had: one more failure each
+	 * starts a delay. */
+	axis_login_throttle_fail(throttle, "a", now);
+	g_assert_cmpint(axis_login_throttle_check(throttle, "a", now), ==, 10 * SECOND);
+
+	/* Attempts in flight on the shared count are counted, and end there. */
+	now += 200 * SECOND;
+	g_assert_cmpint(axis_login_throttle_check(throttle, "new", now), ==, 0);
+	axis_login_throttle_begin(throttle, "new", now);
+	axis_login_throttle_begin(throttle, "other", now);
+	axis_login_throttle_begin(throttle, "third", now);
+	g_assert_cmpint(axis_login_throttle_check(throttle, "fourth", now), >, 0);
+	axis_login_throttle_end(throttle, "new");
+	axis_login_throttle_end(throttle, "other");
+	axis_login_throttle_end(throttle, "third");
+	g_assert_cmpint(axis_login_throttle_check(throttle, "fourth", now), ==, 0);
+	g_assert_cmpuint(axis_login_throttle_get_size(throttle), ==, 3);
+	/* A success of a key on the shared count clears nobody's count. */
+	axis_login_throttle_clear(throttle, "new");
+	g_assert_cmpuint(axis_login_throttle_get_size(throttle), ==, 3);
+
+	/* Once the keys of the table are forgotten (a day without a failure,
+	 * here 1000 seconds), new keys have room of their own again. */
+	now += 1000 * SECOND;
+	axis_login_throttle_fail(throttle, "after", now);
+	g_assert_cmpuint(axis_login_throttle_get_size(throttle), ==, 1);
+	g_assert_cmpint(axis_login_throttle_check(throttle, "after", now), ==, 0);
+}
+
 /* What a per-address count counts an address by: itself, or its /64; and
  * which addresses are beside the daemon. */
 static void
@@ -787,6 +853,7 @@ main(int argc, char **argv)
 	g_test_add_func("/auth/throttle/forgets", test_throttle_forgets);
 	g_test_add_func("/auth/throttle/bounded", test_throttle_bounded);
 	g_test_add_func("/auth/throttle/flood-keeps-delay", test_throttle_flood_keeps_delay);
+	g_test_add_func("/auth/throttle/shared-when-full", test_throttle_shared_when_full);
 	g_test_add_func("/auth/password/hash", test_password_hash);
 	g_test_add_func("/auth/password/rehash", test_password_rehash);
 	g_test_add_func("/auth/password/secret-free", test_secret_free);
