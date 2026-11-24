@@ -318,6 +318,7 @@ typedef struct
 	gchar           *session_key;	/* its hash: what the portal counts and keeps by */
 	gboolean         confirmed;	/* the daemon answered for it within AXIS_PORTAL_CONFIRMED_SECONDS */
 	gboolean         cookie_refused;	/* a session cookie was there, and is none */
+	gboolean         cross_site;	/* the browser says another site sent it (Sec-Fetch-Site) */
 	gchar           *csrf;		/* the session's CSRF token */
 	gchar           *form_cookie;	/* the pre-login form's cookie value, well-formed */
 	gchar           *device;	/* the device cookie's value, of the right form: secret */
@@ -469,15 +470,22 @@ not_found(void)
 }
 
 /* The one answer to every failure of the daemon: it says nothing of what
- * went wrong, which is in the log. */
+ * went wrong, which is in the log.  @frame: (nullable) the person's, when
+ * known. */
 static HtmxResponse *
-unavailable(void)
+unavailable_in(const AxisPortalFrame *frame)
 {
-	HtmxResponse *response = say(503, "Requests are not available now",
-		"Requests are not available at the moment. Try again in a few minutes.");
+	HtmxResponse *response = html_response(503, axis_portal_view_message(frame, "Requests are not available now",
+		"Requests are not available at the moment. Try again in a few minutes."));
 
 	htmx_response_add_header(response, "Retry-After", "30");
 	return response;
+}
+
+static HtmxResponse *
+unavailable(void)
+{
+	return unavailable_in(NULL);
 }
 
 /* "in 40 seconds", "in 3 minutes", "in 2 hours". */
@@ -493,19 +501,29 @@ wait_words(gint64 wait_s)
 	return g_strdup_printf("in %" G_GINT64_FORMAT " days", (wait_s + 86399) / 86400);
 }
 
-/* A refusal by a limit: 429, with the time to wait. */
+/* A refusal by a limit: 429, with the time to wait.  @frame: (nullable)
+ * the person's, when known. */
+static HtmxResponse *
+too_many_in(
+	const AxisPortalFrame *frame,
+	const gchar           *what,
+	gint64                 wait_s
+){
+	g_autofree gchar *when = wait_words(MAX(wait_s, 1));
+	g_autofree gchar *text = g_strdup_printf("%s Try again %s.", what, when);
+	g_autofree gchar *seconds = g_strdup_printf("%" G_GINT64_FORMAT, MAX(wait_s, 1));
+	HtmxResponse *response = html_response(429, axis_portal_view_message(frame, "Too many requests", text));
+
+	htmx_response_add_header(response, "Retry-After", seconds);
+	return response;
+}
+
 static HtmxResponse *
 too_many(
 	const gchar *what,
 	gint64       wait_s
 ){
-	g_autofree gchar *when = wait_words(MAX(wait_s, 1));
-	g_autofree gchar *text = g_strdup_printf("%s Try again %s.", what, when);
-	g_autofree gchar *seconds = g_strdup_printf("%" G_GINT64_FORMAT, MAX(wait_s, 1));
-	HtmxResponse *response = say(429, "Too many requests", text);
-
-	htmx_response_add_header(response, "Retry-After", seconds);
-	return response;
+	return too_many_in(NULL, what, wait_s);
 }
 
 static gint64
@@ -1042,6 +1060,7 @@ page_answered(
 	GBytes *body
 ){
 	AxisPortalApp *self = page->app;
+	AxisPortalFrame frame = frame_of(page);
 	AxisPortalRefusal refusal;
 	const gchar *data = NULL;
 	gsize length = 0;
@@ -1054,7 +1073,7 @@ page_answered(
 	if (status == 0 || !axis_portal_wire_read_refusal(data, length, &refusal)) {
 		if (status != 0)
 			note(self, NOTE_UNREADABLE, "the daemon answered %u with what the portal cannot read", status);
-		page_finish(page, unavailable());
+		page_finish(page, unavailable_in(&frame));
 		return FALSE;
 	}
 	if (status == 401 && refusal.why == AXIS_PORTAL_REFUSED_PROOF) {
@@ -1065,7 +1084,7 @@ page_answered(
 	case 401:
 		note(self, NOTE_TOKEN, "the daemon refused the portal's token: it is wrong, or was revoked on the page "
 			"\"Request portal\"");
-		page_finish(page, unavailable());
+		page_finish(page, unavailable_in(&frame));
 		break;
 	case 404:
 		page_say(page, 404, "Not found", "There is no such title or request.");
@@ -1082,11 +1101,11 @@ page_answered(
 	case 429:
 		note(self, NOTE_DAEMON_LIMIT, "the daemon refused a request by one of its limits (%u seconds to wait)",
 			(guint)MIN(refusal.wait_s, G_MAXUINT));
-		response = too_many(limit_words(refusal.why), refusal.wait_s);
+		response = too_many_in(&frame, limit_words(refusal.why), refusal.wait_s);
 		page_finish(page, response);
 		break;
 	default:
-		page_finish(page, unavailable());
+		page_finish(page, unavailable_in(&frame));
 		break;
 	}
 	return FALSE;
@@ -1108,9 +1127,11 @@ page_unreadable(
 	Page        *page,
 	const gchar *operation
 ){
+	AxisPortalFrame frame = frame_of(page);
+
 	note(page->app, NOTE_UNREADABLE, "the daemon's answer to %s is not one the portal reads; the page was not shown",
 		operation);
-	page_finish(page, unavailable());
+	page_finish(page, unavailable_in(&frame));
 }
 
 /* ── The routes' steps ──────────────────────────────────────────── */
@@ -1131,7 +1152,8 @@ step_requests(
 	if (!page_answered(page, status, body))
 		return;
 	data = bytes_of(body, &length);
-	requests = axis_portal_wire_read_requests(data, length);
+	/* The page asked for, and no other. */
+	requests = axis_portal_wire_read_requests(data, length, page->number);
 	if (requests == NULL) {
 		page_unreadable(page, "requests");
 		return;
@@ -1177,7 +1199,8 @@ step_titles(
 	if (!page_answered(page, status, body))
 		return;
 	data = bytes_of(body, &length);
-	titles = axis_portal_wire_read_titles(data, length, search);
+	/* The page asked for, and no other. */
+	titles = axis_portal_wire_read_titles(data, length, search, page->number);
 	if (titles == NULL) {
 		page_unreadable(page, search ? "search" : "browse");
 		return;
@@ -1349,6 +1372,31 @@ step_who(
 	page_run(page);
 }
 
+/* A search or a request post of a session the daemon has just said is one:
+ * counted for that session here, so that a cookie nobody vouched for takes
+ * no room in the counts.  %FALSE: refused (the page is finished). */
+static gboolean
+page_counted(
+	Page     *page,
+	gboolean  search
+){
+	AxisPortalApp *self = page->app;
+	AxisPortalFrame frame = frame_of(page);
+	gint64 wait = window_take(search ? &self->searches : &self->asks, page->visit.session_key, now_us(self));
+
+	if (wait == 0)
+		return TRUE;
+	if (search)
+		note(self, NOTE_SEARCHES, "search: refused a session from %s, which searched %d times in a minute",
+			page->visit.client, AXIS_PORTAL_SEARCHES_A_MINUTE_HERE);
+	else
+		note(self, NOTE_ASKS, "request: refused a session from %s, which asked %d times in a minute",
+			page->visit.client, AXIS_PORTAL_ASKS_A_MINUTE_HERE);
+	page_finish(page, too_many_in(&frame, search ? "There were too many searches." : "There were too many requests.",
+		seconds_of(wait)));
+	return FALSE;
+}
+
 /* The person is known (the daemon said so within the last 30 seconds): the
  * route's own call, which the daemon judges by the proof again. */
 static void
@@ -1367,6 +1415,8 @@ page_run(Page *page)
 			page_finish(page, html_response(200, axis_portal_view_search(&frame, NULL, page->search_kind, NULL)));
 			break;
 		}
+		if (!page_counted(page, TRUE))
+			break;
 		page_call(page, AXIS_PORTAL_SEARCH, axis_portal_wire_search(visit->proof, page->query, page->search_kind,
 			page->number), step_titles);
 		break;
@@ -1377,6 +1427,8 @@ page_run(Page *page)
 		page_call(page, AXIS_PORTAL_REQUESTS, axis_portal_wire_requests(visit->proof, page->number), step_requests);
 		break;
 	case AXIS_PORTAL_ROUTE_ASK:
+		if (!page_counted(page, FALSE))
+			break;
 		page_call(page, AXIS_PORTAL_REQUEST, axis_portal_wire_request(visit->proof, visit->id, page->kind, page->ask,
 			page->picked, page->n_picked), step_asked);
 		break;
@@ -1467,8 +1519,9 @@ step_login(
 		page_finish(page, login_page(self, visit, 401, page->next, "The username or password is incorrect."));
 		return;
 	}
+	/* The daemon's own limit (for the username, say, which a stranger may
+	 * have spent) is not a failure of this address. */
 	if (status == 429 && axis_portal_wire_read_refusal(data, length, &refusal)) {
-		axis_login_throttle_fail(self->logins, visit->client_key, now);
 		note(self, NOTE_LOGIN_DAEMON_LIMIT, "login: refused by the daemon's limit, from %s", visit->client);
 		response = too_many(limit_words(AXIS_PORTAL_REFUSED_THROTTLED), refusal.wait_s);
 		page_finish(page, response);
@@ -1482,6 +1535,9 @@ step_login(
 		return;
 	}
 	g_message("login: %s from %s", login->name, visit->client);
+	/* A login that worked forgets the address's failed ones, so that the
+	 * mistakes of a home do not add up to a delay for everyone there. */
+	axis_login_throttle_clear(self->logins, visit->client_key);
 	response = see_other(page->next != NULL ? page->next : "/");
 	{
 		gchar *value = sealed_cookie(self->seal_key, login->proof);
@@ -1503,8 +1559,10 @@ step_login(
 	if (visit->proof != NULL && !axis_secret_equal(visit->proof, login->proof)) {
 		who_drop(self, visit->session_key);
 		confirmed_drop(self, visit->session_key);
-		axis_portal_client_call(self->client, AXIS_PORTAL_LOGOUT, axis_portal_wire_proof(visit->proof),
-			ignore_answer, NULL);
+		/* (When every call is taken, the old proof ends on its own.) */
+		if (axis_portal_client_get_pending(self->client) < AXIS_PORTAL_CLIENT_MAX_CALLS)
+			axis_portal_client_call(self->client, AXIS_PORTAL_LOGOUT, axis_portal_wire_proof(visit->proof),
+				ignore_answer, NULL);
 	}
 	page_finish(page, response);
 }
@@ -1638,7 +1696,8 @@ handle_login(
 		note(self, NOTE_LOGIN_FAILED, "login: failed from %s", visit->client);
 		return login_page(self, visit, 401, next, "The username or password is incorrect.");
 	}
-	if (self->pending >= AXIS_PORTAL_MAX_PENDING) {
+	if (self->pending >= AXIS_PORTAL_MAX_PENDING ||
+	    axis_portal_client_get_pending(self->client) >= AXIS_PORTAL_CLIENT_MAX_CALLS) {
 		axis_portal_wire_free(json);
 		note(self, NOTE_PENDING, "too many pages wait for the daemon; one was refused");
 		return unavailable();
@@ -1679,7 +1738,6 @@ handle_session(
 	g_autofree gchar *query = NULL;
 	gint search_kind = -1;
 	gint64 number = 1;
-	gint64 now = now_us(self);
 	gint64 wait;
 	const gchar *text;
 	gchar *json = NULL;
@@ -1740,23 +1798,11 @@ handle_session(
 		break;
 	}
 
-	/* The session's own limits: refused here, and the daemon is not asked. */
-	if (visit->route == AXIS_PORTAL_ROUTE_SEARCH && query != NULL) {
-		wait = window_take(&self->searches, visit->session_key, now);
-		if (wait > 0) {
-			note(self, NOTE_SEARCHES, "search: refused a session from %s, which searched %d times in a minute",
-				visit->client, AXIS_PORTAL_SEARCHES_A_MINUTE_HERE);
-			return too_many("There were too many searches.", seconds_of(wait));
-		}
-	}
-	if (visit->route == AXIS_PORTAL_ROUTE_ASK) {
-		wait = window_take(&self->asks, visit->session_key, now);
-		if (wait > 0) {
-			note(self, NOTE_ASKS, "request: refused a session from %s, which asked %d times in a minute",
-				visit->client, AXIS_PORTAL_ASKS_A_MINUTE_HERE);
-			return too_many("There were too many requests.", seconds_of(wait));
-		}
-	}
+	/* A search is a GET, and the session cookie is Lax: a link on another
+	 * site would spend the person's searches.  (The session's own counts
+	 * are taken in page_run(), once the daemon has said whose it is.) */
+	if (visit->route == AXIS_PORTAL_ROUTE_SEARCH && query != NULL && visit->cross_site)
+		return forbidden();
 
 	who = who_lookup(self, visit->session_key);
 	/* A poster the portal holds, for a person the daemon knew within the
@@ -1767,7 +1813,8 @@ handle_session(
 		if (poster != NULL)
 			return poster_response(poster->bytes, poster->type);
 	}
-	if (self->pending >= AXIS_PORTAL_MAX_PENDING) {
+	if (self->pending >= AXIS_PORTAL_MAX_PENDING ||
+	    axis_portal_client_get_pending(self->client) >= AXIS_PORTAL_CLIENT_MAX_CALLS) {
 		note(self, NOTE_PENDING, "too many pages wait for the daemon; one was refused");
 		return unavailable();
 	}
@@ -1911,6 +1958,12 @@ serve(
 	}
 	visit.secure = visit.https || !self->insecure;
 	visit.htmx = htmx_request_is_htmx(request);
+	{
+		const gchar *site = header_of(request, "Sec-Fetch-Site");
+
+		/* "none" is a bookmark or a typed address. */
+		visit.cross_site = site != NULL && strcmp(site, "same-origin") != 0 && strcmp(site, "none") != 0;
+	}
 
 	/* 5. The query and the form, read whole or refused whole. */
 	if (visit.post && raw_query != NULL) {
@@ -2209,4 +2262,12 @@ axis_portal_app_get_confirmed_kept(AxisPortalApp *self)
 	g_return_val_if_fail(self != NULL, 0);
 
 	return g_hash_table_size(self->confirmed);
+}
+
+guint
+axis_portal_app_get_counted_sessions(AxisPortalApp *self)
+{
+	g_return_val_if_fail(self != NULL, 0);
+
+	return g_hash_table_size(self->searches.keys) + g_hash_table_size(self->asks.keys);
 }

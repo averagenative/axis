@@ -30,6 +30,7 @@
 
 #include "../../clients/portal/axis-portal-view.h"
 #include "../../clients/portal/axis-portal-wire.h"
+#include "api/axis-portal-proto.h"
 
 int
 LLVMFuzzerTestOneInput(const uint8_t *data, size_t size);
@@ -230,13 +231,19 @@ LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 	case 3:
 	case 4: {
 		gboolean search = (guint)(guint8)(data[0] - '0') % 11 == 3;
-		g_autoptr(AxisPortalTitles) titles = axis_portal_wire_read_titles(body, length, search);
+		guint asked = 1;
+		g_autoptr(AxisPortalTitles) titles = axis_portal_wire_read_titles(body, length, search, asked);
 		AxisPortalHello hello;
 		gchar *lists[2] = { (gchar *)"popular", NULL };
 
+		/* The page that was asked for, and no other. */
+		if (titles == NULL) {
+			asked = search ? AXIS_PORTAL_SEARCH_MAX_PAGE : AXIS_PORTAL_MAX_PAGE;
+			titles = axis_portal_wire_read_titles(body, length, search, asked);
+		}
 		if (titles == NULL)
 			break;
-		if (titles->titles->len > AXIS_PORTAL_WIRE_MAX_TITLES || titles->page < 1 || (!search && titles->stale))
+		if (titles->titles->len > AXIS_PORTAL_WIRE_MAX_TITLES || titles->page != asked || (!search && titles->stale))
 			abort();
 		for (i = 0; i < titles->titles->len; i++)
 			check_title(g_ptr_array_index(titles->titles, i), TRUE);
@@ -282,11 +289,16 @@ LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 		break;
 	}
 	case 7: {
-		g_autoptr(AxisPortalRequests) requests = axis_portal_wire_read_requests(body, length);
+		guint asked = 1;
+		g_autoptr(AxisPortalRequests) requests = axis_portal_wire_read_requests(body, length, asked);
 
+		if (requests == NULL) {
+			asked = AXIS_PORTAL_MAX_PAGE;
+			requests = axis_portal_wire_read_requests(body, length, asked);
+		}
 		if (requests == NULL)
 			break;
-		if (requests->requests->len > AXIS_PORTAL_WIRE_MAX_REQUESTS || requests->page < 1)
+		if (requests->requests->len > AXIS_PORTAL_WIRE_MAX_REQUESTS || requests->page != asked)
 			abort();
 		for (i = 0; i < requests->requests->len; i++)
 			check_request(g_ptr_array_index(requests->requests, i));

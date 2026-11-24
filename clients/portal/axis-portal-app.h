@@ -40,9 +40,12 @@
  *      one of the calls that such sessions and logins share, from every
  *      address together (429);
  *   8. a POST carries the CSRF token derived from that cookie (403);
- *   9. the route's own values are checked, its limit for the session is
- *      counted (429), and only then is the daemon asked, through the eleven
- *      operations' own members (axis-portal-wire.h) and nothing else.
+ *   9. the route's own values are checked (a search with a query that the
+ *      browser reports as from another site is 403), and only then is the
+ *      daemon asked, through the eleven operations' own members
+ *      (axis-portal-wire.h) and nothing else.  A search or a request post is
+ *      counted for the session (429) once the daemon has said whose session
+ *      it is, before the search or the request is asked for.
  *
  * What the daemon answers is read by the strict readers of
  * axis-portal-wire.h and written by axis-portal-view.h; a failure of the
@@ -59,6 +62,7 @@
 #include <glib.h>
 #include <htmx-glib.h>
 
+#include "axis-portal-client.h"
 #include "axis-portal-config.h"
 
 G_BEGIN_DECLS
@@ -107,8 +111,9 @@ G_BEGIN_DECLS
  * confirmed keep the rest whoever sends what. */
 #define AXIS_PORTAL_UNCONFIRMED_A_MINUTE  120
 
-/* Pages waiting for the daemon at once; one more is answered 503. */
-#define AXIS_PORTAL_MAX_PENDING           256
+/* Pages waiting for the daemon at once; one more is answered 503.  As many
+ * as the calls that may be in flight: a page waits for one at a time. */
+#define AXIS_PORTAL_MAX_PENDING           AXIS_PORTAL_CLIENT_MAX_CALLS
 
 /* The cookies.  The __Host- prefix makes a browser refuse one of that name
  * set by any other host or without Secure and Path=/; the names without it
@@ -195,6 +200,10 @@ axis_portal_app_get_who_kept(AxisPortalApp *self);
 /* For how many sessions the daemon's confirmation is kept. */
 guint
 axis_portal_app_get_confirmed_kept(AxisPortalApp *self);
+
+/* For how many sessions searches and request posts are counted. */
+guint
+axis_portal_app_get_counted_sessions(AxisPortalApp *self);
 
 G_END_DECLS
 

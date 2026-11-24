@@ -267,9 +267,10 @@ axis_portal_wire_read_login(const gchar *data, gsize length);
 AxisPortalWho *
 axis_portal_wire_read_whoami(const gchar *data, gsize length);
 
-/* The answer of search (@search: it has "stale") or of browse. */
+/* The answer of search (@search: it has "stale") or of browse, for the
+ * @page that was asked for: an answer for any other page is refused. */
 AxisPortalTitles *
-axis_portal_wire_read_titles(const gchar *data, gsize length, gboolean search);
+axis_portal_wire_read_titles(const gchar *data, gsize length, gboolean search, guint page);
 
 AxisPortalTitleInfo *
 axis_portal_wire_read_title(const gchar *data, gsize length);
@@ -277,8 +278,9 @@ axis_portal_wire_read_title(const gchar *data, gsize length);
 AxisPortalAsked *
 axis_portal_wire_read_asked(const gchar *data, gsize length);
 
+/* For the @page that was asked for, as read_titles(). */
 AxisPortalRequests *
-axis_portal_wire_read_requests(const gchar *data, gsize length);
+axis_portal_wire_read_requests(const gchar *data, gsize length, guint page);
 
 /* The answer of logout and of withdraw: an object with no member. */
 gboolean

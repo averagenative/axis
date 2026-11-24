@@ -544,7 +544,8 @@ AxisPortalTitles *
 axis_portal_wire_read_titles(
 	const gchar *data,
 	gsize        length,
-	gboolean     search
+	gboolean     search,
+	guint        asked
 ){
 	static const gchar *const of_search[] = { "titles", "page", "more", "stale", NULL };
 	static const gchar *const of_browse[] = { "titles", "page", "more", NULL };
@@ -562,7 +563,7 @@ axis_portal_wire_read_titles(
 	list = axis_json_member(root, "titles");
 	if (axis_json_type(list) != AXIS_JSON_ARRAY || axis_json_length(list) > AXIS_PORTAL_WIRE_MAX_TITLES ||
 	    !int_member(root, "page", 1, AXIS_PORTAL_MAX_PAGE, &page) || !bool_member(root, "more", &titles->more) ||
-	    (search && !bool_member(root, "stale", &titles->stale)))
+	    (search && !bool_member(root, "stale", &titles->stale)) || page != (gint64)asked)
 		return NULL;
 	titles->page = (guint)page;
 	for (i = 0; i < axis_json_length(list); i++) {
@@ -656,7 +657,8 @@ read_request(const AxisJsonNode *node)
 AxisPortalRequests *
 axis_portal_wire_read_requests(
 	const gchar *data,
-	gsize        length
+	gsize        length,
+	guint        asked
 ){
 	static const gchar *const defined[] = { "requests", "page", "more", NULL };
 	const AxisJsonNode *root;
@@ -672,7 +674,8 @@ axis_portal_wire_read_requests(
 	requests->requests = g_ptr_array_new_with_free_func((GDestroyNotify)axis_portal_request_info_free);
 	list = axis_json_member(root, "requests");
 	if (axis_json_type(list) != AXIS_JSON_ARRAY || axis_json_length(list) > AXIS_PORTAL_WIRE_MAX_REQUESTS ||
-	    !int_member(root, "page", 1, AXIS_PORTAL_MAX_PAGE, &page) || !bool_member(root, "more", &requests->more))
+	    !int_member(root, "page", 1, AXIS_PORTAL_MAX_PAGE, &page) || !bool_member(root, "more", &requests->more) ||
+	    page != (gint64)asked)
 		return NULL;
 	requests->page = (guint)page;
 	for (i = 0; i < axis_json_length(list); i++) {

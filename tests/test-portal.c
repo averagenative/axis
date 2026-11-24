@@ -1042,14 +1042,30 @@ test_wire_answers(void)
 	/* A list of a search has "stale"; one of browse must not; a title of a
 	 * list carries no seasons. */
 #define LIST "{\"titles\":[" TITLE_MOVIE "],\"page\":1,\"more\":true"
-	titles = axis_portal_wire_read_titles(LIST ",\"stale\":true}", strlen(LIST ",\"stale\":true}"), TRUE);
+	titles = axis_portal_wire_read_titles(LIST ",\"stale\":true}", strlen(LIST ",\"stale\":true}"), TRUE, 1);
 	g_assert_nonnull(titles);
 	g_assert_true(titles->stale && titles->more);
-	g_assert_null(axis_portal_wire_read_titles(LIST "}", strlen(LIST "}"), TRUE));
-	g_assert_null(axis_portal_wire_read_titles(LIST ",\"stale\":true}", strlen(LIST ",\"stale\":true}"), FALSE));
+	g_assert_null(axis_portal_wire_read_titles(LIST "}", strlen(LIST "}"), TRUE, 1));
+	g_assert_null(axis_portal_wire_read_titles(LIST ",\"stale\":true}", strlen(LIST ",\"stale\":true}"), FALSE, 1));
 	g_assert_null(axis_portal_wire_read_titles("{\"titles\":[" TITLE_SERIES "],\"page\":1,\"more\":true}",
-		strlen("{\"titles\":[" TITLE_SERIES "],\"page\":1,\"more\":true}"), FALSE));
-	g_assert_null(axis_portal_wire_read_titles(LIST ",\"total\":9}", strlen(LIST ",\"total\":9}"), FALSE));
+		strlen("{\"titles\":[" TITLE_SERIES "],\"page\":1,\"more\":true}"), FALSE, 1));
+	g_assert_null(axis_portal_wire_read_titles(LIST ",\"total\":9}", strlen(LIST ",\"total\":9}"), FALSE, 1));
+	/* Found by the review of P3 (M16): the answer for another page than the
+	 * one asked for is refused, and no page links past the last page that
+	 * its route takes. */
+	g_assert_null(axis_portal_wire_read_titles(LIST ",\"stale\":true}", strlen(LIST ",\"stale\":true}"), TRUE, 2));
+	{
+#define LIST_2 "{\"titles\":[" TITLE_MOVIE "],\"page\":2,\"more\":true,\"stale\":false}"
+		g_autoptr(AxisPortalTitles) second = axis_portal_wire_read_titles(LIST_2, strlen(LIST_2), TRUE, 2);
+		g_autofree gchar *page = NULL;
+
+		g_assert_nonnull(second);
+		g_assert_true(second->more);
+		page = axis_portal_view_search(NULL, "lantern", -1, second);
+		assert_has(page, "The Lantern Orchard");
+		assert_lacks(page, "page=3");
+		assert_lacks(page, ">More<");
+	}
 
 	/* whoami, hello, login. */
 	who = axis_portal_wire_read_whoami(WHO_ROBIN, strlen(WHO_ROBIN));
@@ -1099,14 +1115,16 @@ test_wire_answers(void)
 #define REQUESTS(extra) "{\"requests\":[{\"id\":\"reqAAAAAAAAAAAAAAAAAAA\",\"title\":3,\"kind\":\"movie\"," \
 	"\"name\":\"x\",\"year\":2019,\"seasons\":[],\"state\":\"failed\",\"cause\":\"download_failed\",\"mine\":\"made\"," \
 	"\"asked_at\":1,\"changed_at\":2" extra "}],\"page\":1,\"more\":false}"
-	requests = axis_portal_wire_read_requests(REQUESTS(""), strlen(REQUESTS("")));
+	requests = axis_portal_wire_read_requests(REQUESTS(""), strlen(REQUESTS("")), 1);
 	g_assert_nonnull(requests);
 	g_assert_cmpint(((const AxisPortalRequestInfo *)g_ptr_array_index(requests->requests, 0))->cause, ==,
 		AXIS_PORTAL_CAUSE_DOWNLOAD_FAILED);
-	g_assert_null(axis_portal_wire_read_requests(REQUESTS(",\"profile\":\"zz\""), strlen(REQUESTS(",\"profile\":\"zz\""))));
-	g_assert_null(axis_portal_wire_read_requests(REQUESTS(",\"have\":1"), strlen(REQUESTS(",\"have\":1"))));
+	g_assert_null(axis_portal_wire_read_requests(REQUESTS(""), strlen(REQUESTS("")), 2));
+	g_assert_null(axis_portal_wire_read_requests(REQUESTS(",\"profile\":\"zz\""), strlen(REQUESTS(",\"profile\":\"zz\"")),
+		1));
+	g_assert_null(axis_portal_wire_read_requests(REQUESTS(",\"have\":1"), strlen(REQUESTS(",\"have\":1")), 1));
 	g_assert_null(axis_portal_wire_read_requests(REQUESTS(",\"asked_by\":\"sam\""),
-		strlen(REQUESTS(",\"asked_by\":\"sam\""))));
+		strlen(REQUESTS(",\"asked_by\":\"sam\"")), 1));
 
 	/* A refusal: the word, never the sentence. */
 #define REFUSAL "{\"error\":\"quota\",\"message\":\"<b>zz</b>\",\"wait\":90}"
@@ -2498,6 +2516,31 @@ test_login_flood(Fixture *fx, gconstpointer data)
 		assert_status(&reply, 303);
 		axis_test_reply_clear(&reply);
 	}
+	/* Found by the review of P3 (M2): a login that worked forgets the
+	 * address's failed ones, so that a mistake afterwards is not one more
+	 * on top of a hundred. */
+	for (i = 0; i < 2; i++) {
+		AxisTestReply reply = login_from(fx, "robin", "a wrong password", "198.51.100.20", NULL, NULL);
+
+		assert_status(&reply, 401);
+		axis_test_reply_clear(&reply);
+	}
+	/* And the daemon's own limit (for a username that a stranger spent) is
+	 * not counted against the address: it is asked every time. */
+	{
+		guint before = asked(fx, "login");
+
+		script(fx, "login", 429, "{\"error\":\"throttled\",\"message\":\"x\",\"wait\":60}");
+		for (i = 0; i < AXIS_PORTAL_LOGIN_FREE_FAILURES + 5; i++) {
+			AxisTestReply reply = login_from(fx, "robin", ROBIN_PASSWORD, "198.51.100.40", NULL, NULL);
+
+			assert_status(&reply, 429);
+			assert_has(reply.body, "There were too many failed logins.");
+			axis_test_reply_clear(&reply);
+		}
+		g_assert_cmpuint(asked(fx, "login") - before, ==, AXIS_PORTAL_LOGIN_FREE_FAILURES + 5);
+		g_hash_table_remove(fx->script, "login");
+	}
 
 	/* A stranger who presents session cookies that the portal sealed and
 	 * the daemon does not know (a session that was logged out, say) is
@@ -2746,18 +2789,39 @@ test_search_flood(Fixture *fx, gconstpointer data)
 	guint refused = 0;
 	guint i;
 
+	/* Found by the review of P3 (M1): a session is counted once the daemon
+	 * has said it is one, so that cookies nobody vouched for take no room in
+	 * the counts. */
+	{
+		g_autofree gchar *proof = fill43("zzNobodySearches");
+		g_autofree gchar *nobody = sealed(fx, proof);
+
+		for (i = 0; i < 3; i++) {
+			reply = get(fx, "/search?q=lantern", nobody);
+			assert_status(&reply, 303);
+			axis_test_reply_clear(&reply);
+		}
+		g_assert_cmpuint(axis_portal_app_get_counted_sessions(fx->app), ==, 0);
+		g_assert_cmpuint(asked(fx, "search"), ==, 0);
+	}
+
 	for (i = 0; i < 50; i++) {
 		g_autofree gchar *path = g_strdup_printf("/search?q=lantern+%u", i);
 
 		reply = get(fx, path, cookie);
 		if (reply.status == 429) {
 			g_assert_nonnull(axis_test_reply_header(&reply, "Retry-After"));
+			/* (M17) A refusal for a person who is logged in does not tell
+			 * them to log in. */
+			assert_has(reply.body, "Back to the lists");
+			assert_lacks(reply.body, "href=\"/login\"");
 			refused++;
 		} else {
 			assert_status(&reply, 200);
 		}
 		axis_test_reply_clear(&reply);
 	}
+	g_assert_cmpuint(axis_portal_app_get_counted_sessions(fx->app), ==, 1);
 	g_assert_cmpuint(asked(fx, "search"), ==, AXIS_PORTAL_SEARCHES_A_MINUTE_HERE);
 	g_assert_cmpuint(refused, ==, 40);
 	assert_has(log_text->str, "search: refused a session");
@@ -2773,6 +2837,37 @@ test_search_flood(Fixture *fx, gconstpointer data)
 	reply = get(fx, "/search?q=lantern", cookie);
 	assert_status(&reply, 200);
 	axis_test_reply_clear(&reply);
+
+	/* Found by the review of P3 (M13): a search is a GET and the cookie is
+	 * Lax, so a link on another site could spend the person's searches.  One
+	 * the browser says another site sent is refused; one from a bookmark or
+	 * the portal's own pages is not. */
+	{
+		static const gchar *const cross_site[] = { "Sec-Fetch-Site", "cross-site", NULL };
+		static const gchar *const same_site[] = { "Sec-Fetch-Site", "same-site", NULL };
+		static const gchar *const typed[] = { "Sec-Fetch-Site", "none", NULL };
+		static const gchar *const own[] = { "Sec-Fetch-Site", "same-origin", NULL };
+		guint before = asked(fx, "search");
+
+		reply = send_from(fx, "GET", "/search?q=lantern", cookie, NULL, NULL, cross_site);
+		assert_status(&reply, 403);
+		axis_test_reply_clear(&reply);
+		reply = send_from(fx, "GET", "/search?q=lantern", cookie, NULL, NULL, same_site);
+		assert_status(&reply, 403);
+		axis_test_reply_clear(&reply);
+		g_assert_cmpuint(asked(fx, "search"), ==, before);
+		/* The search page itself, without a query, may be linked to. */
+		reply = send_from(fx, "GET", "/search", cookie, NULL, NULL, cross_site);
+		assert_status(&reply, 200);
+		axis_test_reply_clear(&reply);
+		reply = send_from(fx, "GET", "/search?q=lantern", cookie, NULL, NULL, typed);
+		assert_status(&reply, 200);
+		axis_test_reply_clear(&reply);
+		reply = send_from(fx, "GET", "/search?q=lantern", cookie, NULL, NULL, own);
+		assert_status(&reply, 200);
+		axis_test_reply_clear(&reply);
+		g_assert_cmpuint(asked(fx, "search"), ==, before + 2);
+	}
 
 	/* A search that cannot be one is refused before it is counted or sent. */
 	{

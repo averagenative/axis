@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "axis-portal-form.h"
+#include "api/axis-portal-proto.h"
 
 /* ── Writing markup ─────────────────────────────────────────────── */
 
@@ -371,8 +372,10 @@ axis_portal_view_message(
 	page_begin(out, heading, frame);
 	element(out, "h1", NULL, heading);
 	element(out, "p", "notice", text);
+	/* Whoever it is for: a person who is logged in is not told to log in
+	 * again, and "/" sends one who is not to the login. */
 	if (frame == NULL || frame->who == NULL)
-		g_string_append(out, "<p><a href=\"/login\">Log in</a></p>");
+		g_string_append(out, "<p><a href=\"/\">Go to the request portal</a></p>");
 	else
 		g_string_append(out, "<p><a href=\"/\">Back to the lists</a></p>");
 	return page_end(out);
@@ -473,7 +476,8 @@ axis_portal_view_home(
 			axis_portal_view_escape(out, list);
 			g_string_append_printf(out, "&amp;page=%u\">Earlier</a>", titles->page - 1);
 		}
-		if (titles->more) {
+		/* No link to a page that the portal would refuse. */
+		if (titles->more && titles->page < AXIS_PORTAL_MAX_PAGE) {
 			g_string_append_printf(out, "<a href=\"/?kind=%s&amp;list=", kind_word(kind));
 			axis_portal_view_escape(out, list);
 			g_string_append_printf(out, "&amp;page=%u\">More</a>", titles->page + 1);
@@ -509,7 +513,7 @@ axis_portal_view_search(
 			element(out, "p", "notice", "Nothing was found.");
 		} else {
 			cards(out, titles);
-			if (titles->more && query != NULL) {
+			if (titles->more && query != NULL && titles->page < AXIS_PORTAL_SEARCH_MAX_PAGE) {
 				g_autofree gchar *escaped = g_uri_escape_string(query, NULL, FALSE);
 
 				g_string_append(out, "<nav class=\"pages\"><a href=\"/search?q=");
@@ -776,7 +780,7 @@ axis_portal_view_requests(
 	g_string_append(out, "<nav class=\"pages\">");
 	if (requests->page > 1)
 		g_string_append_printf(out, "<a href=\"/requests?page=%u\">Later</a>", requests->page - 1);
-	if (requests->more)
+	if (requests->more && requests->page < AXIS_PORTAL_MAX_PAGE)
 		g_string_append_printf(out, "<a href=\"/requests?page=%u\">Earlier</a>", requests->page + 1);
 	g_string_append(out, "</nav>");
 	return page_end(out);

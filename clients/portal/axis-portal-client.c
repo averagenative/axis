@@ -176,11 +176,13 @@ finish(
 
 	if (reached)
 		body = g_bytes_new(exchange->body->data, exchange->body->len);
+	/* The slot is given back first: the caller's next call (a page's
+	 * `title` after its `whoami`) may take it. */
+	client->pending--;
 	exchange->func(reached ? exchange->status : 0, body, reached ? exchange->content_type : NULL,
 		exchange->user_data);
 	g_clear_pointer(&body, g_bytes_unref);
 	exchange_free(exchange);
-	client->pending--;
 }
 
 static void
