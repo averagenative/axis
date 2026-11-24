@@ -51,6 +51,12 @@
  * written (an event stream's reader is the hub's to drop).
  *
  * Main loop thread only, except axis_web_limits_set_bodies().
+ *
+ * This file knows nothing of accounts, sessions or the database
+ * (add-request-portal, slice P3: axis-portal installs the same limits and is
+ * linked without any of them).  Whose proxies are trusted and which requests
+ * are a worker's are asked of whoever set axis_web_limits_set_sources(); the
+ * engine's shell sets them from its auth (web/axis-web.c).
  */
 
 #ifndef AXIS_WEB_LIMITS_H
@@ -60,9 +66,28 @@
 #include <htmx-glib.h>
 
 #include "core/axis-proxy.h"
-#include "web/axis-web-auth.h"
 
 G_BEGIN_DECLS
+
+/*
+ * The largest request body accepted.  libsoup reads a whole body into
+ * memory before any handler runs, so a longer one (or one sent chunked,
+ * whose length is not known up front) is answered 413 as soon as its
+ * headers arrive, and what follows is discarded unread.  Nothing posts
+ * more than a form yet.
+ */
+#define AXIS_WEB_MAX_REQUEST_BODY (1024 * 1024)
+
+/* The worker API's paths ("/api/v1/worker" and below) take a body of their
+ * own size.  Said here as plain values so that this file needs nothing of
+ * the worker API; web/axis-web.c asserts that they are the worker API's own
+ * (AXIS_WORKER_API_PREFIX, AXIS_WORKER_MAX_REQUEST_BYTES). */
+#define AXIS_WEB_LIMITS_WORKER_PATH        "/api/v1/worker"
+#define AXIS_WEB_LIMITS_WORKER_BODY        (256 * 1024)
+
+/* The event stream's path (the hub's AXIS_WEB_HUB_EVENTS_PATH): a request
+ * for it is held by the hub's limits, not by the requests in flight. */
+#define AXIS_WEB_LIMITS_STREAM_PATH        "/events"
 
 #define AXIS_WEB_LIMITS_HEAD_TIMEOUT_S     30
 #define AXIS_WEB_LIMITS_BODY_TIMEOUT_S     60
@@ -87,7 +112,7 @@ typedef struct
 	guint        max_connections;
 	guint        max_per_address;
 	guint        max_overflow;
-	const gchar *trusted_proxies;	/* server.trusted_proxies, until set_auth() */
+	const gchar *trusted_proxies;	/* server.trusted_proxies, until set_sources() */
 	gboolean     local_is_public;	/* tests only: hold loopback to the per-address cap */
 	/* A listener that is not the shell's (the portal API's): the largest
 	 * body of any request on it (0: the shell's limits), and the JSON a body
@@ -151,13 +176,29 @@ axis_web_limits_set_refusal(
 	gpointer                  user_data
 );
 
-/* The auth whose trusted proxies the caps judge by and whose workers'
- * tokens exempt a request, borrowed until it is set again; %NULL goes back
- * to the proxies the limits were installed with, and no workers. */
+/* The trusted proxies now (transfer none; a list whose names are looked
+ * up).  Main loop. */
+typedef AxisProxyList *(*AxisWebLimitsTrustedFunc)(gpointer user_data);
+
+/* Whether a request for @path with these Authorization headers (joined as a
+ * list; nullable) is one the caps are not for: a worker's, with its valid
+ * token.  Main loop. */
+typedef gboolean (*AxisWebLimitsExemptFunc)(
+	const gchar *path,
+	const gchar *authorization,
+	gpointer     user_data
+);
+
+/* Whose trusted proxies the caps judge by, and which requests they are not
+ * for; @user_data is borrowed until they are set again.  %NULL for @trusted
+ * goes back to the proxies the limits were installed with, %NULL for
+ * @exempt to no exemption. */
 void
-axis_web_limits_set_auth(
-	AxisWebLimits *self,
-	AxisWebAuth   *auth
+axis_web_limits_set_sources(
+	AxisWebLimits            *self,
+	AxisWebLimitsTrustedFunc  trusted,
+	AxisWebLimitsExemptFunc   exempt,
+	gpointer                  user_data
 );
 
 /* One paragraph for the administrators' pages when a cap has refused

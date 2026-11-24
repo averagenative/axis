@@ -47,7 +47,7 @@
 G_BEGIN_DECLS
 
 /* Where a page reads its event stream. */
-#define AXIS_WEB_HUB_EVENTS_PATH              "/events"
+#define AXIS_WEB_HUB_EVENTS_PATH              AXIS_WEB_LIMITS_STREAM_PATH
 
 /* The id of the line on a page that says its stream was refused. */
 #define AXIS_WEB_HUB_STATUS_ID                "live-status"

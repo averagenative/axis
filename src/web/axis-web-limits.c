@@ -19,13 +19,11 @@
  */
 
 #include "web/axis-web-limits.h"
-#include "web/axis-web-auth-private.h"
-#include "web/axis-web-hub.h"
-#include "web/axis-web-private.h"
 
+#include <libsoup/soup.h>
 #include <string.h>
 
-#include "api/axis-worker-proto.h"
+#include "web/axis-web-headers.h"
 
 #define LIMITS_KEY    "axis-web-limits"
 #define IN_FLIGHT_KEY "axis-web-limits-in-flight"
@@ -84,7 +82,9 @@ struct _AxisWebLimits
 	goffset        max_body;	/* 0: the shell's limits */
 	gchar         *too_large_json;	/* the body of a 413, or NULL for none */
 	AxisProxyList *own_trusted;
-	AxisWebAuth   *auth;		/* borrowed: its trusted proxies and workers */
+	AxisWebLimitsTrustedFunc trusted;	/* whose proxies, or NULL for own_trusted */
+	AxisWebLimitsExemptFunc  exempt;	/* which requests the caps are not for, or NULL */
+	gpointer       sources_data;	/* borrowed */
 	GHashTable    *conns;		/* GSocket* -> Conn* */
 	guint          n_normal;	/* of them, not over a cap */
 	guint          n_overflow;
@@ -102,7 +102,19 @@ struct _AxisWebLimits
 static AxisProxyList *
 trusted_of(AxisWebLimits *self)
 {
-	return self->auth != NULL ? axis_web_auth_get_trusted(self->auth) : self->own_trusted;
+	AxisProxyList *list = self->trusted != NULL ? self->trusted(self->sources_data) : NULL;
+
+	return list != NULL ? list : self->own_trusted;
+}
+
+/* "/api/v1/worker" itself, or anything below it. */
+static gboolean
+is_worker_path(const gchar *path)
+{
+	static const gchar bare[] = AXIS_WEB_LIMITS_WORKER_PATH;
+
+	return path != NULL && strncmp(path, bare, sizeof(bare) - 1) == 0 &&
+		(path[sizeof(bare) - 1] == '\0' || path[sizeof(bare) - 1] == '/');
 }
 
 static gboolean
@@ -463,8 +475,8 @@ from_worker(
 	const gchar        *path,
 	SoupMessageHeaders *headers
 ){
-	return self->auth != NULL && axis_web_auth_is_worker_path(path) &&
-	       axis_web_auth_is_worker_token(self->auth, soup_message_headers_get_list(headers, "Authorization"));
+	return self->exempt != NULL && path != NULL &&
+	       self->exempt(path, soup_message_headers_get_list(headers, "Authorization"), self->sources_data);
 }
 
 /*
@@ -536,7 +548,7 @@ on_got_headers(
 	/* The worker API takes less than a form may be; a listener with a limit
 	 * of its own (the portal API's) takes that. */
 	limit = self->max_body > 0 ? self->max_body :
-		path != NULL && axis_web_auth_is_worker_path(path) ? AXIS_WORKER_MAX_REQUEST_BYTES : AXIS_WEB_MAX_REQUEST_BODY;
+		is_worker_path(path) ? AXIS_WEB_LIMITS_WORKER_BODY : AXIS_WEB_MAX_REQUEST_BODY;
 	if (has_body && (encoding != SOUP_ENCODING_CONTENT_LENGTH ||
 	                 soup_message_headers_get_content_length(headers) > limit)) {
 		refuse(message, 413);
@@ -549,7 +561,7 @@ on_got_headers(
 	/* Behind a trusted proxy: what one client it forwards has in flight.
 	 * An event stream is held by the hub's own limits, and a worker by
 	 * none of these. */
-	if (conn != NULL && conn->via_proxy && !worker && g_strcmp0(path, AXIS_WEB_HUB_EVENTS_PATH) != 0) {
+	if (conn != NULL && conn->via_proxy && !worker && g_strcmp0(path, AXIS_WEB_LIMITS_STREAM_PATH) != 0) {
 		g_autofree gchar *client = NULL;
 		InFlight *flight;
 		gboolean https;
@@ -730,7 +742,9 @@ limits_detach(gpointer data)
 	g_hash_table_remove_all(self->per_peer);
 	self->n_normal = 0;
 	self->n_overflow = 0;
-	self->auth = NULL;
+	self->trusted = NULL;
+	self->exempt = NULL;
+	self->sources_data = NULL;
 	axis_web_limits_unref(self);
 }
 
@@ -843,13 +857,17 @@ axis_web_limits_set_refusal(
 }
 
 void
-axis_web_limits_set_auth(
-	AxisWebLimits *self,
-	AxisWebAuth   *auth
+axis_web_limits_set_sources(
+	AxisWebLimits            *self,
+	AxisWebLimitsTrustedFunc  trusted,
+	AxisWebLimitsExemptFunc   exempt,
+	gpointer                  user_data
 ){
 	g_return_if_fail(self != NULL);
 
-	self->auth = auth;
+	self->trusted = trusted;
+	self->exempt = exempt;
+	self->sources_data = user_data;
 }
 
 gchar *

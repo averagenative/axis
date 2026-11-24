@@ -25,6 +25,7 @@
 
 #include "core/axis-module.h"
 #include "meta/axis-meta-model.h"
+#include "web/axis-web-limits.h"
 #include "web/axis-web-table.h"
 #include "web/axis-web-text.h"
 
@@ -36,14 +37,8 @@ typedef struct _AxisWebAuth AxisWebAuth;
 /* Defined in web/axis-web-hub.h. */
 typedef struct _AxisWebHub AxisWebHub;
 
-/*
- * The largest request body accepted.  libsoup reads a whole body into
- * memory before any handler runs, so a longer one (or one sent chunked,
- * whose length is not known up front) is answered 413 as soon as its
- * headers arrive, and what follows is discarded unread.  Nothing posts
- * more than a form yet.
- */
-#define AXIS_WEB_MAX_REQUEST_BODY (1024 * 1024)
+/* The largest request body accepted, AXIS_WEB_MAX_REQUEST_BODY, is in
+ * web/axis-web-limits.h, which this header includes. */
 
 /**
  * AxisWebRouteFlags:
