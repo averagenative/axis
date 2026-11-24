@@ -63,7 +63,8 @@
  * is how long running jobs get to finish at shutdown.
  *
  * Environment overrides, applied after the file and validated the same
- * way: AXIS_LISTEN_HOST, AXIS_LISTEN_PORT, AXIS_TRUSTED_PROXIES,
+ * way: AXIS_LISTEN_HOST, AXIS_LISTEN_PORT, AXIS_PORTAL_LISTEN_PORT,
+ * AXIS_TRUSTED_PROXIES,
  * AXIS_SECURE_COOKIES, AXIS_DATABASE_URL, AXIS_DATABASE_POOL_SIZE,
  * AXIS_DATABASE_WAIT, AXIS_LOG_LEVEL, AXIS_LOG_FORMAT, AXIS_JOBS_CONCURRENCY,
  * AXIS_JOBS_GRACE_PERIOD, AXIS_WORKER_LEASE, AXIS_DATA_DIR,
@@ -215,6 +216,12 @@ axis_config_get_host(AxisConfig *self);
 
 guint16
 axis_config_get_port(AxisConfig *self);
+
+/* server.portal_listen_port (AXIS_PORTAL_LISTEN_PORT): the port of the
+ * listener that answers the portal API and nothing else (add-request-portal),
+ * on the host of the main listener; 0, the default, for no such listener. */
+guint16
+axis_config_get_portal_port(AxisConfig *self);
 
 /**
  * axis_config_get_trusted_proxies:

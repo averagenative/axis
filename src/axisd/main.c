@@ -16,6 +16,8 @@
 #include "axis-version.h"
 #include "axisd/axis-daemon-lock.h"
 #include "acquire/axis-acquire.h"
+#include "api/axis-portal-api.h"
+#include "api/axis-portal-tokens.h"
 #include "api/axis-worker-api.h"
 #include "api/axis-worker-tokens.h"
 #include "arr/axis-arr.h"
@@ -876,6 +878,16 @@ on_lock_taken(gpointer data)
 	g_idle_add(serving_stop_taken, data);
 }
 
+/* Whether the daemon serves: what the portal listener asks before it answers
+ * anything (api/axis-portal-api.h).  Any thread. */
+static gboolean
+portal_serving(gpointer data)
+{
+	StartGate *gate = data;
+
+	return g_atomic_int_get(&gate->phase) == START_SERVING;
+}
+
 static const AxisDaemonLockHooks lock_hooks = {
 	on_lock_lost,
 	on_lock_wait_handlers,
@@ -914,7 +926,10 @@ serve(
 	g_autoptr(AxisJobRegistry) job_registry = NULL;
 	g_autoptr(AxisJobQueue) jobs = NULL;
 	g_autoptr(GError) local = NULL;
+	g_autoptr(AxisPortalTokens) portal_tokens = axis_portal_tokens_new();	/* after @auth, @portal_api, the pages */
 	g_autoptr(AxisWebAuth) auth = NULL;	/* after @hub and @web are freed */
+	g_autoptr(AxisPortalApi) portal_api = NULL;	/* before @auth: it asks it who a request is from */
+	g_autoptr(HtmxServer) portal_server = NULL;	/* the portal listener, when one is configured */
 	g_autoptr(AxisWorkerApi) worker_api = NULL;	/* after @web */
 	g_autoptr(AxisWebWorkers) workers_ui = NULL;	/* after @web */
 	g_autoptr(AxisWebHub) hub = NULL;	/* after @jobs_ui, before @auth */
@@ -1035,7 +1050,9 @@ serve(
 
 		if (conn == NULL)
 			return 1;
-		loaded = axis_worker_tokens_load(worker_tokens, conn, error);
+		/* And the request portal's, a class of their own. */
+		loaded = axis_worker_tokens_load(worker_tokens, conn, error) &&
+			axis_portal_tokens_load(portal_tokens, conn, error);
 		axis_db_pool_release(pool, conn);
 		if (!loaded)
 			return 1;
@@ -1159,6 +1176,8 @@ serve(
 	 * seasons of a series, and an administrator decides.  An approval adds
 	 * the title through the two modules above, unchanged. */
 	requests = axis_requests_new(pool, settings, meta, movies, tv, storage, quality);
+	/* Its page "Request portal" makes and revokes the portal's tokens. */
+	axis_requests_set_portal(requests, portal_tokens, axis_config_get_portal_port(config));
 	if (!axis_module_registry_register(registry, axis_requests_get_module(), requests, error))
 		return 1;
 	/* Discover: TMDb's lists of movies and series, kept and refreshed by a
@@ -1306,6 +1325,33 @@ serve(
 		g_clear_error(&local);
 	}
 
+	/* The portal API (add-request-portal): a listener of its own, only when
+	 * a port is configured for it (none by default), with a router that holds
+	 * its eleven operations and nothing else.  Like the main listener it
+	 * answers 503 until the daemon serves, and while it has lost its database
+	 * lock.  The main listener answers none of it (web/axis-web-auth.c). */
+	if (axis_config_get_portal_port(config) != 0) {
+		guint16 portal_port = axis_config_get_portal_port(config);
+
+		if (portal_port == axis_config_get_port(config)) {
+			g_set_error(error, AXIS_ERROR, AXIS_ERROR_LISTEN, "the portal listener (server.portal_listen_port, "
+				"AXIS_PORTAL_LISTEN_PORT) needs a port of its own: %u is the main listener's", (guint)portal_port);
+			return 1;
+		}
+		portal_api = axis_portal_api_new(pool, auth, portal_tokens, requests, meta, discover);
+		axis_portal_api_set_serving(portal_api, portal_serving, gate);
+		portal_server = htmx_server_new();
+		axis_portal_api_install(portal_api, portal_server, axis_config_get_max_connections(config));
+		if (!htmx_server_listen_on(portal_server, axis_config_get_host(config), portal_port, &local) ||
+		    !htmx_server_start(portal_server, &local)) {
+			g_set_error(error, AXIS_ERROR, AXIS_ERROR_LISTEN, "cannot listen on %s:%u for the portal API: %s",
+				axis_config_get_host(config), (guint)portal_port, local->message);
+			return 1;
+		}
+		g_message("portal API: listening on %s:%u (the portal API and nothing else)", axis_config_get_host(config),
+			(guint)portal_port);
+	}
+
 	/* The probes share each database question among the requests that
 	 * arrive while it is asked (axis-web-health.h). */
 	{
@@ -1339,6 +1385,8 @@ serve(
 
 	if (!axis_module_registry_start_all(registry, error)) {
 		htmx_server_stop(server);
+		if (portal_server != NULL)
+			htmx_server_stop(portal_server);
 		axis_web_health_free(health);
 		return 1;
 	}
@@ -1347,6 +1395,8 @@ serve(
 	if (!axis_job_queue_start(jobs, error)) {
 		axis_module_registry_stop_all(registry);
 		htmx_server_stop(server);
+		if (portal_server != NULL)
+			htmx_server_stop(portal_server);
 		axis_web_health_drain(health);
 		axis_web_auth_stop(auth);
 		while (g_main_context_iteration(NULL, FALSE))
@@ -1406,6 +1456,8 @@ serve(
 	 * modules their handlers belong to (the registry stops them in reverse
 	 * registration order). */
 	htmx_server_stop(server);
+	if (portal_server != NULL)
+		htmx_server_stop(portal_server);
 	axis_daemon_lock_stop_watching(daemon_lock);
 	axis_web_health_drain(health);
 	axis_web_metrics_drain(metrics);
@@ -1417,6 +1469,10 @@ serve(
 	 * database (a worker still running is adopted after a restart). */
 	axis_worker_api_stop(worker_api);
 	axis_web_workers_stop(workers_ui);
+	/* Portal operations in flight are answered; a login among them ends with
+	 * the password work below, so this comes first. */
+	if (portal_api != NULL)
+		axis_portal_api_stop(portal_api);
 	/* Password work in flight is answered (or skipped), and the session
 	 * changes still queued are written, while the pool is certainly
 	 * there. */

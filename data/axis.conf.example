@@ -79,6 +79,15 @@ port = 7800
 # max_connections = 512
 # max_connections_per_address = 64
 
+# The request portal's API (a separate program for people outside your
+# network, not part of Axis yet) is answered on a port of its own, on the
+# host above, and only there: that port answers nothing else, and the port
+# above answers none of it.  0, the default, is no such listener.  It needs a
+# token made on the page System, Request portal.  Allow only the portal to
+# reach it, and do not make it reachable from the internet: it has not been
+# reviewed for that.
+# portal_listen_port = 0
+
 [database]
 # Required: axisd will not start without a database.  PostgreSQL 15 or
 # newer.  A libpq URL or "key=value" connection string; the password is

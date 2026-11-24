@@ -1989,4 +1989,6 @@ axis_web_requests_register(
 	axis_web_route_full(web, HTMX_METHOD_POST, "/requests/:id/approve", AXIS_WEB_ROUTE_ADMIN, handle_approve, self);
 	axis_web_route_full(web, HTMX_METHOD_POST, "/requests/:id/decline", AXIS_WEB_ROUTE_ADMIN, handle_decline, self);
 	axis_web_route_full(web, HTMX_METHOD_POST, "/requests/:id/retry", AXIS_WEB_ROUTE_ADMIN, handle_retry, self);
+	/* The request portal's tokens and listener (System). */
+	axis_web_portal_register(self, web);
 }
