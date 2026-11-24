@@ -13,10 +13,36 @@
 #include <libsoup/soup.h>
 #include <string.h>
 
+#include "axis-portal-log.h"
 #include "axis-portal-wire.h"
 #include "axis-version.h"
 
 #define READ_CHUNK 16384
+
+/* The kinds of failure, each with its budget of log lines. */
+typedef enum
+{
+	FAILED_IN_TIME,
+	FAILED_CERTIFICATE,
+	FAILED_REACHED,
+	FAILED_TOO_LONG,
+	FAILED_REDIRECT,
+	FAILED_TYPE,
+	FAILED_TOO_MANY,
+	FAILED_ADDRESS,
+	N_FAILED
+} Failed;
+
+static const gchar *const failed_words[N_FAILED] = {
+	"it did not answer in time",
+	"its certificate was not accepted",
+	"it could not be reached",
+	"its answer is longer than the portal reads",
+	"it answered with a redirect or no answer at all, which is never followed",
+	"its answer is of a type the portal does not take",
+	"too many calls are in flight; one was not made",
+	"its address cannot be used"
+};
 
 static G_DEFINE_QUARK(axis-portal-client-error-quark, axis_portal_client_error)
 
@@ -42,6 +68,7 @@ struct _AxisPortalClient
 	gchar       *token;		/* to keep it out of a message: secret */
 	guint        timeout_ms;
 	guint        pending;
+	AxisPortalLogBudget lines[N_FAILED];	/* of the failures' lines */
 };
 
 typedef struct
@@ -80,24 +107,46 @@ wipe_bytes(gpointer data)
 	wipe(data);
 }
 
+/* Says, for each kind whose minute has ended by @now (every kind, with
+ * %G_MAXINT64), how many of its lines were left out. */
+static void
+failures_flush(
+	AxisPortalClient *client,
+	gint64            now
+){
+	guint i;
+
+	for (i = 0; i < N_FAILED; i++) {
+		guint due = axis_portal_log_budget_due(&client->lines[i], now);
+
+		if (due > 0)
+			g_warning("the daemon: %u more lines of \"%s\" were not written in the last minute", due, failed_words[i]);
+	}
+}
+
 /* Writes down that the daemon was not reached, or answered what cannot be
- * taken (each time: a page was not served for it): @why is this file's own
- * words, with at most GLib's reason in it, and never the token. */
+ * taken (a page was not served for it): AXIS_PORTAL_LOG_LINES_A_MINUTE of
+ * a kind in a minute, then how many more there were.  The words are this
+ * file's own, with at most GLib's reason in them, and never the token. */
 static void
 note_failure(
 	Exchange    *exchange,
-	const gchar *why,
+	Failed       why,
 	const gchar *detail
 ){
 	AxisPortalClient *client = exchange->client;
 	g_autofree gchar *cut = detail != NULL ? g_strndup(detail, 200) : NULL;
+	gint64 now = g_get_monotonic_time();
 
+	failures_flush(client, now);
+	if (!axis_portal_log_budget_take(&client->lines[why], now))
+		return;
 	/* The token is in a header only, and GLib's messages quote none; were
 	 * one ever to, it would not be written. */
 	if (cut != NULL && client->token != NULL && strstr(cut, client->token) != NULL)
 		g_clear_pointer(&cut, g_free);
-	g_warning("the daemon: %s, for %s%s%s%s", why, axis_portal_client_op_name(exchange->op), cut != NULL ? " (" : "",
-		cut != NULL ? cut : "", cut != NULL ? ")" : "");
+	g_warning("the daemon: %s, for %s%s%s%s", failed_words[why], axis_portal_client_op_name(exchange->op),
+		cut != NULL ? " (" : "", cut != NULL ? cut : "", cut != NULL ? ")" : "");
 }
 
 static void
@@ -140,11 +189,11 @@ fail_from(
 	const GError *error
 ){
 	if (exchange->timed_out)
-		note_failure(exchange, "it did not answer in time", NULL);
+		note_failure(exchange, FAILED_IN_TIME, NULL);
 	else if (error != NULL && error->domain == G_TLS_ERROR)
-		note_failure(exchange, "its certificate was not accepted", error->message);
+		note_failure(exchange, FAILED_CERTIFICATE, error->message);
 	else
-		note_failure(exchange, "it could not be reached", error != NULL ? error->message : NULL);
+		note_failure(exchange, FAILED_REACHED, error != NULL ? error->message : NULL);
 	finish(exchange, FALSE);
 }
 
@@ -167,7 +216,7 @@ on_read(
 		return;
 	}
 	if (exchange->body->len + (gsize)n > exchange->max_bytes) {
-		note_failure(exchange, "its answer is longer than the portal reads", NULL);
+		note_failure(exchange, FAILED_TOO_LONG, NULL);
 		finish(exchange, FALSE);
 		return;
 	}
@@ -213,12 +262,12 @@ on_sent(
 	type = soup_message_headers_get_content_type(headers, NULL);
 	exchange->content_type = type != NULL ? g_ascii_strdown(type, -1) : NULL;
 	if (exchange->status < 200 || (exchange->status >= 300 && exchange->status <= 399)) {
-		note_failure(exchange, "it answered with a redirect or no answer at all, which is never followed", NULL);
+		note_failure(exchange, FAILED_REDIRECT, NULL);
 		finish(exchange, FALSE);
 		return;
 	}
 	if (!type_taken(exchange)) {
-		note_failure(exchange, "its answer is of a type the portal does not take", NULL);
+		note_failure(exchange, FAILED_TYPE, NULL);
 		finish(exchange, FALSE);
 		return;
 	}
@@ -226,7 +275,7 @@ on_sent(
 		AXIS_PORTAL_CLIENT_MAX_ART_BYTES : AXIS_PORTAL_WIRE_MAX_ANSWER;
 	length = soup_message_headers_get_content_length(headers);
 	if (length > (goffset)exchange->max_bytes) {
-		note_failure(exchange, "its answer is longer than the portal reads", NULL);
+		note_failure(exchange, FAILED_TOO_LONG, NULL);
 		finish(exchange, FALSE);
 		return;
 	}
@@ -281,7 +330,7 @@ axis_portal_client_call(
 	 * shared list's, and nothing else is ever appended to the address. */
 	if (json == NULL || (guint)op >= AXIS_PORTAL_N_OPS || self->pending > AXIS_PORTAL_CLIENT_MAX_CALLS) {
 		if (json != NULL && (guint)op < AXIS_PORTAL_N_OPS)
-			note_failure(exchange, "too many calls are in flight; one was not made", NULL);
+			note_failure(exchange, FAILED_TOO_MANY, NULL);
 		wipe(json);
 		g_idle_add(on_not_sent, exchange);
 		return;
@@ -289,7 +338,7 @@ axis_portal_client_call(
 	url = g_strconcat(self->base, axis_portal_client_op_name(op), NULL);
 	exchange->message = soup_message_new(SOUP_METHOD_POST, url);
 	if (exchange->message == NULL) {
-		note_failure(exchange, "its address cannot be used", NULL);
+		note_failure(exchange, FAILED_ADDRESS, NULL);
 		wipe(json);
 		g_idle_add(on_not_sent, exchange);
 		return;
@@ -367,6 +416,8 @@ axis_portal_client_free(AxisPortalClient *self)
 			g_main_context_iteration(g_main_context_get_thread_default(), TRUE);
 		g_object_unref(self->session);
 	}
+	/* What was left out of the log is said now. */
+	failures_flush(self, G_MAXINT64);
 	g_free(self->base);
 	wipe(self->authorization);
 	wipe(self->token);

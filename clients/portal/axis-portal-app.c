@@ -11,6 +11,7 @@
 
 #include "axis-portal-client.h"
 #include "axis-portal-form.h"
+#include "axis-portal-log.h"
 #include "axis-portal-view.h"
 #include "axis-portal-wire.h"
 #include "api/axis-portal-proto.h"
@@ -36,9 +37,13 @@
 /* The longest `next` that is kept. */
 #define NEXT_MAX 512
 
+/* The kinds of line the log has a budget for (axis-portal-log.h): each
+ * refusal, each failed login, each failure of the daemon's answer. */
 typedef enum
 {
 	NOTE_LOGIN_ADDRESS,
+	NOTE_LOGIN_FAILED,
+	NOTE_LOGIN_DAEMON_LIMIT,
 	NOTE_PROOF_ADDRESS,
 	NOTE_SEARCHES,
 	NOTE_ASKS,
@@ -47,8 +52,27 @@ typedef enum
 	NOTE_TOKEN,
 	NOTE_UNREADABLE,
 	NOTE_BUDGET,
+	NOTE_PROXY,
+	NOTE_CROSS_SITE,
 	N_NOTES
 } Note;
+
+/* What the line that counts the ones left out calls each kind. */
+static const gchar *const note_kinds[N_NOTES] = {
+	"login: refused an address with too many failed logins",
+	"login: failed",
+	"login: refused by the daemon's limit",
+	"refused an address with too many session cookies the daemon did not know",
+	"search: refused a session with too many searches",
+	"request: refused a session with too many requests",
+	"too many pages wait for the daemon",
+	"the daemon refused a request by one of its limits",
+	"the daemon refused the portal's token",
+	"the daemon's answer is not one the portal reads",
+	"refused: the calls for logins and unconfirmed sessions are spent",
+	"refused a visit: the trusted proxy did not say who the client is",
+	"refused a post as from another site"
+};
 
 /* ── A limit of so many in any minute, for each key ─────────────── */
 
@@ -180,7 +204,9 @@ struct _AxisPortalApp
 	guint              pending;	/* pages waiting for the daemon */
 	gboolean           stopping;
 	gint64             time_offset_us;
-	guint              noted[N_NOTES];	/* how many of each kind were logged */
+	guint              noted[N_NOTES];	/* how many of each kind there were */
+	AxisPortalLogBudget lines[N_NOTES];	/* how many were written */
+	guint              lines_timer;	/* says the ones left out when a minute ends */
 };
 
 static gint64
@@ -189,9 +215,60 @@ now_us(AxisPortalApp *self)
 	return g_get_monotonic_time() + self->time_offset_us;
 }
 
-/* Logs a refusal by a limit, or a failure of the daemon's answer: each one,
- * as the specification asks.  A line holds an address at most, never what
- * was sent. */
+/* Says, for each kind whose minute has ended by @now (every kind, with
+ * %G_MAXINT64), how many of its lines were left out. */
+static void
+notes_flush(
+	AxisPortalApp *self,
+	gint64         now
+){
+	guint i;
+
+	for (i = 0; i < N_NOTES; i++) {
+		guint due = axis_portal_log_budget_due(&self->lines[i], now);
+
+		if (due > 0)
+			g_message("log: %u more lines of the kind \"%s\" were not written in the last minute", due,
+				note_kinds[i]);
+	}
+}
+
+static void notes_arm(AxisPortalApp *self);
+
+static gboolean
+on_lines_timer(gpointer user_data)
+{
+	AxisPortalApp *self = user_data;
+
+	self->lines_timer = 0;
+	notes_flush(self, now_us(self));
+	notes_arm(self);
+	return G_SOURCE_REMOVE;
+}
+
+/* When lines are left out, the count is said when their minute ends, even
+ * if no other line comes. */
+static void
+notes_arm(AxisPortalApp *self)
+{
+	gint64 ends = G_MAXINT64;
+	gint64 now = now_us(self);
+	guint i;
+
+	if (self->lines_timer != 0 || self->stopping)
+		return;
+	for (i = 0; i < N_NOTES; i++)
+		ends = MIN(ends, axis_portal_log_budget_ends(&self->lines[i]));
+	if (ends == G_MAXINT64)
+		return;
+	self->lines_timer = g_timeout_add((guint)CLAMP((ends - now) / 1000 + 1, 1, 61000), on_lines_timer, self);
+}
+
+/* Logs a refusal by a limit, a failed login, or a failure of the daemon's
+ * answer, as the specification asks: each one, up to
+ * AXIS_PORTAL_LOG_LINES_A_MINUTE of a kind in a minute, and then one line
+ * that says how many more there were.  A line holds an address at most,
+ * never what was sent. */
 static void
 note(
 	AxisPortalApp *self,
@@ -208,12 +285,18 @@ note(
 	...
 ){
 	g_autofree gchar *text = NULL;
+	gint64 now = now_us(self);
 	va_list args;
 
+	notes_flush(self, now);
+	self->noted[which]++;
+	if (!axis_portal_log_budget_take(&self->lines[which], now)) {
+		notes_arm(self);
+		return;
+	}
 	va_start(args, format);
 	text = g_strdup_vprintf(format, args);
 	va_end(args);
-	self->noted[which]++;
 	g_message("%s", text);
 }
 
@@ -1380,13 +1463,13 @@ step_login(
 		/* One answer, whatever it was that failed; the name that was typed
 		 * is not logged (it is sometimes a password). */
 		axis_login_throttle_fail(self->logins, visit->client_key, now);
-		g_message("login: failed from %s", visit->client);
+		note(self, NOTE_LOGIN_FAILED, "login: failed from %s", visit->client);
 		page_finish(page, login_page(self, visit, 401, page->next, "The username or password is incorrect."));
 		return;
 	}
 	if (status == 429 && axis_portal_wire_read_refusal(data, length, &refusal)) {
 		axis_login_throttle_fail(self->logins, visit->client_key, now);
-		g_message("login: refused by the daemon's limit, from %s", visit->client);
+		note(self, NOTE_LOGIN_DAEMON_LIMIT, "login: refused by the daemon's limit, from %s", visit->client);
 		response = too_many(limit_words(AXIS_PORTAL_REFUSED_THROTTLED), refusal.wait_s);
 		page_finish(page, response);
 		return;
@@ -1552,7 +1635,7 @@ handle_login(
 		/* What was typed cannot be a username and a password at all: the
 		 * same answer as for a wrong one. */
 		axis_login_throttle_fail(self->logins, visit->client_key, now);
-		g_message("login: failed from %s", visit->client);
+		note(self, NOTE_LOGIN_FAILED, "login: failed from %s", visit->client);
 		return login_page(self, visit, 401, next, "The username or password is incorrect.");
 	}
 	if (self->pending >= AXIS_PORTAL_MAX_PENDING) {
@@ -2063,6 +2146,12 @@ axis_portal_app_stop(AxisPortalApp *self)
 		axis_proxy_resolver_stop(self->resolver);
 	while (self->pending > 0)
 		g_main_context_iteration(g_main_context_get_thread_default(), TRUE);
+	/* What was left out of the log is said now. */
+	if (self->lines_timer != 0) {
+		g_source_remove(self->lines_timer);
+		self->lines_timer = 0;
+	}
+	notes_flush(self, G_MAXINT64);
 }
 
 void

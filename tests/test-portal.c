@@ -25,6 +25,7 @@
 #include "../clients/portal/axis-portal-client.h"
 #include "../clients/portal/axis-portal-config.h"
 #include "../clients/portal/axis-portal-form.h"
+#include "../clients/portal/axis-portal-log.h"
 #include "../clients/portal/axis-portal-view.h"
 #include "../clients/portal/axis-portal-wire.h"
 #include "api/axis-portal-proto.h"
@@ -2813,6 +2814,76 @@ test_log(Fixture *fx, gconstpointer data)
 	assert_lacks(log_text->str, "__Host-");
 }
 
+/* How many times @needle is in @text. */
+static guint
+count_of(
+	const gchar *text,
+	const gchar *needle
+){
+	guint n = 0;
+
+	while ((text = strstr(text, needle)) != NULL) {
+		n++;
+		text += strlen(needle);
+	}
+	return n;
+}
+
+/* Found by the review of P3 (S3): each refusal was a line of the log, so a
+ * stranger refused a thousand times a second wrote that many lines.  Of one
+ * kind, AXIS_PORTAL_LOG_LINES_A_MINUTE are written in a minute; then one line
+ * says how many more there were, when the minute has ended, or when the
+ * portal stops. */
+static void
+test_log_budget(Fixture *fx, gconstpointer data)
+{
+	static const gchar *const line = "refused 198.51.100.91, which presented too many session cookies";
+	g_autofree gchar *summary = NULL;
+	guint refused = 0;
+	guint i;
+
+	for (i = 0; i < 80; i++) {
+		g_autofree gchar *made_up = g_strdup_printf("zzLogFlood%02u", i);
+		g_autofree gchar *proof = fill43(made_up);
+		g_autofree gchar *cookie = sealed(fx, proof);
+		AxisTestReply reply = send_from(fx, "GET", "/requests", cookie, NULL, "198.51.100.91", NULL);
+
+		if (reply.status == 429)
+			refused++;
+		axis_test_reply_clear(&reply);
+	}
+	g_assert_cmpuint(refused, >, AXIS_PORTAL_LOG_LINES_A_MINUTE + 10);
+	g_assert_cmpuint(count_of(log_text->str, line), ==, AXIS_PORTAL_LOG_LINES_A_MINUTE);
+	summary = g_strdup_printf("log: %u more lines of the kind \"refused an address with too many session cookies the "
+		"daemon did not know\" were not written in the last minute", refused - AXIS_PORTAL_LOG_LINES_A_MINUTE);
+	assert_lacks(log_text->str, "more lines of the kind");
+
+	/* The minute ends: the next line of any kind says how many there were
+	 * first. */
+	axis_portal_app_set_time_offset(fx->app, G_GINT64_CONSTANT(61) * G_USEC_PER_SEC);
+	{
+		AxisTestReply reply = login_from(fx, "robin", "a wrong password", "198.51.100.92", NULL, NULL);
+
+		assert_status(&reply, 401);
+		axis_test_reply_clear(&reply);
+	}
+	assert_has(log_text->str, summary);
+	g_assert_cmpuint(count_of(log_text->str, "more lines of the kind"), ==, 1);
+	assert_has(log_text->str, "login: failed from 198.51.100.92");
+
+	/* A new minute has its own lines; what is left out when the portal stops
+	 * is said then. */
+	for (i = 0; i < 30; i++) {
+		AxisTestReply reply = login_from(fx, "robin", "a wrong password", "198.51.100.93", NULL, NULL);
+
+		axis_test_reply_clear(&reply);
+	}
+	g_assert_cmpuint(count_of(log_text->str, "login: failed from"), ==, AXIS_PORTAL_LOG_LINES_A_MINUTE);
+	assert_lacks(log_text->str, "more lines of the kind \"login: failed\"");
+	axis_portal_app_stop(fx->app);
+	assert_has(log_text->str, "more lines of the kind \"login: failed\" were not written in the last minute");
+}
+
 int
 main(int argc, char **argv)
 {
@@ -2851,6 +2922,7 @@ main(int argc, char **argv)
 	ADD("/portal/limits/search-flood", MODE_PROXY, test_search_flood);
 	ADD("/portal/limits/large-body", MODE_PROXY, test_large_body);
 	ADD("/portal/log/secrets-absent", MODE_PROXY, test_log);
+	ADD("/portal/log/lines-a-minute", MODE_PROXY, test_log_budget);
 
 	return g_test_run();
 }
