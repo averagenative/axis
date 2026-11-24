@@ -194,6 +194,22 @@ make release                      # the hardened build
 A change is ready when four gates pass. Run them one at a time, and alone on
 the machine. A gate can take longer than ten minutes.
 
+The first two gates run in parallel. Give `make` a `-j` for the compilers:
+
+```sh
+make -j16 check
+make -j16 fuzz
+```
+
+The test programs and the fuzz targets run several at a time by themselves:
+one for each processor, and at most 16. To choose the number, set
+`TEST_JOBS` or `FUZZ_JOBS`. Each program writes to a log of its own under
+`build/`. The terminal shows one line for each program, with the time it
+took. At the end, the terminal shows the whole log of each program that
+failed, the ten slowest programs, and the names of the programs that failed.
+With `TEST_JOBS=1` or `FUZZ_JOBS=1`, the programs run one after another,
+write to the terminal, and stop at the first failure.
+
 | Gate | What it runs | What it needs |
 | --- | --- | --- |
 | `make check` | `make check-made-up`, then every test under AddressSanitizer and UndefinedBehaviorSanitizer | Podman or Docker, for a throwaway PostgreSQL container |
@@ -201,8 +217,10 @@ the machine. A gate can take longer than ten minutes.
 | `make check-container` | Builds the image and checks its hardening, probes and secrets | Podman and `yq` |
 | `make check-examples` | Runs the Compose, full-stack, Traefik and Quadlet examples for real | Podman, a Compose front end and user systemd |
 
-To test against a PostgreSQL server of your own, set
-`AXIS_TEST_DATABASE_URL`. `make check` never touches a GPU: `make
+The throwaway PostgreSQL keeps its data in memory, about 1 GB while 16 test
+programs run. To keep the data on disk, set `AXIS_TEST_PG_ON_DISK=1`, and
+expect the tests to wait for the disk. To test against a PostgreSQL server
+of your own, set `AXIS_TEST_DATABASE_URL`. `make check` never touches a GPU: `make
 check-hwenc` runs the hardware encoder tests when you ask for them.
 
 ## How the project is organized

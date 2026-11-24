@@ -199,6 +199,20 @@ ARM_BUILDER     ?=
 PUSH            ?=
 REGISTRY        ?=
 
+# How many test programs (`make test`, `make check`) and fuzz targets (`make
+# fuzz`) run at a time: by default one per processor, and no more than 16.
+# One per processor because both are mostly one busy thread each; more than
+# that makes every one slower without ending sooner, and takes from a fuzz
+# target the processor time FUZZ_SECONDS stands for.  At most 16 because
+# the tests share one PostgreSQL and each runs under the sanitizers, with a
+# daemon or two of its own: a machine with more processors has them, not
+# always the memory.  1 runs them one after another, as before there was a
+# choice.  This is not make's -j, which is for the compilers.
+JOBS_DEFAULT    := $(shell n=$$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1); \
+                     if [ "$$n" -gt 16 ]; then n=16; fi; echo $$n)
+TEST_JOBS       ?= $(JOBS_DEFAULT)
+FUZZ_JOBS       ?= $(JOBS_DEFAULT)
+
 # Fuzz targets (libFuzzer) are always built with clang, whatever CC is,
 # and with the parsers they exercise compiled in under the same
 # instrumentation.

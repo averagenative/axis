@@ -7,7 +7,8 @@
 #                        that the tree holds made-up values only, and
 #                        compile the fuzz targets when clang is installed
 #   make test            build and run all tests with the current flags
-#   make check-made-up   only the made-up values check (python3, no network;
+#   make test-build      build them, and run nothing
+#   make check-made-up  only the made-up values check (python3, no network;
 #                        tests/tools/check-made-up.py)
 #   make check-scale     the Library pages' queries on a generated index of
 #                        two million files (minutes; not part of make check)
@@ -57,6 +58,31 @@
 # PostgreSQL container (podman, else docker) and removes it afterwards.
 # Set AXIS_TEST_DATABASE_URL to use a server of your own instead, or
 # AXIS_SKIP_DB_TESTS=1 to skip the tests that need one.
+#
+# In parallel.  Three things run side by side, each with its own number:
+#
+#   make -j16 check      -j is make's own: that many compilers at once.  Give
+#                        it; without it the 700 objects compile one by one.
+#   TEST_JOBS=N          that many test programs at once (default: the
+#                        number of processors, at most 16).  Each one's
+#                        output goes to build/<cc>-<type>/test-logs/<name>.log;
+#                        the terminal gets a line as each ends, with its
+#                        time, then the whole log of each that failed, the
+#                        ten slowest, and the names of those that failed.
+#                        All of them run, whatever the others did.
+#                        TEST_JOBS=1 is the run of old: one after another,
+#                        output on the terminal, stopping at the first
+#                        failure.
+#   FUZZ_JOBS=N          the same for `make fuzz` (logs in build/fuzz/logs).
+#                        A fuzz target uses one processor for FUZZ_SECONDS:
+#                        more of them at once than there are processors
+#                        gives each less than its time.
+#
+#   make -j16 check && make -j16 fuzz
+#
+# On 16 processors the two take about ten minutes (nine and a half, then
+# one and a half with FUZZ_SECONDS=20).  The longest test program sets the
+# time of the tests: the list of the ten slowest says which.
 
 include config.mk
 
@@ -389,25 +415,48 @@ $(OUTDIR)/tests/%: $(OBJDIR)/tests/%.o $(TEST_SUPPORT_OBJECTS) $(LIB_STATIC) $(C
 
 .PRECIOUS: $(OBJDIR)/tests/%.o
 
-# Run every test binary against one throwaway PostgreSQL; stop at the
-# first failure.  Each test makes and drops its own database in it.  The
+# Everything `make test` runs, built and not run.
+.PHONY: test-build
+test-build: $(AXISD) $(AXIS_WORKER) $(TEST_BINS) $(TOOL_BINS)
+
+# Test programs that run alone, one at a time, after all the others: a
+# program belongs here only when it cannot be made to hold on a machine
+# busy with the others.  One per line, by name (test-...), with the reason.
+TEST_SERIAL :=
+TEST_SERIAL_BINS := $(filter $(addprefix $(OUTDIR)/tests/,$(TEST_SERIAL)),$(TEST_BINS))
+TEST_LOGDIR      := $(OUTDIR)/test-logs
+
+# Run every test binary against one throwaway PostgreSQL, TEST_JOBS at a
+# time (tests/run-parallel.sh: a log per program in $(TEST_LOGDIR), all of
+# them run, every failure reported at the end).  Each test makes and drops
+# its own database in it, its own scratch directories, and listens on ports
+# it finds free.  TEST_JOBS=1: one after another on the terminal, stopping
+# at the first failure.  The
 # hardware encoders are never run here, whatever the environment says (the
 # GPU may be shared with other work): `make check-hwenc` runs them, and
 # every axis-worker a test starts is told to use software encoders only.
 # First, that axis-worker links nothing of the database, the job queue or
 # the web (tests/check-worker-link.sh).
 .PHONY: test
-test: $(AXISD) $(AXIS_WORKER) $(TEST_BINS) $(TOOL_BINS)
+test: test-build
 	$(Q)sh $(TESTDIR)/check-worker-link.sh $(AXIS_WORKER)
+ifeq ($(TEST_JOBS),1)
 	$(Q)AXIS_TEST_HWENC= $(TESTDIR)/with-postgres.sh sh -c \
 		'for t in "$$@"; do echo "  TEST    $$t"; "$$t" || exit 1; done' \
 		axis-tests $(TEST_BINS)
+else
+	$(Q)AXIS_TEST_HWENC= $(TESTDIR)/with-postgres.sh sh $(TESTDIR)/run-parallel.sh \
+		$(TEST_JOBS) $(TEST_LOGDIR) TEST \
+		$(filter-out $(TEST_SERIAL_BINS),$(TEST_BINS)) --serial $(TEST_SERIAL_BINS)
+endif
 	@echo "All tests passed."
 
 # The scale tests: the Library pages' queries on a generated index of
 # millions of rows (AXIS_SCALE_ROWS, default 2000000), with their plans and
 # timings printed.  Run under the same sanitizers as `make check`, where
 # only the client is slower; the database does the same work either way.
+# Its data stays on disk (AXIS_TEST_PG_ON_DISK): millions of rows are too
+# many to keep in memory, and what is measured is a database on a disk.
 #   make check-scale
 #   AXIS_SCALE_ROWS=300000 make check-scale
 .PHONY: check-scale
@@ -416,7 +465,7 @@ check-scale:
 
 .PHONY: run-scale
 run-scale: $(AXISD) $(SCALE_BINS)
-	$(Q)$(TESTDIR)/with-postgres.sh sh -c \
+	$(Q)AXIS_TEST_PG_ON_DISK=1 $(TESTDIR)/with-postgres.sh sh -c \
 		'for t in "$$@"; do echo "  SCALE   $$t"; "$$t" || exit 1; done' \
 		axis-scale-tests $(SCALE_BINS)
 
@@ -474,21 +523,32 @@ check: check-made-up
 .PHONY: fuzz-build
 fuzz-build: $(FUZZ_BINS)
 
-# Each target runs for FUZZ_SECONDS.  New inputs go to build/fuzz/corpus,
+# `make -jN check fuzz` in one command: check compiles the fuzz targets
+# itself, in a make of its own, so the two would write the same files at
+# once.  The fuzz targets wait for check then.
+ifneq ($(filter check,$(MAKECMDGOALS)),)
+$(FUZZ_BINS): | check
+endif
+
+# Each target runs for FUZZ_SECONDS, FUZZ_JOBS of them at a time
+# (tests/fuzz/run-target.sh runs one, tests/run-parallel.sh all of them: a
+# log per target in build/fuzz/logs).  New inputs go to build/fuzz/corpus,
 # never into the seed corpus under tests/fuzz/corpus; a crash is saved
-# under build/fuzz/artifacts and fails the run.
+# under build/fuzz/artifacts and fails the run, which names the target.
+# FUZZ_JOBS=1: one after another on the terminal, stopping at the first
+# crash.
 .PHONY: fuzz
 fuzz: fuzz-build
+ifeq ($(FUZZ_JOBS),1)
 	$(Q)for bin in $(FUZZ_BINS); do \
-		name=$${bin##*/}; \
-		mkdir -p $(FUZZ_OUTDIR)/corpus/$$name $(FUZZ_OUTDIR)/artifacts; \
-		dict=; \
-		if [ -f $(TESTDIR)/fuzz/$$name.dict ]; then dict=-dict=$(TESTDIR)/fuzz/$$name.dict; fi; \
-		echo "  FUZZ    $$name ($(FUZZ_SECONDS) s)"; \
-		$$bin -max_total_time=$(FUZZ_SECONDS) -print_final_stats=1 $$dict \
-			-artifact_prefix=$(FUZZ_OUTDIR)/artifacts/$$name- \
-			$(FUZZ_OUTDIR)/corpus/$$name $(TESTDIR)/fuzz/corpus/$$name || exit 1; \
+		echo "  FUZZ    $${bin##*/} ($(FUZZ_SECONDS) s)"; \
+		FUZZ_SECONDS=$(FUZZ_SECONDS) FUZZ_OUTDIR=$(FUZZ_OUTDIR) \
+			sh $(TESTDIR)/fuzz/run-target.sh $$bin || exit 1; \
 	done
+else
+	$(Q)FUZZ_SECONDS=$(FUZZ_SECONDS) FUZZ_OUTDIR=$(FUZZ_OUTDIR) sh $(TESTDIR)/run-parallel.sh \
+		$(FUZZ_JOBS) $(FUZZ_OUTDIR)/logs FUZZ --with $(TESTDIR)/fuzz/run-target.sh $(FUZZ_BINS)
+endif
 	@echo "Fuzzing found nothing."
 
 .PHONY: clean

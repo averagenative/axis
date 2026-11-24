@@ -93,7 +93,8 @@ COPY . .
 
 # The hardened release build, and the tests that need no PostgreSQL, run
 # against that very build; the others skip themselves.  A failing test
-# fails the image build.  So does a version that is not the program's: when
+# fails the image build.  The tests run one after another here (TEST_JOBS=1):
+# an image may be built on a small machine, or under emulation.  So does a version that is not the program's: when
 # AXIS_VERSION is a version (digits.digits.digits, with or without a
 # suffix), `axisd --version` must report exactly it, so a tag that config.mk
 # was not moved to publishes nothing.
@@ -103,7 +104,7 @@ RUN set -e; \
 	[0-9]*.[0-9]*.[0-9]*-*) suffix="-${AXIS_VERSION#*-}" ;; \
 	esac; \
 	make release GIT_SHA="${GIT_SHA}" VERSION_SUFFIX="${suffix}" ${SOURCE_URL:+SOURCE_URL="${SOURCE_URL}"}; \
-	make test RELEASE=1 GIT_SHA="${GIT_SHA}" VERSION_SUFFIX="${suffix}" ${SOURCE_URL:+SOURCE_URL="${SOURCE_URL}"} AXIS_SKIP_DB_TESTS=1; \
+	make test TEST_JOBS=1 RELEASE=1 GIT_SHA="${GIT_SHA}" VERSION_SUFFIX="${suffix}" ${SOURCE_URL:+SOURCE_URL="${SOURCE_URL}"} AXIS_SKIP_DB_TESTS=1; \
 	make install RELEASE=1 GIT_SHA="${GIT_SHA}" VERSION_SUFFIX="${suffix}" ${SOURCE_URL:+SOURCE_URL="${SOURCE_URL}"} DESTDIR=/stage PREFIX=/usr; \
 	case "${AXIS_VERSION}" in \
 	[0-9]*.[0-9]*.[0-9]*) \
