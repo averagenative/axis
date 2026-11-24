@@ -113,7 +113,9 @@ jobs:
   check:
     name: make check
     runs-on: ubuntu-26.04
-    timeout-minutes: 240
+    # About 40 minutes when it passes: 2 to compile, 20 for the tests, 18
+    # for the fuzz targets' compile.
+    timeout-minutes: 120
     permissions:
       contents: read      # check out the source
     steps:
@@ -166,7 +168,8 @@ jobs:
           echo "\`make check\` passed in $((SECONDS / 60)) min $((SECONDS % 60)) s." >> "$GITHUB_STEP_SUMMARY"
 
       # Never silently: every test that skipped itself, with its reason, from
-      # each test program's own log, and anything make itself left out.
+      # each test program's own log, and anything make itself left out.  The
+      # list goes to the run's summary and to this job's log.
       - name: Name the tests that skipped themselves
         if: ${{ always() }}
         run: |
@@ -177,7 +180,7 @@ jobs:
               grep -E '^  SKIP ' "$RUNNER_TEMP/check.log" || true
               (cd build/gcc-debug-asan-ubsan/test-logs && grep -E '# SKIP' -- *.log) || echo "no test skipped itself"
               echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: The end of the log, once more
         if: ${{ failure() || cancelled() }}
@@ -198,7 +201,8 @@ jobs:
   fuzz:
     name: make fuzz
     runs-on: ubuntu-26.04
-    timeout-minutes: 180
+    # About 25 minutes when it passes: 18 to compile, 6 to run.
+    timeout-minutes: 90
     permissions:
       contents: read      # check out the source
     steps:
@@ -262,7 +266,8 @@ jobs:
   check-container:
     name: make check-container
     runs-on: ubuntu-26.04
-    timeout-minutes: 90
+    # About 8 minutes when it passes.
+    timeout-minutes: 45
     permissions:
       contents: read      # check out the source
     steps:
@@ -331,7 +336,8 @@ jobs:
   check-examples:
     name: make check-examples
     runs-on: ubuntu-26.04
-    timeout-minutes: 120
+    # About 11 minutes when it passes.
+    timeout-minutes: 60
     permissions:
       contents: read      # check out the source
     steps:
