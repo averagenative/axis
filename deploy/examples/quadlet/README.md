@@ -85,11 +85,24 @@ network `axis`, by name or by address, and it cannot reach the internet. The
 portal's token and the requesters' passwords cross `axis-portal` over plain
 HTTP, which is why it holds only those two.
 
-The portal API listens on the daemon's address on `axis-portal` alone. The
-daemon's main port listens on every address of the container, so the
-portal's container can also open the login page of Axis. A login from the
-portal's address is refused, and a requester cannot log in there at all
-([If the portal is taken over](../../README.md#if-the-portal-is-taken-over)).
+The portal API listens on the daemon's address on `axis-portal` alone, and
+answers the portal's address alone: `AXIS_PORTAL_PEERS` in `axis.container`
+is `172.31.78.3`, the fixed address in `axis-portal.container`.
+
+The daemon's main port listens on every address of the container, so the
+portal's container can also open the login page, the static files and the
+probes of Axis. This example cannot close that port to the portal. With
+rootless Podman, a request through the published port `127.0.0.1:7800`
+arrives at one of the container's own addresses, and with the portal the
+daemon has two. When the main port was bound to one of them, the published
+port stopped answering. Two things answer the open port:
+
+- Nobody logs in to Axis from the portal's address. Axis refuses the login
+  as it refuses a wrong password, whatever the password is. The rule does
+  not expire, and a restart does not end it.
+- A requester cannot log in to Axis at all.
+
+See [If the portal is taken over](../../README.md#if-the-portal-is-taken-over).
 
 This example has no reverse proxy. The portal publishes its port on
 `127.0.0.1` only, for a proxy that you run on this machine. That proxy must
@@ -97,7 +110,7 @@ terminate TLS and do what
 [the deployment guide](../../README.md#the-proxy-in-front-of-the-portal)
 lists. The portal serves no login without it.
 
-1. In `axis.container`, uncomment the three lines under "The request
+1. In `axis.container`, uncomment the four lines under "The request
    portal". Install the network and start the daemon again:
 
    ```sh
@@ -107,12 +120,15 @@ lists. The portal serves no login without it.
    ```
 
 2. In Axis, open **System**, then **Request portal**. The page says "On: the
-   portal API is answered on port 7801". Select **Make a token**, and copy
-   the token that Axis shows once.
-3. Make the Podman secret:
+   portal API is answered on port 7801", and lists the portal's address,
+   `172.31.78.3`. Select **Make a token**, and copy the token that Axis
+   shows once.
+3. Make the Podman secret. The command reads the token from your keyboard,
+   so that it is in no command line and not in your shell's history: paste
+   the token, press Enter, and then press Ctrl-D.
 
    ```sh
-   printf '%s' 'THE-TOKEN' | podman secret create axis_portal_token -
+   podman secret create axis_portal_token -
    ```
 
 4. Create a requester account: open **System**, then **Users**, and set
@@ -154,6 +170,14 @@ system-wide install can see another address.
 
 Every program on this machine can reach `127.0.0.1:7802` and can claim to be
 the proxy. Run the portal this way only on a machine whose users you trust.
+
+If nobody can log in at the portal, read the log of Axis
+(`journalctl --user -u axis.service`). A line "a connection from ... was
+refused before its token was looked at" names the address that the portal
+calls from: put that address in `AXIS_PORTAL_PEERS` in `axis.container`.
+
+If Axis refuses your own login after you set the portal up, see
+[the deployment guide](../../README.md#if-axis-refuses-your-own-login-after-you-set-the-portal-up).
 
 To replace the token: make a second token in Axis, run `podman secret rm
 axis_portal_token`, make the secret again (step 3), run `systemctl --user

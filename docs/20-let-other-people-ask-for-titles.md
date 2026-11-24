@@ -238,10 +238,13 @@ to your media. Allow about 30 minutes for the setup.
 Each deployment example has the commands for its own files. The steps are
 the same in all of them:
 
-1. Switch on the daemon's portal listener, and start Axis again. The example
-   says which lines to add. On the **Request portal** page (**System**, then
-   **Request portal**), **The portal's listener** then says "On: the portal
-   API is answered on port 7801".
+1. Switch on the daemon's portal listener, tell Axis the portal's addresses,
+   and start Axis again. The example says which lines to add. On the
+   **Request portal** page (**System**, then **Request portal**), **The
+   portal's listener** then says "On: the portal API is answered on port
+   7801", and lists the portal's addresses. If the page says "The portal's
+   addresses are not set", Axis answers no portal: set `AXIS_PORTAL_PEERS`
+   as the page says.
 2. On that page, select **Make a token**. Axis shows the token once. Copy
    it.
 3. Give the token to the portal as a secret file. The example says where the
@@ -286,15 +289,39 @@ A requester cannot change a password in the portal. You set it on the
 - **Never type an administrator's password into the portal.** The portal's
   login accepts requesters only. Whoever controls the portal sees every
   password that is typed into it.
-- **Axis refuses a login from the portal's address.** For 24 hours after the
-  portal last called Axis, Axis refuses a login at its own login page from
-  the address that the portal called from. Axis answers as for a wrong
-  password. A session that you already have keeps working. If you are
-  refused although your password is right, the Axis log has a line that
-  begins with `login refused: client=` and says that the address presented a
-  portal token. Log in from another address. If the portal and your browser
-  reach Axis from the same address, stop the portal, restart Axis, and log
-  in.
+- **Nobody logs in to Axis from the portal's addresses.** You tell Axis the
+  portal's addresses in one setting, `AXIS_PORTAL_PEERS`. Axis answers the
+  portal's interface to those addresses only, and refuses a login at its own
+  login page from them, whether the connection comes from such an address or
+  your reverse proxy forwards for one. Axis answers as for a wrong password.
+  A session that you already have keeps working. The rule does not expire,
+  and a restart of Axis does not end it.
+
+### If Axis refuses your own login after you set the portal up
+
+Axis says "The username or password is incorrect" although your password is
+right.
+
+The cause: your browser reaches Axis from an address that is in
+`AXIS_PORTAL_PEERS`. Either the setting holds more than the portal's own
+addresses, or the portal and your browser reach Axis from one address, for
+example through the same gateway.
+
+To check, read the log of Axis. Look for a line that begins with
+`audit: login refused:`. The line names the address and the setting. Axis
+writes one such line, and after that one a minute at most.
+
+To get back in:
+
+1. Open the configuration of Axis: the environment of its container, or
+   `axis.conf`.
+2. Set `AXIS_PORTAL_PEERS` (`portal_peers` in the `[server]` section of the
+   file) to the portal's own addresses only. Each deployment example says
+   which addresses those are.
+3. Restart Axis, and log in.
+
+Or log in from an address that is not in the list. You never need to change
+the database to get back in.
 
 ### The Requester role
 
@@ -389,9 +416,10 @@ before is not held to this limit.
 When the portal reaches the daily limit for requests or the hourly limit for
 failed logins, Axis shows a notice under **Needs attention**, in the group
 **Worth a look**, for 24 hours. The notice says which limit was reached and
-how often, and links to the **Request portal** page. It names no account. A
-limit that is reached again and again can mean that someone guesses
-passwords, or that someone controls the portal.
+how often, and links to the **Request portal** page. It names no account.
+While failed logins keep the hour full, Axis counts the hourly limit as
+reached again in each hour. A limit that is reached again and again can mean
+that someone guesses passwords, or that someone controls the portal.
 
 Axis hides some titles from requesters: a title that Axis stored before this
 version, and a title that came from an import or from a list that you
@@ -438,11 +466,18 @@ ask for the title either.
   the steps say: the image was built, the Traefik example was started with
   the portal, a requester logged in at the portal's host name through
   Traefik over HTTPS and asked for a movie, and the request waited on the
-  **Requests** page. From the portal's container, PostgreSQL and the
-  daemon's main port could not be reached, by name or by address.
+  **Requests** page. From the portal's container, the script tried
+  PostgreSQL by name and by address, and the daemon's main port by name and
+  at its address on Traefik's network: no connection opened. It then posted
+  the administrator's correct password from the portal's container to
+  Traefik, with the host name of Axis: Traefik answered 403, and no session
+  was made.
 - The Quadlet example was started with the portal the same way. It has no
   reverse proxy, so nobody logged in: the script sent one request as a proxy
-  would, and the portal served its login form.
+  would, and the portal served its login form. From the portal's container,
+  the daemon's main port is open in this example. The script posted the
+  administrator's correct password to it: Axis answered as for a wrong
+  password and made no session.
 - Not run: Docker, the Kubernetes manifests of the portal on a cluster, a
   reverse proxy in front of the Quadlet example, a certificate from a real
   certificate authority, a real browser, and a phone.

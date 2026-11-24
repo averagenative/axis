@@ -84,16 +84,40 @@ Password checks that the portal API asks for SHALL use at most one of the daemon
 - **THEN** further ones are answered 503 and no password hash is started for them
 
 ### Requirement: An address that speaks as the portal is not let in as a person
-The daemon SHALL remember, for 24 hours after the last time, each address from which a valid portal token was presented (the address of the connection, an IPv6 address by its /64; at most 256 of them, the one unused longest forgotten for a new one), and SHALL refuse a login at the engine's own interface whose client address, as the main listener resolves it through its trusted proxies, is such an address, with the same answer as a wrong password, without checking the password and without counting a failure against anyone. A token that is not valid SHALL make no address such an address. A session that already exists SHALL not be affected. The refusal SHALL be written to the audit log with its reason.
+The portal's addresses SHALL be one static setting of the daemon, `server.portal_peers` (`AXIS_PORTAL_PEERS`): a list of IP addresses and CIDR ranges, empty by default, in which a host name SHALL be refused at start. A range SHALL be as wide as it is written (an IPv6 address SHALL NOT be widened to its /64), and an IPv4-mapped IPv6 address SHALL count as its IPv4 address. The daemon SHALL refuse a login at the engine's own interface, and the first setup, when the address of the connection is in the list or when the client's address, as the main listener resolves it through its trusted proxies, is in the list, whatever forwarding headers the connection carries. The refusal SHALL be the answer of a wrong password (of a wrong setup token), without checking a password and without counting a failure against anyone. A session that already exists SHALL NOT be affected. Nothing SHALL be learnt from what a portal does and nothing SHALL expire: neither a portal that stops calling nor a restart of the daemon SHALL end the rule. The daemon SHALL write a line to its log that names the address and the setting, at once for the first refusal and then at most once a minute with the number it left out, and the page "Request portal" SHALL show when a login was last refused for this reason. When an address is both in this list and among the trusted proxies, the daemon SHALL warn at start and SHALL show a notice under "Worth a look" that says what to change.
 
 #### Scenario: A login from the portal's address
-- **WHEN** a portal has called the portal API from an address, and a login with an administrator's right password then arrives at the engine's login page from that address
-- **THEN** it is refused as a wrong password would be, and no session is made
+- **WHEN** `server.portal_peers` holds an address, no portal has called yet, and a login with an administrator's right password arrives at the engine's login page on a connection from that address
+- **THEN** it is refused as a wrong password would be, no password is checked, no failure is counted and no session is made
 
 #### Scenario: Another address
-- **WHEN** the same administrator logs in from another address
+- **WHEN** the same administrator logs in from an address that is not in the list, directly and with no proxy between
 - **THEN** the login succeeds
 
-#### Scenario: A day after the portal's last request
-- **WHEN** 24 hours have passed since the last request with a valid portal token from an address
-- **THEN** a login from that address is checked as any other
+#### Scenario: The client a trusted proxy names is the portal's
+- **WHEN** a login arrives from a trusted proxy that is not in the list, with `X-Forwarded-For` naming an address that is
+- **THEN** it is refused as a wrong password would be, and the log names the client's address and the setting
+
+#### Scenario: A forged X-Forwarded-For from the portal's own address
+- **WHEN** an address is both in the list and a trusted proxy, and a login arrives from it with `X-Forwarded-For` naming an address that is in neither
+- **THEN** it is refused as a wrong password would be
+
+#### Scenario: Nothing is learnt and nothing expires
+- **WHEN** two days pass in which no portal calls the daemon, or the daemon restarts
+- **THEN** a login from an address in the list is refused as before, and one from an address outside it is checked as before
+
+#### Scenario: A range is as wide as it is written
+- **WHEN** the list holds `192.0.2.16/28`, `2001:db8:1:2::7` and `::ffff:172.30.2.3`
+- **THEN** `192.0.2.16` and `192.0.2.31` are the portal's and `192.0.2.15` and `192.0.2.32` are not, `2001:db8:1:2::7` is and `2001:db8:1:2::8` is not, and `172.30.2.3` is
+
+#### Scenario: The first setup from the portal's address
+- **WHEN** no account exists and the right setup token is posted from an address in the list
+- **THEN** it is answered as a wrong setup token is, and no account is made
+
+#### Scenario: The portal's addresses and the trusted proxies overlap
+- **WHEN** an address is in `server.portal_peers` and among `server.trusted_proxies`
+- **THEN** the daemon warns at start, and a notice under "Worth a look" names both entries and says what to change
+
+#### Scenario: An administrator who is refused finds out why
+- **WHEN** an administrator's own login is refused because their browser arrives from an address in the list
+- **THEN** the daemon's log has a line that names the address and the setting, and the guide says how to get back in by changing a line of configuration and restarting, without touching the database

@@ -114,51 +114,81 @@ What the file adds:
 | Piece | What it is |
 | --- | --- |
 | `portal` | `axis-portal` from the same image, read-only, with no capability, no volume and no secret but its token |
-| `axis-portal` (network) | The daemon and the portal, and nobody else. Internal: it has no way out |
-| `axis-portal-proxy` (network) | Traefik and the portal, and nobody else. Internal too |
-| On `axis` | The portal API on port 7801, on the daemon's address on `axis-portal` alone; the main port on the daemon's address on `axis-proxy` alone |
+| `axis-portal` (network) | The daemon (`172.30.1.2`) and the portal (`172.30.1.3`), and nobody else. Internal: it has no way out |
+| `axis-portal-proxy` (network) | Traefik (`172.30.2.2`) and the portal (`172.30.2.3`), and nobody else. Internal too |
+| On `axis` | The portal API on port 7801, on the daemon's address on `axis-portal` alone; the main port on the daemon's address on `axis-proxy` alone; `AXIS_PORTAL_PEERS` with the portal's two addresses |
+| On Traefik | The router `axis-from-portal`, which answers the portal's address with 403 whatever it asks for |
 
 The portal is not on `axis-proxy` or on `private`, and both of its networks
-are internal, so its container has no route to anything else: not to
-PostgreSQL, not to the pages of Axis, and not to the internet. It reaches
-the daemon's port 7801 and nothing else of the stack. Keep `internal: true`
-on both networks. Without it, a container can reach the other networks of
-the same host by address even when no name resolves: with Podman, the
-portal's container could then open PostgreSQL's port.
+are internal, so its container has no route to PostgreSQL, to the daemon's
+main port or to the internet. Keep `internal: true` on both networks.
+Without it, a container can reach the other networks of the same host by
+address even when no name resolves: with Podman, the portal's container
+could then open PostgreSQL's port.
+
+The portal's container can open a connection to two things: the daemon's
+port 7801, and Traefik. Traefik routes to Axis by host name, so the file
+closes that path twice:
+
+- Traefik refuses the portal's own address (`172.30.2.3`) with 403, before
+  any other router is tried. The rule is a `ClientIP` matcher of Traefik 3
+  at a high priority, with an `ipAllowList` middleware that admits nobody.
+  Traefik has no middleware that refuses an address, which is why the
+  example is built this way. The portal never needs to ask Traefik for
+  anything.
+- `AXIS_PORTAL_PEERS` on `axis` holds the portal's address on both
+  networks. Axis answers the portal API to `172.30.1.3` alone, and refuses a
+  login to Axis itself from either address, also when Traefik forwards for
+  it. See
+  [The request portal](../../README.md#the-request-portal) in the
+  deployment guide.
+
+Every container on the portal's two networks has a fixed address, and so has
+Axis on `axis-proxy`. A container without one could be given another's
+address when the host starts them in another order, and the other would
+then not start.
 
 The portal's token and the requesters' passwords cross `axis-portal` over
 plain HTTP, which is why that network holds only the daemon and the portal.
 
 What to edit in `compose.portal.yaml` (marked `EDIT`): the host name of the
-portal in the router rule, the image line, and the subnet if `172.30.1.0/24`
-is taken.
+portal in the router rule, and the image line. If `172.30.1.0/24` or
+`172.30.2.0/24` is taken on your host, change the subnet and every address
+in it: the addresses under `networks`, `AXIS_PORTAL_LISTEN_HOST`,
+`AXIS_PORTAL_PEERS`, and the `ClientIP` rule.
 
 1. Bring up `compose.yaml` first and create the first administrator, as in
    [Compose](#compose).
 2. Start Axis with the portal's file, so that the daemon gets its portal
    listener. The portal itself cannot start yet, because its token does not
-   exist:
+   exist. Create the token's file now, empty and readable by you alone:
 
    ```sh
-   : > secrets/axis_portal_token
+   install -m 600 /dev/null secrets/axis_portal_token
    docker compose -f compose.yaml -f compose.portal.yaml up -d axis
    ```
 
 3. In Axis, open **System**, then **Request portal**. The page says "On: the
-   portal API is answered on port 7801". Select **Make a token**, and copy
-   the token that Axis shows once.
-4. Put the token in the secret file. Let the portal's user read the file,
-   and nobody else:
+   portal API is answered on port 7801", and lists the portal's addresses,
+   `172.30.1.3, 172.30.2.3`. Select **Make a token**, and copy the token
+   that Axis shows once.
+4. Put the token in the secret file. The command reads the token from your
+   keyboard, so that it is in no command line and not in your shell's
+   history: paste the token, press Enter, and then press Ctrl-D.
 
    ```sh
-   printf '%s' 'THE-TOKEN' > secrets/axis_portal_token
-   chmod 600 secrets/axis_portal_token
+   ( umask 077; cat > secrets/axis_portal_token )
    ```
 
-   The file must belong to the user that the portal runs as (`PUID`). With
-   rootless Podman, that user is counted inside your user namespace: run
-   `podman unshare chown 1000:1000 secrets/axis_portal_token` for the
-   default `PUID`.
+   The file has its mode before the token is written into it. Then give the
+   file to the user that the portal runs as (`PUID`, 1000 by default), so
+   that the portal can read it. Do not make the file readable by everyone
+   instead.
+
+   ```sh
+   sudo chown 1000:1000 secrets/axis_portal_token           # Docker
+   podman unshare chown 1000:1000 secrets/axis_portal_token # rootless Podman
+   ```
 
 5. Create a requester account: open **System**, then **Users**, and set
    **Role** to **Requester (the request portal only)**.
@@ -184,7 +214,20 @@ curl -s -o /dev/null -w '%{http_code}\n' https://requests.example.com/admin/user
 ```
 
 The first `curl` shows `200` and a `Strict-Transport-Security` header. The
-second shows `404`: no page of Axis is reachable through the portal.
+second shows `404`: no page of Axis is reachable through the portal's host
+name.
+
+`tests/check-examples.sh traefik` checks the path through Traefik: from
+inside the portal's container it asks Traefik (`https://172.30.2.2`) for the
+host name of Axis, and expects 403 for the login page, the setup page, the
+worker API and a probe. If you change the addresses, the router
+`axis-from-portal` must name the portal's address on `axis-portal-proxy`, or
+it applies to nobody.
+
+If nobody can log in at the portal, read the log of Axis. A line "a
+connection from ... was refused before its token was looked at" names the
+address that the portal calls from: that address is missing from
+`AXIS_PORTAL_PEERS`.
 
 If the login page says "This portal answers over HTTPS only", the portal
 does not believe Traefik. Read `docker compose ... logs portal`: one line
@@ -204,9 +247,16 @@ compose.portal.yaml up -d --force-recreate portal`, and then revoke the
 first token. Everyone who is logged in to the portal logs in again.
 
 With Podman, the notes under [Podman](#podman) apply to the portal too.
-Through a published port of rootless Podman, Traefik sees the network's own
-address for every client, so the portal counts every visitor as one address
-for its login throttle.
+Through a published port of rootless Podman, Traefik sees one of its own
+addresses for every client, and which one can change each time Traefik
+starts. When it is Traefik's address on `axis-proxy`, the portal counts
+every visitor as one address for its login throttle. When it is Traefik's
+address on `axis-portal-proxy`, the portal is told that the visitor is its
+own proxy, and answers 503 to everyone who comes through the published
+port: its log says "the trusted proxy ... did not say who the client is".
+Starting Traefik again can change which address it is. Rootless Podman with
+published ports is therefore not a way to run the portal for other people;
+the checks reach the portal from a container on Traefik's network instead.
 
 Not run for this example: Docker, a certificate from a real certificate
 authority, and the Kubernetes `ingressroute.yaml` with the portal.

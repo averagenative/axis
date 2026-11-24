@@ -17,6 +17,25 @@ The daemon SHALL answer the portal API (every path under `/api/v1/portal/`) only
 - **WHEN** the portal listener is on and a portal operation is sent to the main listener with a valid portal token
 - **THEN** it is answered 404 and nothing is done
 
+### Requirement: The portal listener answers the portal's addresses alone
+The portal listener SHALL answer a connection only when its own address (the address of the socket's peer; that listener SHALL read no forwarding header) is in `server.portal_peers`. A connection from any other address SHALL be refused with 403 before its token is looked at: a valid token, a wrong one and none SHALL get the same answer, nothing SHALL be counted against the address, and the token SHALL NOT be marked as used. While a portal listener is configured and `server.portal_peers` is empty, the listener SHALL answer 503 to everyone, the daemon SHALL say so in its log once at start, and the page "Request portal" SHALL say in plain words that the portal's addresses are not set and how to set them.
+
+#### Scenario: Only the portal's addresses
+- **WHEN** a request with a valid portal token arrives on the portal listener from an address in `server.portal_peers`
+- **THEN** it is handled as before
+
+#### Scenario: A valid token from another address
+- **WHEN** requests arrive on the portal listener from an address that is not in the list, with a valid token, with a wrong one more often than an address may send one, and with none
+- **THEN** each gets the same 403, none is made to wait, the token's last use and address do not change, and no password is checked for a login among them
+
+#### Scenario: No forwarding header is read
+- **WHEN** a request from an address outside the list carries `X-Forwarded-For` with an address inside it, and one from an address inside the list carries `X-Forwarded-For` with another
+- **THEN** the first is refused, and the second is handled with the token recorded as used from the connection's own address
+
+#### Scenario: The portal's addresses are not set
+- **WHEN** the daemon has a portal listener and `server.portal_peers` is empty
+- **THEN** every request to that listener is answered 503, the daemon's log says at start which setting to give, and the page "Request portal" says the same
+
 ### Requirement: Portal tokens
 A portal SHALL authenticate with a token that an administrator creates on the page "Request portal", which is shown once and stored only as a hash. A portal token SHALL be valid only for the portal API, SHALL be revocable with immediate effect, and SHALL NOT appear in any page, log line or error. At most four portal tokens SHALL be active at once, so that a token can be replaced without an interruption. A token SHALL be accepted only in the `Authorization` header: a request to the portal API that has a query string SHALL be refused, whatever it carries.
 
