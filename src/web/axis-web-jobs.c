@@ -822,6 +822,7 @@ typedef struct
 	GPtrArray *active;	/* AxisJobRow: running ones first */
 	GPtrArray *failed;	/* AxisJobRow: newest first */
 	gboolean   ok;
+	gint64     taken_us;	/* when they were read, not when they are drawn */
 } DashFigures;
 
 static void
@@ -842,6 +843,8 @@ dash_collect(gpointer user_data)
 	AxisJobFilter running;
 	AxisJobFilter failed;
 	g_autoptr(GError) error = NULL;
+
+	figures->taken_us = g_get_real_time();
 
 	/* Work only: what Axis repeats by itself is on the Jobs page. */
 	memset(&running, 0, sizeof(running));
@@ -992,7 +995,7 @@ dash_render(
 			dash_add(piece, line);
 		}
 	}
-	dash_add(piece, axis_web_dashboard_as_of("As of", g_get_real_time()));
+	dash_add(piece, axis_web_dashboard_as_of("As of", figures->taken_us));
 	axis_web_dashboard_add(board, AXIS_WEB_DASHBOARD_NOW, 0, "/jobs", HTMX_NODE(piece));
 }
 
