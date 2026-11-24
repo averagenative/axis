@@ -271,14 +271,18 @@ axis_web_conversions_progress_text(const AxisConversionProgress *progress)
 	if (progress->stage == NULL)
 		return g_strdup("Not in flight");
 	text = g_string_new(axis_conversion_progress_stage_label(progress->stage));
-	if (progress->fraction < 0.0) {
+	if (!(progress->fraction >= 0.0)) {
 		if (g_strcmp0(progress->stage, "encoding") == 0 || g_strcmp0(progress->stage, "checking") == 0)
 			g_string_append(text, ": no progress reported yet");
 		return g_string_free(text, FALSE);
 	}
-	g_string_append_printf(text, ": %d%%", (gint)(progress->fraction * 100.0 + 0.5));
-	if (progress->speed > 0.0)
+	g_string_append_printf(text, ": %d%%", (gint)(MIN(progress->fraction, 1.0) * 100.0 + 0.5));
+	/* One decimal from once real time up, two below it; a speed that would
+	 * print as nothing is not said. */
+	if (progress->speed >= 0.995)
 		g_string_append_printf(text, ", %.1f times real time", progress->speed);
+	else if (progress->speed >= 0.005)
+		g_string_append_printf(text, ", %.2f times real time", progress->speed);
 	if (progress->left_s >= 0 && progress->fraction < 1.0) {
 		g_autofree gchar *left = left_text(progress->left_s);
 
@@ -298,10 +302,10 @@ axis_web_conversions_progress_node(const AxisConversionProgress *progress)
 	htmx_element_add_class(HTMX_ELEMENT(box), "conversion-progress");
 	/* No value: the bar is indeterminate (the element's own way of saying
 	 * that work goes on and how far is not known). */
-	if (progress->fraction < 0.0)
+	if (!(progress->fraction >= 0.0))
 		bar = htmx_progress_new();
 	else
-		bar = htmx_progress_new_with_value((gdouble)(gint)(progress->fraction * 100.0 + 0.5), 100.0);
+		bar = htmx_progress_new_with_value((gdouble)(gint)(MIN(progress->fraction, 1.0) * 100.0 + 0.5), 100.0);
 	/* The same words beside the bar and as its name, for a reader that
 	 * does not show it. */
 	htmx_element_set_attribute(HTMX_ELEMENT(bar), "aria-label", text);
@@ -320,7 +324,10 @@ axis_web_conversions_bar(
 ){
 	HtmxDiv *box = htmx_div_new();
 	HtmxSpan *words = htmx_span_new();
-	HtmxProgress *bar = htmx_progress_new_with_value(CLAMP(value, 0.0, MAX(max, 0.0)), MAX(max, 0.0));
+	/* A bar's max is above 0 (what is not a number, or not above 0, is 1),
+	 * and its value within it (what is not a number is 0). */
+	gdouble top = max > 0.0 ? max : 1.0;
+	HtmxProgress *bar = htmx_progress_new_with_value(value >= 0.0 ? MIN(value, top) : 0.0, top);
 
 	htmx_element_add_class(HTMX_ELEMENT(box), "conversion-progress");
 	htmx_element_set_attribute(HTMX_ELEMENT(bar), "aria-label", text);
@@ -396,6 +403,18 @@ progress_block(
 	else if (g_strcmp0(progress.stage, "checking") == 0 && g_strcmp0(r->verify_state, "running") == 0 &&
 	    r->verify_message != NULL && r->verify_message[0] != '\0')
 		ADD(block, axis_web_storage_text("help", r->verify_message));
+	return HTMX_NODE(block);
+}
+
+/* The block in place of one that followed a conversion that is gone, or
+ * whose progress cannot be read: @text, and nothing asked for again. */
+static HtmxNode *
+progress_stopped(const gchar *text)
+{
+	HtmxDiv *block = htmx_div_new();
+
+	htmx_element_set_id(HTMX_ELEMENT(block), "conversion-progress");
+	ADD(block, axis_web_storage_text("notice", text));
 	return HTMX_NODE(block);
 }
 
@@ -932,6 +951,17 @@ one_done(
 	HtmxNode *facts;
 	AxisWebNotice placed;
 
+	/* The block that follows a conversion is answered with a block that
+	 * asks for nothing more when the conversion is gone or cannot be read:
+	 * htmx swaps no error, so an error would be asked for again and again. */
+	if (work->progress_only && work->error != NULL) {
+		if (!g_error_matches(work->error, AXIS_CONVERSION_ERROR, AXIS_CONVERSION_ERROR_NOT_FOUND))
+			g_message("conversions: the progress of conversion %" G_GINT64_FORMAT " could not be read: %s", work->id,
+				work->error->message);
+		return fragment_response(progress_stopped(g_error_matches(work->error, AXIS_CONVERSION_ERROR,
+			AXIS_CONVERSION_ERROR_NOT_FOUND) ? "There is no such conversion any more." :
+			"Its progress cannot be read now. Load the page again to follow it."));
+	}
 	if (g_error_matches(work->error, AXIS_CONVERSION_ERROR, AXIS_CONVERSION_ERROR_NOT_FOUND))
 		return axis_web_error_respond(request, 404, "Not found", "There is no such conversion.");
 	if (work->error != NULL)
@@ -1196,7 +1226,7 @@ handle_progress(
 	gint64 id = axis_web_storage_param_id(params);
 
 	if (id <= 0)
-		return axis_web_error_respond(request, 404, "Not found", "There is no such conversion.");
+		return fragment_response(progress_stopped("There is no such conversion any more."));
 	work = g_new0(OneWork, 1);
 	work->id = id;
 	work->progress_only = TRUE;

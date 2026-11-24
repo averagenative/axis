@@ -972,7 +972,7 @@ typedef struct
 	gdouble  verify_fraction;	/* the check job's progress, -1 when it has reported none */
 	gint64   job_running_s;	/* how long the encode job has been running, -1 when it is not */
 	gint64   verify_running_s;	/* how long the check job has been running, -1 when it is not */
-	gint64   duration_ms;	/* the source's duration as probed, 0 when not known */
+	gint64   duration_ms;	/* the source's duration as probed, of one in flight only; 0 otherwise or unknown */
 } AxisConversionRecord;
 
 /**
@@ -981,10 +981,11 @@ typedef struct
  *   (a replacement being put in place), "keeping" (a trial's file being put
  *   aside), or %NULL for a conversion that is not in flight
  * @fraction: 0 to 1, or -1 when nothing is known of how far it is (the bar is
- *   then indeterminate)
+ *   then indeterminate); a figure reported past 1 is 1
  * @speed: how many times real time the source is read (2.5: an hour of the
- *   source in 24 minutes), or -1 when it cannot be worked out
- * @left_s: an estimate of the seconds left of this stage, or -1
+ *   source in 24 minutes), above 0, or -1 when it cannot be worked out
+ * @left_s: an estimate of the seconds left of this stage (a year at most), or
+ *   -1
  *
  * Where a conversion in flight is, worked out from what the worker reports
  * today (a fraction and a message with the encode job, and with the check

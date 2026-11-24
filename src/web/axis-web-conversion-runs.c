@@ -935,19 +935,23 @@ saved_bar(const AxisConversionRunInfo *info)
 	gboolean capped = info->cap_files > 0 || info->cap_bytes > 0;
 	gint64 estimate = capped ? info->cap_bytes_in - info->cap_mid_in : info->bytes - info->mid;
 	gint64 saved = MAX(info->done_before - info->done_after, 0);
+	gint64 part = MIN(saved, estimate);
 	g_autofree gchar *saved_text = NULL;
 	g_autofree gchar *estimate_text = NULL;
 	g_autofree gchar *text = NULL;
+	gint percent;
 
 	if (info->done <= 0 || estimate <= 0)
 		return NULL;
+	/* In whole percents, without a product that a gint64 cannot hold. */
+	percent = (gint)(part > G_MAXINT64 / 100 ? part / (estimate / 100) : part * 100 / estimate);
 	saved_text = size_text(saved);
 	estimate_text = size_text(estimate);
 	text = g_strdup_printf("%s saved of about %s estimated%s%s", saved_text, estimate_text,
 		capped ? " within its caps" : "", g_strcmp0(info->outcome, "replace") == 0 || info->done_trials == 0 ?
 		"" : " (as trials, nothing replaced)");
 	/* As a percent: the sizes are too long for a bar's value to carry. */
-	return axis_web_conversions_bar((gdouble)(gint)(MIN(saved, estimate) * 100 / estimate), 100.0, text);
+	return axis_web_conversions_bar((gdouble)percent, 100.0, text);
 }
 
 /* Where the run is and why: the block the page polls. */

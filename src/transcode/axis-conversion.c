@@ -6,6 +6,7 @@
 
 #include "transcode/axis-conversion-private.h"
 
+#include <math.h>
 #include <string.h>
 
 #include "db/axis-db-error.h"
@@ -1056,7 +1057,8 @@ axis_conversions_request_tidy(
 	"  THEN greatest(extract(epoch FROM now() - j.started_at), 0)::bigint ELSE -1 END," \
 	" CASE WHEN vj.state = 'running' AND vj.started_at IS NOT NULL" \
 	"  THEN greatest(extract(epoch FROM now() - vj.started_at), 0)::bigint ELSE -1 END," \
-	" coalesce((SELECT mi.duration_ms FROM media_info mi WHERE mi.file_id = c.file_id), 0)"
+	" CASE WHEN c.state IN ('queued', 'encoding', 'verifying', 'placing') THEN coalesce((SELECT mi.duration_ms" \
+	"  FROM media_info mi WHERE mi.file_id = c.file_id), 0) ELSE 0 END"
 
 #define RECORD_FROM \
 	" FROM conversion c JOIN conversion_profile_revision pr ON pr.id = c.revision_id" \
@@ -1206,6 +1208,9 @@ record_from(
 
 /* ── Where a conversion in flight is ────────────────────────────── */
 
+/* The most time left that is worked out: a year, in seconds. */
+#define PROGRESS_MAX_LEFT_S G_GINT64_CONSTANT(31622400)
+
 const gchar *
 axis_conversion_progress_stage_label(const gchar *stage)
 {
@@ -1270,20 +1275,31 @@ axis_conversion_progress(
 	} else {
 		return;
 	}
-	/* Not a number, or nothing reported yet (below 0): nothing is known. */
-	if (!(fraction >= 0.0) || fraction > 1.0)
+	/* Not a number, or nothing reported yet (below 0): nothing is known.  A
+	 * figure past the end (a worker's rounding, or anything larger) is the
+	 * end. */
+	if (!(fraction >= 0.0))
 		return;
+	fraction = MIN(fraction, 1.0);
 	progress->fraction = fraction;
 	if (running < 10 || fraction < 0.01)
 		return;
-	if (fraction < 1.0)
-		progress->left_s = (gint64)((gdouble)running * (1.0 - fraction) / fraction + 0.5);
-	else
+	if (fraction < 1.0) {
+		gdouble left = (gdouble)running * (1.0 - fraction) / fraction;
+
+		/* At most a year: a figure past that says nothing more, and a
+		 * double that large has no gint64. */
+		progress->left_s = left < (gdouble)PROGRESS_MAX_LEFT_S ? (gint64)(left + 0.5) : PROGRESS_MAX_LEFT_S;
+	} else {
 		progress->left_s = 0;
+	}
 	/* The fraction of an encode is of the source read: with its duration,
 	 * how many times real time that is. */
-	if (encoding && duration_ms > 0)
-		progress->speed = fraction * ((gdouble)duration_ms / 1000.0) / (gdouble)running;
+	if (encoding && duration_ms > 0) {
+		gdouble speed = fraction * ((gdouble)duration_ms / 1000.0) / (gdouble)running;
+
+		progress->speed = isfinite(speed) && speed > 0.0 ? speed : -1.0;
+	}
 }
 
 static gboolean

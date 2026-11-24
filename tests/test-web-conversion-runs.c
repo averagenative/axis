@@ -21,6 +21,7 @@
 #include <glib/gstdio.h>
 #include <htmx-glib.h>
 #include <libsoup/soup.h>
+#include <math.h>
 #include <string.h>
 
 #include "axis-test-analysis.h"
@@ -1458,6 +1459,67 @@ test_kept_single(Fixture *fx, gconstpointer data)
 /* ── Progress bars ──────────────────────────────────────────────── */
 
 /*
+ * The figures of a conversion in flight and their words, at their edges: a
+ * fraction reported past the end is the end; one that is not a number is
+ * nothing known; a speed below once real time has two decimals, and one
+ * too small to say is not said; the time left of an enormous figure is a
+ * year at most.  A bar of a value that is not a number is at 0, and of a
+ * max that is not above 0 is of 1.
+ */
+static void
+test_progress_figures(void)
+{
+	AxisConversionProgress p;
+	HtmxNode *bar;
+	gchar *text;
+
+	axis_conversion_progress("encoding", "trial", "running", 1.2, 120, NULL, -1.0, -1, 600000, &p);
+	g_assert_cmpstr(p.stage, ==, "encoding");
+	g_assert_cmpfloat(p.fraction, ==, 1.0);
+	g_assert_cmpint(p.left_s, ==, 0);
+	g_assert_cmpfloat_with_epsilon(p.speed, 5.0, 1e-9);
+	text = axis_web_conversions_progress_text(&p);
+	g_assert_cmpstr(text, ==, "Encoding: 100%, 5.0 times real time");
+	g_free(text);
+
+	axis_conversion_progress("encoding", "trial", "running", NAN, 120, NULL, -1.0, -1, 600000, &p);
+	g_assert_cmpfloat(p.fraction, ==, -1.0);
+	g_assert_cmpfloat(p.speed, ==, -1.0);
+	text = axis_web_conversions_progress_text(&p);
+	g_assert_cmpstr(text, ==, "Encoding: no progress reported yet");
+	g_free(text);
+
+	/* 4 percent of a ten-minute source in ten minutes. */
+	axis_conversion_progress("encoding", "trial", "running", 0.04, 600, NULL, -1.0, -1, 600000, &p);
+	text = axis_web_conversions_progress_text(&p);
+	g_assert_cmpstr(text, ==, "Encoding: 4%, 0.04 times real time, about 4 hours left");
+	g_free(text);
+
+	/* 1 percent of a one-second source in an hour: too slow to say. */
+	axis_conversion_progress("encoding", "trial", "running", 0.01, 3600, NULL, -1.0, -1, 1000, &p);
+	g_assert_cmpfloat(p.speed, >, 0.0);
+	text = axis_web_conversions_progress_text(&p);
+	g_assert_cmpstr(text, ==, "Encoding: 1%, about 99 hours left");
+	g_free(text);
+
+	/* Checks running for an age: a year left at most, and no speed. */
+	axis_conversion_progress("verifying", "replace", NULL, -1.0, -1, "running", 0.01, G_MAXINT64 / 2, 600000, &p);
+	g_assert_cmpstr(p.stage, ==, "checking");
+	g_assert_cmpint(p.left_s, ==, G_GINT64_CONSTANT(31622400));
+	g_assert_cmpfloat(p.speed, ==, -1.0);
+	text = axis_web_conversions_progress_text(&p);
+	g_assert_cmpstr(text, ==, "Checking: 1%, about 8784 hours left");
+	g_free(text);
+
+	bar = axis_web_conversions_bar(NAN, 0.0, "Nothing known");
+	text = htmx_element_render(HTMX_ELEMENT(bar));
+	assert_contains(text, " max=\"1\"");
+	assert_contains(text, " value=\"0\"");
+	g_free(text);
+	g_object_unref(bar);
+}
+
+/*
  * The <progress> element of @body named @label (its accessible name) has
  * @max and @value as its attributes (in whatever order they are written), or
  * neither when @max is NULL: a bar without a value is indeterminate.  The
@@ -1574,8 +1636,18 @@ test_progress(Fixture *fx, gconstpointer data)
 	reply = get_as(fx, fx->viewer, progress);
 	g_assert_cmpuint(reply.status, ==, 403);
 	axis_test_reply_clear(&reply);
+	/* A conversion that is not there: a block that asks for nothing more
+	 * (htmx swaps no error, so an error would be asked for again). */
 	reply = get_as(fx, fx->admin, "/conversions/999999/progress");
-	g_assert_cmpuint(reply.status, ==, 404);
+	g_assert_cmpuint(reply.status, ==, 200);
+	assert_contains(reply.body, "id=\"conversion-progress\"");
+	assert_contains(reply.body, "There is no such conversion any more.");
+	assert_lacks(reply.body, "hx-get");
+	assert_lacks(reply.body, "<html");
+	axis_test_reply_clear(&reply);
+	reply = get_as(fx, fx->admin, "/conversions/0/progress");
+	g_assert_cmpuint(reply.status, ==, 200);
+	assert_lacks(reply.body, "hx-get");
 	axis_test_reply_clear(&reply);
 
 	/* Waiting for a worker: nothing is known, the bar has no value. */
@@ -1737,5 +1809,6 @@ main(int argc, char **argv)
 	AXIS_TEST_ADD_DB_CASE("/web/conversion-runs/back-to-place", Fixture, NULL, test_back_to_place);
 	AXIS_TEST_ADD_DB_CASE("/web/conversion-runs/series", Fixture, NULL, test_series_page);
 	AXIS_TEST_ADD_DB_CASE("/web/conversion-runs/scale", Fixture, NULL, test_scale);
+	g_test_add_func("/web/conversion-runs/progress-figures", test_progress_figures);
 	return g_test_run();
 }
