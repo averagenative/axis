@@ -38,12 +38,25 @@
 #            straight to Axis from an unlisted container are ignored; the
 #            read-only disk added through Traefik, a root, a scan.  Traefik
 #            is told its certificate authority is a local dead end, so nothing
-#            reaches Let's Encrypt.
+#            reaches Let's Encrypt.  Then the request portal, added with
+#            compose.portal.yaml as the README says: before it, no portal
+#            runs and the daemon has no portal listener; with it, the
+#            administrator makes a token and a requester, the portal starts
+#            hardened, a requester logs in at the portal's own host name
+#            through Traefik over https and asks for a movie, which waits on
+#            the daemon's Requests page; the engine's paths are 404 at the
+#            portal's host name; and from the portal's container neither
+#            PostgreSQL nor the daemon's main listener can be reached.
 #   quadlet  deploy/examples/quadlet installed for the current user under
 #            ~/.config/containers/systemd/ (every file prefixed axis-xtest-),
 #            started with systemctl --user, ready, the read-only disk added, a
 #            root, a scan, stopped, removed.  Without a usable user systemd,
-#            Quadlet's generator dry run only.
+#            Quadlet's generator dry run only.  Before the stop, the request
+#            portal's two files as the README says: the daemon on the
+#            portal's network with its portal listener, a token, a requester,
+#            the portal started with nothing writable; no login without a
+#            proxy, the login form when the check plays the proxy; the
+#            database not reachable from the portal.
 #
 #   worker   deploy/examples/remote-worker, as far as it can be checked on one
 #            machine without a GPU: `run` is valid shell; `compose config`
@@ -74,7 +87,10 @@ cd "$(dirname "$0")/.." || exit 1
 repo=$PWD
 
 image=${AXIS_XTEST_IMAGE:-localhost/axis:latest}
-prefix=axis-xtest
+# AXIS_XTEST_PREFIX: another prefix for what the Compose parts make (compose,
+# full, traefik), so that one of them can be run by hand beside nothing of
+# the usual name.  The quadlet part's names are axis-xtest-* whatever it says.
+prefix=${AXIS_XTEST_PREFIX:-axis-xtest}
 pull_seconds=${AXIS_XTEST_PULL_SECONDS:-420}
 client_image=docker.io/library/python:3.12-slim
 traefik_image=docker.io/library/traefik:v3.3
@@ -131,7 +147,7 @@ check() {
 
 is_mine() {
 	case $1 in
-	axis-xtest-* | systemd-axis-xtest-* | pod_axis-xtest-*) return 0 ;;
+	"$prefix"-* | systemd-"$prefix"-* | pod_"$prefix"-*) return 0 ;;
 	esac
 	return 1
 }
@@ -168,6 +184,27 @@ remove_mine() {
 		done
 	done
 	[ "$found" = 1 ] || say remove "nothing named $prefix-* is left over"
+	remove_stale_names
+}
+
+# remove_stale_names: Podman's name server (aardvark-dns) keeps a file for
+# each network, by the network's name, with the names and addresses of its
+# containers.  A container that went without being taken out of it (a run
+# that was killed) stays in the file, the file outlives its network, and the
+# next network of that name answers for the dead container too: "postgres"
+# then has two addresses, one of which nothing answers at, and a connection
+# that tries it first waits three seconds.  The files of networks with this
+# script's prefix that no longer exist are removed, by name.
+remove_stale_names() {
+	local dir=${XDG_RUNTIME_DIR:-}/containers/networks/aardvark-dns f name
+	[ -n "${XDG_RUNTIME_DIR:-}" ] && [ -d "$dir" ] || return 0
+	for f in "$dir"/*; do
+		[ -f "$f" ] || continue
+		name=${f##*/}
+		is_mine "$name" || continue
+		podman network exists "$name" 2>/dev/null && continue
+		rm -f "$f" && say remove "a name server file left by an earlier run: $name"
+	done
 }
 
 # nothing_left: after the removal, the same listing must be empty.
@@ -582,6 +619,7 @@ part_compose() {
 	fi
 	line=$(podman logs "$axis" 2>&1 | grep 'audit: login: user=admin' | tail -n 1)
 	[ -n "$line" ] && say info "$line"
+	no_portal compose "$(container_of "$proj" portal)" "$axis"
 
 	if podman exec "$axis" sh -c 'touch /media/disk1/x 2>&1' | grep -qi 'read-only'; then
 		pass "compose: the media mount is read-only inside the container"
@@ -977,12 +1015,279 @@ part_traefik() {
 	*) fail "traefik: forged X-Forwarded-For sent straight to Axis is ignored" ;;
 	esac
 
-	if compose_in "$dir" "$proj" down -v > "$work/traefik-down.log" 2>&1; then
+	# As published, the example has no portal (compose.portal.yaml is not
+	# named): no portal runs, and the daemon has no portal listener.
+	no_portal traefik "$(container_of "$proj" portal)" "$axis"
+
+	# The request portal, added as the README's part "The request portal"
+	# says, with the administrator's session from above.
+	traefik_portal "$dir" "$proj" "$net" "$network" "$https_port" "$work/traefik-login.jar" "$base" "${resolve[@]}"
+
+	if compose_in "$dir" "$proj" -f compose.yaml -f compose.portal.yaml down -v > "$work/traefik-down.log" 2>&1; then
 		pass "traefik: down -v"
 	else
 		fail "traefik: down -v"
 	fi
 	cd "$repo" || true
+}
+
+# no_portal PART PORTAL-CONTAINER AXIS-CONTAINER: the example as published
+# runs no portal, and its daemon has no portal listener.
+no_portal() {
+	if [ -z "$2" ] && ! podman ps -a --format '{{.Names}}' | grep -q -e "$prefix.*portal" -e 'axis-xtest.*portal'; then
+		pass "$1: as published, no portal runs"
+	else
+		fail "$1: as published, no portal runs"
+	fi
+	if podman logs "$3" 2>&1 | grep -q 'portal API: listening'; then
+		fail "$1: as published, the daemon has no portal listener"
+	else
+		pass "$1: as published, the daemon has no portal listener"
+	fi
+}
+
+# reach_from CONTAINER HOST PORT: what a TCP connection to HOST:PORT from
+# inside CONTAINER comes to (open, refused, unresolved or timeout), asked by
+# the image's own python3 with the client script on its standard input: the
+# portal's container has no mount to put a script in.
+reach_from() {
+	podman exec -i "$1" python3 - reach "$2" "$3" < "$repo/tests/check-portal-client.py" 2>/dev/null |
+		sed -n 's/^reach=//p'
+}
+
+# portal_hardened PART CONTAINER: the portal's container as the examples run
+# it: not root, no capability, no new privileges, a read-only root, no
+# volume, and nothing of the daemon's in its environment.
+portal_hardened() {
+	local part=$1 c=$2 uid mounts env
+	uid=$(podman exec "$c" cat /proc/1/status | sed -n 's/^Uid:[[:space:]]*\([0-9]*\).*/\1/p')
+	[ -n "$uid" ] && [ "$uid" != 0 ] && pass "$part: the portal runs as uid $uid, not root" ||
+		fail "$part: the portal runs as uid ${uid:-?}, not root"
+	[ "$(podman exec "$c" cat /proc/1/status | sed -n 's/^CapEff:[[:space:]]*//p')" = 0000000000000000 ] &&
+		pass "$part: the portal has no capabilities" || fail "$part: the portal has no capabilities"
+	[ "$(podman exec "$c" cat /proc/1/status | sed -n 's/^NoNewPrivs:[[:space:]]*//p')" = 1 ] &&
+		pass "$part: the portal cannot gain privileges" || fail "$part: the portal cannot gain privileges"
+	[ "$(podman inspect --format '{{.HostConfig.ReadonlyRootfs}}' "$c")" = true ] &&
+		pass "$part: the portal's root filesystem is read-only" || fail "$part: the portal's root filesystem is read-only"
+	check "$part: a write to the portal's root filesystem fails" sh -c "! podman exec '$c' touch /x 2>/dev/null"
+	# Its mounts: the token, and nothing else that is a volume or a bind
+	# mount of the example's (the runtime's own files for names and hosts,
+	# and Podman's tmpfs of a read-only container, are not the example's).
+	mounts=$(podman inspect --format '{{range .Mounts}}{{.Type}}:{{.Destination}} {{end}}' "$c" |
+		tr ' ' '\n' | grep -v -e '^$' -e 'axis_portal_token$' -e 'portal-token$' | tr '\n' ' ')
+	[ -z "$mounts" ] && pass "$part: the portal has no volume and no mount but its token" ||
+		fail "$part: the portal has no volume and no mount but its token (found: $mounts)"
+	env=$(podman inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$c" |
+		grep -i -E 'DATABASE|POSTGRES|PASSWORD|AXIS_ADMIN|AXIS_WORKER|AXIS_METRICS' | cut -d= -f1 | tr '\n' ' ')
+	[ -z "$env" ] && pass "$part: the portal's environment has no database address and no other secret" ||
+		fail "$part: the portal's environment has no database address and no other secret (found: $env)"
+}
+
+# make_portal_token BASE ORIGIN JAR: the administrator makes a portal token
+# on the page "Request portal"; prints it (the page shows it once).
+make_portal_token() {
+	local out=$work/portal-token-page code
+	code=$(web_post "$1" "$2" "$3" /admin/portal/tokens "$out")
+	[ "$code" = 200 ] || return 1
+	grep -o '<pre class="worker-token"><code>[^<]*' "$out.body" | head -n 1 | sed 's/.*<code>//'
+}
+
+# traefik_portal DIR PROJECT NET NETWORK HTTPS-PORT JAR BASE RESOLVE...
+# deploy/examples/traefik with compose.portal.yaml: the daemon gets its
+# portal listener, the administrator makes a token and a requester, the
+# portal starts hardened behind Traefik; a requester logs in over HTTPS
+# through Traefik and asks for a movie, which then waits on the daemon's
+# Requests page; the engine's pages are not behind the portal's host name;
+# and from the portal's container neither the database nor the daemon's main
+# listener can be reached.
+traefik_portal() {
+	local dir=$1 proj=$2 net=$3 network=$4 https_port=$5 jar=$6 base=$7
+	shift 7
+	local -a resolve=("$@")
+	local pnet=10.89.$((200 + RANDOM % 50)) portal axis token requester title out code line pg_ip
+	local pbase=https://requests.example.com:$https_port
+	local -a presolve=(--resolve "requests.example.com:$https_port:127.0.0.1")
+	local -a both=(-f compose.yaml -f compose.portal.yaml)
+
+	say info "traefik: the request portal (compose.portal.yaml)"
+	cd "$dir" || return
+	# For this run only: the test's subnets and network names.
+	edit compose.portal.yaml \
+		-e "s|172\.30\.0\.|$net.|g" \
+		-e "s|172\.30\.1\.|$pnet.|g" \
+		-e "s|name: axis-portal-proxy|name: $prefix-portal-proxy|" \
+		-e "s|name: axis-portal\$|name: $prefix-portal|" \
+		-e "s|traefik.docker.network=axis-portal-proxy|traefik.docker.network=$prefix-portal-proxy|"
+	selinux_edit compose.portal.yaml
+
+	# README, step 2: the daemon with its portal listener; the portal waits
+	# for its token.
+	: > secrets/axis_portal_token
+	chmod 644 secrets/axis_portal_token
+	if compose_in "$dir" "$proj" "${both[@]}" up -d axis > "$work/traefik-portal-axis.log" 2>&1; then
+		pass "traefik: up -d axis with compose.portal.yaml"
+	else
+		fail "traefik: up -d axis with compose.portal.yaml (see below)"
+		tail -n 20 "$work/traefik-portal-axis.log" >&2
+		return
+	fi
+	axis=$(container_of "$proj" axis)
+	if wait_for 240 body_is "$base/readyz" '{"status":"ready"}' "${resolve[@]}"; then
+		pass "traefik: Axis is ready again, through Traefik, with its main listener on its address on Traefik's network"
+	else
+		fail "traefik: Axis is ready again, through Traefik"
+		podman logs --tail 20 "$axis" >&2 2>&1
+		return
+	fi
+	podman logs "$axis" 2>&1 | grep -q "portal API: listening on $pnet.2:7801" &&
+		pass "traefik: the daemon answers the portal API on $pnet.2:7801, its address on the portal's network" ||
+		fail "traefik: the daemon answers the portal API on $pnet.2:7801"
+	wait_for 120 health_is "$axis" healthy && pass "traefik: axis is healthy (its health check asks the main listener's own address)" ||
+		fail "traefik: axis is healthy with the main listener on one address"
+
+	# Steps 3 to 5: the token, its file, a requester.  The administrator's
+	# session is the one from before: sessions are in the database.
+	curl_extra=("${resolve[@]}")
+	token=$(make_portal_token "$base" "$base" "$jar")
+	if [ -n "$token" ]; then
+		pass "traefik: the administrator makes a portal token on the page Request portal"
+	else
+		fail "traefik: the administrator makes a portal token on the page Request portal"
+		curl_extra=()
+		return
+	fi
+	printf '%s' "$token" > secrets/axis_portal_token
+	chmod 600 secrets/axis_portal_token
+	podman unshare chown "$axis_uid:$axis_uid" secrets/axis_portal_token
+	requester=$(random_hex 12)
+	code=$(web_post "$base" "$base" "$jar" /admin/users "$work/traefik-requester" \
+		"username=robin" "password=$requester" "role=requester")
+	[ "$code" = 303 ] && pass "traefik: the administrator creates a requester account" ||
+		fail "traefik: the administrator creates a requester account (status $code)"
+	curl_extra=()
+	# A title to ask for: this stack has no details provider, so the record a
+	# search would store is written as the daemon stores one.
+	title=$(compose_in "$dir" "$proj" "${both[@]}" exec -T postgres psql --username axis --dbname axis --tuples-only \
+		--no-align --quiet --command "INSERT INTO meta_title (kind, title, year, overview, provider, provider_id, adult, detail_fetched_at) VALUES ('film', 'Glass Orchard', 2031, 'A made-up film.', 'tmdb', '990001', false, now()) RETURNING id" 2>/dev/null |
+		head -n 1 | tr -d '[:space:]')
+	case $title in
+	[0-9]*) pass "traefik: a title to ask for is in the daemon's store (number $title)" ;;
+	*) fail "traefik: a title to ask for is in the daemon's store"; return ;;
+	esac
+
+	# Step 6: everything.
+	if compose_in "$dir" "$proj" "${both[@]}" up -d > "$work/traefik-portal-up.log" 2>&1; then
+		pass "traefik: up -d with compose.portal.yaml"
+	else
+		fail "traefik: up -d with compose.portal.yaml (see below)"
+		tail -n 20 "$work/traefik-portal-up.log" >&2
+		return
+	fi
+	portal=$(container_of "$proj" portal)
+	axis=$(container_of "$proj" axis)
+	if [ -n "$portal" ] && wait_for 120 health_is "$portal" healthy; then
+		pass "traefik: the portal is healthy (axis-portal --healthcheck)"
+	else
+		fail "traefik: the portal is healthy"
+		podman logs --tail 20 "$portal" >&2 2>&1
+		return
+	fi
+	podman logs "$portal" 2>&1 | grep -q 'has not been reviewed for exposure to the internet' &&
+		pass "traefik: the portal says at start that it is not reviewed for the internet" ||
+		fail "traefik: the portal says at start that it is not reviewed for the internet"
+	portal_hardened traefik "$portal"
+
+	# Step 7: the login page at the portal's own host name, over HTTPS.
+	if wait_for 120 sh -c "[ \"\$(curl -sk --max-time 5 -o /dev/null -w '%{http_code}' ${presolve[*]} '$pbase/login')\" = 200 ]"; then
+		pass "traefik: the portal's login page answers at its own host name through Traefik, over https"
+	else
+		fail "traefik: the portal's login page answers at its own host name through Traefik, over https"
+		podman logs --tail 10 "$portal" >&2 2>&1
+	fi
+	out=$(curl -sk --max-time 10 -D - "${presolve[@]}" "$pbase/login")
+	echo "$out" | grep -qi '^strict-transport-security: max-age=31536000' &&
+		pass "traefik: the portal's page has HSTS" || fail "traefik: the portal's page has HSTS"
+	echo "$out" | grep -q 'name="password"' && echo "$out" | grep -qi '^set-cookie: __Host-axis_portal_form=.*; Secure' &&
+		pass "traefik: it is the portal's own login form, with a Secure, __Host- cookie (Traefik is believed)" ||
+		fail "traefik: it is the portal's own login form, with a Secure, __Host- cookie"
+	code=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' "http://127.0.0.1:${http_port:-0}/login" \
+		-H 'Host: requests.example.com' 2>/dev/null)
+	say info "plain http to the portal's host name is answered $code by Traefik (a redirect)"
+
+	# The engine is not behind the portal's host name.
+	for line in /setup /admin/users /api/v1/portal/hello /api/v1/worker/claim /readyz /storage; do
+		code=$(curl -sk --max-time 10 -o /dev/null -w '%{http_code}' "${presolve[@]}" "$pbase$line")
+		[ "$code" = 404 ] && pass "traefik: $line at the portal's host name is 404" ||
+			fail "traefik: $line at the portal's host name is 404 (got $code)"
+	done
+
+	# A requester, from a container of its own on Traefik's network: logs
+	# in, asks for the movie, sees it among My requests.
+	out=$(podman run --rm --network "$network" --ip "$net.79" --security-opt label=disable \
+		-v "$repo/tests/check-portal-client.py:/client.py:ro" "$client_image" \
+		python3 /client.py ask "https://$net.2" requests.example.com robin "$requester" "$title" 2>&1)
+	echo "$out" | sed 's/^/           client: /'
+	case $out in
+	*login=303*) pass "traefik: a requester logs in at the portal through Traefik, over https" ;;
+	*) fail "traefik: a requester logs in at the portal through Traefik, over https" ;;
+	esac
+	case $out in
+	*"cookie=__Host-axis_portal_session secure"*) pass "traefik: the portal's session cookie is Secure and __Host-" ;;
+	*) fail "traefik: the portal's session cookie is Secure and __Host-" ;;
+	esac
+	case $out in
+	*"ask=200 made"*"requests=200 listed"*) pass "traefik: the requester asks for a movie and sees it among My requests" ;;
+	*) fail "traefik: the requester asks for a movie and sees it among My requests" ;;
+	esac
+	line=$(podman logs "$axis" 2>&1 | grep 'audit: portal login: user=robin' | tail -n 1)
+	say info "$line"
+	case $line in
+	*"reported_client=$net.79"*) pass "traefik: the daemon is told the client's address ($net.79), which the portal took from Traefik" ;;
+	*) fail "traefik: the daemon is told the client's address ($net.79)" ;;
+	esac
+	[ "$(compose_in "$dir" "$proj" "${both[@]}" exec -T postgres psql --username axis --dbname axis --tuples-only --no-align \
+		--command "SELECT count(*) FROM request WHERE via = 'portal' AND decision = 'waiting' AND title_id = $title" 2>/dev/null |
+		tr -d '[:space:]')" = 1 ] && pass "traefik: the request is in the database, waiting" ||
+		fail "traefik: the request is in the database, waiting"
+	curl_extra=("${resolve[@]}")
+	page_has "$base" "$jar" /requests "Glass Orchard" &&
+		pass "traefik: the request waits on the daemon's Requests page" ||
+		fail "traefik: the request waits on the daemon's Requests page"
+	curl_extra=()
+
+	# What the portal's container can reach: the daemon's portal port, and
+	# nothing else of the stack.
+	[ "$(reach_from "$portal" axis 7801)" = open ] && pass "traefik: from the portal, the daemon's portal port is open" ||
+		fail "traefik: from the portal, the daemon's portal port is open"
+	out=$(reach_from "$portal" axis 7800)
+	[ -n "$out" ] && [ "$out" != open ] && pass "traefik: from the portal, the daemon's main port is not reachable by its name ($out)" ||
+		fail "traefik: from the portal, the daemon's main port is not reachable by its name (${out:-no answer})"
+	out=$(reach_from "$portal" "$net.3" 7800)
+	[ -n "$out" ] && [ "$out" != open ] && pass "traefik: nor at the address the main listener has on Traefik's network ($out)" ||
+		fail "traefik: nor at the address the main listener has on Traefik's network (${out:-no answer})"
+	out=$(reach_from "$portal" postgres 5432)
+	[ "$out" = unresolved ] && pass "traefik: from the portal, the name postgres does not resolve" ||
+		fail "traefik: from the portal, the name postgres does not resolve (${out:-no answer})"
+	# Both of its networks are internal: it has no way out at all, so the
+	# addresses of the host's other networks are as far as the internet is.
+	if podman exec "$portal" cat /proc/net/route 2>/dev/null | awk 'NR > 1 && $2 == "00000000" { found = 1 } END { exit !found }'; then
+		fail "traefik: the portal's container has no default route (its networks are internal)"
+	else
+		pass "traefik: the portal's container has no default route (its networks are internal)"
+	fi
+	pg_ip=$(podman inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' "$(container_of "$proj" postgres)" |
+		tr ' ' '\n' | grep -v '^$' | head -n 1)
+	out=$(reach_from "$portal" "$pg_ip" 5432)
+	[ -n "$out" ] && [ "$out" != open ] && pass "traefik: nor is PostgreSQL reachable by its address ($pg_ip: $out)" ||
+		fail "traefik: nor is PostgreSQL reachable by its address ($pg_ip: ${out:-no answer})"
+	case $(podman logs "$portal" "$axis" 2>&1) in
+	*"$token"*) fail "traefik: the portal's token is in no log" ;;
+	*) pass "traefik: the portal's token is in no log" ;;
+	esac
+	case $(podman inspect "$portal" "$axis" 2>&1) in
+	*"$token"*) fail "traefik: the portal's token is not in the containers' configuration" ;;
+	*) pass "traefik: the portal's token is not in the containers' configuration" ;;
+	esac
 }
 
 # ---------------------------------------------------------------------------
@@ -1107,6 +1412,8 @@ part_quadlet() {
 		identify Movies
 	[ ! -e "$work/quadlet-media/.axis-volume" ] && pass "quadlet: nothing is written to the read-only disk" ||
 		fail "quadlet: nothing is written to the read-only disk"
+	no_portal quadlet "" axis-xtest-axis
+	quadlet_portal "$src" "$dir" "$port" "$work/quadlet.jar"
 	if systemctl --user stop "$axis_unit" axis-xtest-axis-postgres.service; then
 		pass "quadlet: systemctl --user stop"
 	else
@@ -1121,6 +1428,146 @@ part_quadlet() {
 		sh -c "! systemctl --user cat $axis_unit >/dev/null 2>&1"
 	check "quadlet: no axis-xtest unit is loaded any more" \
 		sh -c "[ -z \"\$(systemctl --user list-units --all --plain --no-legend 'axis-xtest-*')\" ]"
+}
+
+# quadlet_portal SRC DIR PORT JAR: deploy/examples/quadlet with its two
+# portal files, as the README's part "The request portal" says: the three
+# lines of axis.container uncommented, the network installed, the daemon
+# started again with its portal listener; a token and a requester made by the
+# administrator; the portal installed and started.  This example has no
+# reverse proxy, so the check plays the proxy on this machine for one
+# request: the portal serves no login to a plain request, and its login form
+# to one that the published port's own address reports as https.  From the
+# portal's container the database does not resolve; the daemon's main port
+# is open there, as the README says, and a login from it is refused.
+quadlet_portal() {
+	local src=$1 dir=$2 port=$3 jar=$4 pnet=10.89.$((60 + RANDOM % 30)) pport token requester f out code
+	local portal=axis-xtest-portal unit=axis-xtest-axis-portal.service base=http://127.0.0.1:$3
+
+	say info "quadlet: the request portal (axis-portal.network, axis-portal.container)"
+	pport=$(free_port) || { fail "quadlet: no free port for the portal"; return; }
+	cp "$src/axis-portal.network" "$dir/axis-portal.network"
+	cp "$src/axis-portal.container" "$dir/axis-portal.container"
+	# README step 1: the three lines; and for this run the test's subnet.
+	edit "$dir/axis-xtest-axis.container" \
+		-e 's|^# \(Network=axis-portal.network:ip=.*\)$|\1|' \
+		-e 's|^# \(Environment=AXIS_PORTAL_LISTEN_[A-Z]*=.*\)$|\1|' \
+		-e "s|172\.31\.78\.|$pnet.|g" \
+		-e 's|axis-portal\.network|axis-xtest-axis-portal.network|g'
+	edit "$dir/axis-portal.network" \
+		-e 's|^NetworkName=axis-portal$|NetworkName=axis-xtest-portal-net|' \
+		-e "s|172\.31\.78\.|$pnet.|g"
+	edit "$dir/axis-portal.container" \
+		-e 's|^Image=ghcr.io/averagenative/axis:0.1.0-rc2$|Image='"$image"'|' \
+		-e 's|^PublishPort=127.0.0.1:7802:7802$|PublishPort=127.0.0.1:'"$pport"':7802|' \
+		-e 's|^ContainerName=axis-portal$|ContainerName='"$portal"'|' \
+		-e 's|^Secret=axis_portal_token,|Secret=axis-xtest-portal-token,|' \
+		-e 's|axis-portal\.network|axis-xtest-axis-portal.network|g' \
+		-e 's|axis\.service|axis-xtest-axis.service|g' \
+		-e 's|^\(Environment=AXIS_PORTAL_URL=http://\)axis:|\1axis-xtest-axis:|' \
+		-e "s|172\.31\.78\.|$pnet.|g"
+	mv "$dir/axis-portal.network" "$dir/axis-xtest-axis-portal.network"
+	mv "$dir/axis-portal.container" "$dir/axis-xtest-axis-portal.container"
+	for f in axis-xtest-axis-portal.network axis-xtest-axis.container; do
+		cp "$dir/$f" "$quadlet_dir/$f"
+		case " $quadlet_files " in
+		*" $quadlet_dir/$f "*) ;;
+		*) quadlet_files="$quadlet_files $quadlet_dir/$f" ;;
+		esac
+	done
+	systemctl --user daemon-reload
+	if timeout 300 systemctl --user restart axis-xtest-axis.service &&
+		wait_for 120 body_is "$base/readyz" '{"status":"ready"}'; then
+		pass "quadlet: the daemon starts again on the portal's network too, and is ready"
+	else
+		fail "quadlet: the daemon starts again on the portal's network too, and is ready"
+		journalctl --user --no-pager -n 8 -u axis-xtest-axis.service 2>&1 | cut -c 1-300 >&2
+		podman inspect --format '{{.Name}}: {{range $k, $v := .NetworkSettings.Networks}}{{$k}}={{$v.IPAddress}} {{end}}' \
+			axis-xtest-axis axis-xtest-postgres >&2 2>&1
+		podman exec -i axis-xtest-axis python3 - probe postgres 5432 < "$repo/tests/check-portal-client.py" >&2 2>&1
+		return
+	fi
+	podman logs axis-xtest-axis 2>&1 | grep -q "portal API: listening on $pnet.2:7801" &&
+		pass "quadlet: the daemon answers the portal API on $pnet.2:7801, its address on the portal's network" ||
+		fail "quadlet: the daemon answers the portal API on $pnet.2:7801"
+
+	# Steps 2 to 4.  (The daemon was started again: the session is in the
+	# database and still good.)
+	token=$(make_portal_token "$base" "$base" "$jar")
+	if [ -z "$token" ]; then
+		fail "quadlet: the administrator makes a portal token"
+		return
+	fi
+	pass "quadlet: the administrator makes a portal token"
+	printf '%s' "$token" | podman secret create axis-xtest-portal-token - >/dev/null
+	requester=$(random_hex 12)
+	code=$(web_post "$base" "$base" "$jar" /admin/users "$work/quadlet-requester" \
+		"username=robin" "password=$requester" "role=requester")
+	[ "$code" = 303 ] && pass "quadlet: the administrator creates a requester account" ||
+		fail "quadlet: the administrator creates a requester account (status $code)"
+
+	# Step 5.
+	cp "$dir/axis-xtest-axis-portal.container" "$quadlet_dir/axis-xtest-axis-portal.container"
+	quadlet_files="$quadlet_files $quadlet_dir/axis-xtest-axis-portal.container"
+	systemctl --user daemon-reload
+	if timeout 300 systemctl --user start "$unit"; then
+		pass "quadlet: systemctl --user start $unit (healthy: axis-portal --healthcheck)"
+	else
+		fail "quadlet: systemctl --user start $unit"
+		journalctl --user --no-pager -n 25 -u "$unit" >&2 2>&1
+		return
+	fi
+	portal_hardened quadlet "$portal"
+	check "quadlet: nothing is writable in the portal's container, /tmp included" \
+		sh -c "! podman exec '$portal' touch /tmp/x 2>/dev/null && ! podman exec '$portal' touch /run/x 2>/dev/null"
+
+	# Without a reverse proxy the portal serves no login.  With rootless
+	# Podman a plain request through the published port arrives from the
+	# address the example lists as the proxy's, and says nothing of who the
+	# client is: 503.  From any other address it is 403, "HTTPS only".
+	out=$(curl -s --max-time 10 -w ' %{http_code}' "http://127.0.0.1:$pport/login")
+	case $out in
+	*'name="password"'*) fail "quadlet: to a plain request the portal serves no login (it served the form)" ;;
+	*" 503" | *"HTTPS only"*" 403") pass "quadlet: to a plain request the portal serves no login (${out##* })" ;;
+	*) fail "quadlet: to a plain request the portal serves no login (got: $(echo "$out" | tail -c 60))" ;;
+	esac
+	# The check as the proxy on this machine: what arrives through the
+	# published port comes from the address the example lists (with rootless
+	# Podman, the container's own).
+	out=$(curl -s --max-time 10 -w ' %{http_code}' -H 'X-Forwarded-Proto: https' -H 'X-Forwarded-For: 203.0.113.9' \
+		-H 'X-Forwarded-Host: requests.example.com' "http://127.0.0.1:$pport/login")
+	case $out in
+	*'name="password"'*" 200") pass "quadlet: to a request the listed address reports as https, the portal serves its login form" ;;
+	*)
+		fail "quadlet: to a request the listed address reports as https, the portal serves its login form"
+		podman logs "$portal" 2>&1 | grep 'not trusted' | tail -n 1 >&2
+		;;
+	esac
+
+	[ "$(reach_from "$portal" axis-xtest-axis 7801)" = open ] && pass "quadlet: from the portal, the daemon's portal port is open" ||
+		fail "quadlet: from the portal, the daemon's portal port is open"
+	out=$(reach_from "$portal" postgres 5432)
+	[ "$out" = unresolved ] && pass "quadlet: from the portal, the name postgres does not resolve" ||
+		fail "quadlet: from the portal, the name postgres does not resolve (${out:-no answer})"
+	out=$(reach_from "$portal" axis-xtest-postgres 5432)
+	[ "$out" = unresolved ] && pass "quadlet: nor does the database container's own name" ||
+		fail "quadlet: nor does the database container's own name (${out:-no answer})"
+	if podman exec "$portal" cat /proc/net/route 2>/dev/null | awk 'NR > 1 && $2 == "00000000" { found = 1 } END { exit !found }'; then
+		fail "quadlet: the portal's container has no default route (its network is internal)"
+	else
+		pass "quadlet: the portal's container has no default route (its network is internal)"
+	fi
+	out=$(podman inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' axis-xtest-postgres | tr ' ' '\n' | grep -v '^$' | head -n 1)
+	code=$(reach_from "$portal" "$out" 5432)
+	[ -n "$code" ] && [ "$code" != open ] && pass "quadlet: nor is PostgreSQL reachable by its address ($out: $code)" ||
+		fail "quadlet: nor is PostgreSQL reachable by its address ($out: ${code:-no answer})"
+	say info "from the portal, the daemon's main port is $(reach_from "$portal" axis-xtest-axis 7800) (the README says so: this example cannot close it)"
+
+	if systemctl --user stop "$unit"; then
+		pass "quadlet: systemctl --user stop $unit"
+	else
+		fail "quadlet: systemctl --user stop $unit"
+	fi
 }
 
 # ---------------------------------------------------------------------------
