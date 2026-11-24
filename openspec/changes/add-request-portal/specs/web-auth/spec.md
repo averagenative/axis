@@ -84,7 +84,7 @@ Password checks that the portal API asks for SHALL use at most one of the daemon
 - **THEN** further ones are answered 503 and no password hash is started for them
 
 ### Requirement: An address that speaks as the portal is not let in as a person
-The daemon SHALL remember, for 24 hours after the last time, each address from which a valid portal token was presented, and SHALL refuse a login at the engine's own interface from such an address with the same answer as a wrong password, without checking the password. A session that already exists SHALL not be affected.
+The daemon SHALL remember, for 24 hours after the last time, each address from which a valid portal token was presented (the address of the connection, an IPv6 address by its /64; at most 256 of them, the one unused longest forgotten for a new one), and SHALL refuse a login at the engine's own interface whose client address, as the main listener resolves it through its trusted proxies, is such an address, with the same answer as a wrong password, without checking the password and without counting a failure against anyone. A token that is not valid SHALL make no address such an address. A session that already exists SHALL not be affected. The refusal SHALL be written to the audit log with its reason.
 
 #### Scenario: A login from the portal's address
 - **WHEN** a portal has called the portal API from an address, and a login with an administrator's right password then arrives at the engine's login page from that address
@@ -93,3 +93,7 @@ The daemon SHALL remember, for 24 hours after the last time, each address from w
 #### Scenario: Another address
 - **WHEN** the same administrator logs in from another address
 - **THEN** the login succeeds
+
+#### Scenario: A day after the portal's last request
+- **WHEN** 24 hours have passed since the last request with a valid portal token from an address
+- **THEN** a login from that address is checked as any other

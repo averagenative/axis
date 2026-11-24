@@ -276,36 +276,38 @@ Gate:
 
 Build:
 
-- [ ] 4.1 The image: `axis-portal` and its example configuration; the decision on a slim stage (open question 1) recorded and built.
-- [ ] 4.2 At start, `axis-portal` sets no-new-privileges and makes itself not dumpable.
-- [ ] 4.3 The daemon remembers the addresses that presented a valid portal token and refuses a login at its interface from them.
-- [ ] 4.4 The notice for a ceiling that was reached, and the counts on the page "Request portal".
-- [ ] 4.5 The optional portal service in `deploy/examples/traefik/`, `deploy/examples/kubernetes/` (a Deployment, a Service, a NetworkPolicy, an Ingress) and `deploy/examples/quadlet/`, each with its network and its README part.
-- [ ] 4.6 `deploy/README.md`: "The request portal": what runs where, the token, the proxy, the trusted proxies, what a held portal can and cannot do, how to replace the token, and the "not reviewed" statement.
-- [ ] 4.7 The known limits of this slice in `openspec/project.md`: what was not run (Docker, a real certificate, a cluster's NetworkPolicy exercised), and the limits listed in `design.md` under "Where it is hard".
+- [x] 4.1 The image: `axis-portal` and its example configuration (`data/axis-portal.conf.example`); `make release` and `make install` build and install both, and the debug stage carries `axis-portal.debug`. The decision on a slim stage (open question 1) is recorded in `design.md`, "As built in P4": no slim stage, one image.
+- [x] 4.2 At start, `axis-portal` sets no-new-privileges and makes itself not dumpable (and sets its core file limit to 0); it does not start when either cannot be set. Seen in `/portal/process/token-out-of-sight`: `NoNewPrivs: 1` in the running portal's status, and its `environ` and `mem` under `/proc` refused to its own user.
+- [x] 4.3 The daemon remembers the addresses that presented a valid portal token and refuses a login at its interface from them (`axis_web_auth_portal_note_address()`, `handle_login()`).
+- [x] 4.4 The notice for a ceiling that was reached (`requests.portal_limit`), and the counts on the page "Request portal" (the card "Limits").
+- [x] 4.5 The optional portal service in `deploy/examples/traefik/` (`compose.portal.yaml`), `deploy/examples/kubernetes/` (`portal.yaml`: a Deployment, two Services, three NetworkPolicies, an Ingress; `portal-axisd.yaml`: the daemon's listener, as a patch) and `deploy/examples/quadlet/` (`axis-portal.container`, `axis-portal.network`, three commented lines in `axis.container`), each with its network and its README part.
+- [x] 4.6 `deploy/README.md`: "The request portal": what runs where, the networks, the token and how to replace it, the proxy, the trusted proxies, the hardening, what a held portal can and cannot do, what was run, and the "not reviewed" statement. The user guide's part "Set up the request portal" has the steps that end with a requester account, a token, the portal running and a login page.
+- [x] 4.7 The known limits of this slice in `openspec/project.md` ("The request portal in containers"): what was not run (Docker, a real certificate, a cluster's NetworkPolicy exercised), and the limits listed in `design.md` under "Where it is hard".
 
 Tests, `deployment` specification:
 
-- [ ] 4.10 `tests/check-container.sh`, portal part: Hardened and empty.
-- [ ] 4.11 `tests/check-container.sh`, portal part: Nothing of the daemon's is needed.
-- [ ] 4.12 `tests/check-examples.sh`, portal part: The portal cannot reach the database.
-- [ ] 4.13 `tests/check-examples.sh`, portal part: A request end to end.
-- [ ] 4.14 `tests/check-examples.sh`, portal part: The engine is not behind the portal's proxy.
-- [ ] 4.15 `tests/check-examples.sh`: Left out by default.
-- [ ] 4.16 The Kubernetes manifests applied to a kind cluster with the portal's: Kubernetes. Record in the known limits whether the NetworkPolicy was exercised.
-- [ ] 4.17 `/portal/session/proxy-listed`: The proxy is listed.
-- [ ] 4.18 `/portal/session/proxy-not-listed`: The proxy is not listed.
-- [ ] 4.19 `tests/tools/check-portal-review.py` in `make check`: Before the review.
+The portal's parts of the two scripts were written in this slice and run by hand by the author, each alone, with rootless Podman and an image of the slice under a name of its own; the gates as a whole (`make check-container`, `make check-examples`) were not run by the author. `tests/check-portal-client.py` is the requester in both.
 
-Tests, `web-auth` and `attention` specifications:
+- [x] 4.10 `tests/check-container.sh`, portal part: Hardened and empty (a user id the image does not know, read-only with no tmpfs, no capability, no new privileges, no volume, the token as a secret file: it starts, its health check passes, a requester logs in and asks, the request waits in the database). By hand: that part alone, read out of the script, against a daemon started by hand; 28 checks passed.
+- [x] 4.11 `tests/check-container.sh`, portal part: Nothing of the daemon's is needed (no mount at all; no database address and no other secret in its environment). What its environment holds besides its own settings is what the image sets for every program (`AXIS_LISTEN_HOST`, `AXIS_LISTEN_PORT`, `AXIS_DATA_DIR`, `HOME`): the check prints the names and does not fail on them.
+- [x] 4.12 `tests/check-examples.sh`, `traefik` part: The portal cannot reach the database (the name does not resolve; PostgreSQL's address and the main listener's are not reachable; no default route). The first run by hand found both reachable by address; the portal's networks are internal since (`design.md`, "As built in P4"). Also in the `quadlet` part.
+- [x] 4.13 `tests/check-examples.sh`, `traefik` part: A request end to end (through Traefik over https at the portal's own host name; the request in the database and on the daemon's Requests page; the daemon told the client's address). By hand: the `traefik` part alone, 67 checks passed; the `quadlet` part alone, 42 passed (there the check plays the proxy for one request, and nobody logs in).
+- [x] 4.14 `tests/check-examples.sh`, `traefik` part: The engine is not behind the portal's proxy (`/setup`, `/admin/users`, `/api/v1/portal/hello`, `/api/v1/worker/claim`, `/readyz` and `/storage` are 404 at the portal's host name; `/login` there is the portal's own form, so the scenario's "engine's login page" was changed in the spec delta).
+- [x] 4.15 `tests/check-examples.sh`: Left out by default (`no_portal`, in the `compose`, `traefik` and `quadlet` parts: no portal container, and no portal listener in the daemon's log). The `full` part has no such check. For Kubernetes: the default render of `kubectl kustomize` holds nothing of the portal (by hand, not in a script).
+- [ ] 4.16 The Kubernetes manifests applied to a kind cluster with the portal's: Kubernetes. Not done: the manifests were rendered with `kubectl kustomize`, with and without the portal, and never applied; no cluster was started. The NetworkPolicy was not exercised, and the known limits say so.
+- [x] 4.17 `/portal/session/proxy-listed`: The proxy is listed (`tests/test-portal.c`: the login accepted, the forwarded client throttled and told to the daemon; with a real Traefik in `tests/check-examples.sh`, where the daemon's audit line names the client's address).
+- [x] 4.18 `/portal/session/proxy-not-listed`: The proxy is not listed (`tests/test-portal.c`: no form, "HTTPS only", nothing asked of the daemon, the line once, with the address and with nothing a stranger sent; from an address that is not listed in a container in `tests/check-container.sh`).
+- [x] 4.19 `tests/tools/check-portal-review.py` in `make check` (`make check-portal-review`, with a self-test of seven trees): Before the review. Its "after the review" half is P5's (5.6); what is there holds a tree without the line at start to naming the review.
 
-- [ ] 4.20 `/web/auth/login-from-portal-address`: A login from the portal's address.
-- [ ] 4.21 `/web/auth/login-from-another-address`: Another address.
-- [ ] 4.22 `/web/attention/portal-reached-a-limit`: The portal reached a limit.
+Tests, `web-auth` and `attention` specifications (`tests/test-portal-api.c`, 25 cases now):
+
+- [x] 4.20 `/web/auth/login-from-portal-address`: A login from the portal's address (no hash, no session, the page of a wrong password, no throttle touched, the audit line; a wrong token makes no address a portal's; a session that existed goes on; 24 hours after the last request, not the first). Seen to fail with the rule switched off. Also with the real daemon and the real portal, in `admin_change()` of `tests/test-portal-process.c`. `/web/auth/portal-addresses-bounded`: 256 addresses, the one unused longest forgotten, an IPv6 address by its /64.
+- [x] 4.21 `/web/auth/login-from-another-address`: Another address (in `/web/auth/login-from-portal-address`: the same administrator through a listed proxy from another address, at once).
+- [x] 4.22 `/web/attention/portal-reached-a-limit`: The portal reached a limit (the hour's ceiling twice, then the day's once: the notice's words, its link, no account's name and no address; the card "Limits" of the page; nothing for an ordinary user).
 
 Gate:
 
-- [ ] 4.90 Independent review of P4: the examples' networks as built, the hardening as run, the address rule. Record it in `design.md`; fix each finding with a test.
+- [ ] 4.90 Independent review of P4: the examples' networks as built, the hardening as run, the address rule. Record it in `design.md`; fix each finding with a test. Not made. The four gates (`make check`, `make fuzz`, `make check-container`, `make check-examples`) were not run by the author either: the test programs the slice touches were, under both sanitizers (`test-portal` 34 cases, `test-portal-api` 25, `test-portal-process` 7, `test-requests` 44, `test-web-requests` 13, `test-web-auth` 57, `test-daemon` 41), and the portal's parts of the two container scripts by hand.
 
 ## 5. P5: the independent security review
 

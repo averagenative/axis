@@ -14,19 +14,19 @@ The image SHALL contain `axis-portal`, run with `--entrypoint /usr/bin/axis-port
 - **THEN** it works, and its environment and its mounts hold nothing but its own settings and its token
 
 ### Requirement: An optional portal service in the examples
-The Compose example with a reverse proxy, the Kubernetes example and the Quadlet example SHALL each hold an optional portal service that is left out unless a person switches it on, with instructions. In each, the portal SHALL be the only Axis service that the reverse proxy for the internet reaches; the portal SHALL share with the daemon a network that holds those two alone; the portal SHALL NOT be on the network of PostgreSQL or of the download clients and SHALL have no media mount; and the daemon's main port SHALL be published as before, not through the internet-facing proxy. Where the platform can limit a connection by port (the Kubernetes NetworkPolicy), the portal SHALL be allowed to reach the daemon's portal port only and to be reached by the proxy only. Each example SHALL say that the token and the passwords of requesters cross the network between the portal and the daemon unencrypted, and why that network holds only those two.
+The Compose example with a reverse proxy, the Kubernetes example and the Quadlet example SHALL each hold an optional portal service that is left out unless a person switches it on, with instructions. In each, the portal SHALL be the only Axis service that the reverse proxy for the internet reaches; the portal SHALL share with the daemon a network that holds those two alone; the portal SHALL NOT be on the network of PostgreSQL or of the download clients and SHALL have no media mount; in the Compose and Quadlet examples every network of the portal SHALL be internal (no route out of it), because a container on an ordinary network reaches the host's other container networks by address; and the daemon's main port SHALL be published as before, not through the internet-facing proxy. Where the platform can limit a connection by port (the Kubernetes NetworkPolicy), the portal SHALL be allowed to reach the daemon's portal port only and to be reached by the proxy only. Where the daemon can be given a fixed address on each network (the Compose example), the portal API SHALL listen on the daemon's address on the network it shares with the portal, and the main listener on its address on the proxy's network, so that the portal's container reaches the portal port and not the main port. Where neither can be done (the Quadlet example), the example SHALL say that the portal's container can open the daemon's login page, and that a login from it is refused. Each example SHALL say that the token and the passwords of requesters cross the network between the portal and the daemon unencrypted, and why that network holds only those two.
 
 #### Scenario: The portal cannot reach the database
-- **WHEN** the Compose example runs with the portal switched on, and a connection to PostgreSQL's port is tried from the portal's container
-- **THEN** the name does not resolve or the connection is not made
+- **WHEN** the Compose example runs with the portal switched on, and a connection to PostgreSQL's port is tried from the portal's container, by PostgreSQL's name and by its address
+- **THEN** the name does not resolve, the connection by address is not made, and the portal's container has no default route
 
 #### Scenario: A request end to end
 - **WHEN** a requester logs in at the portal through the proxy, over HTTPS, and asks for a movie
 - **THEN** the request waits on the daemon's Requests page
 
 #### Scenario: The engine is not behind the portal's proxy
-- **WHEN** the engine's login page, `/admin/users` and `/api/v1/portal/hello` are requested from the address the portal is published at
-- **THEN** each is answered 404 by the portal
+- **WHEN** the engine's setup page (`/setup`), `/admin/users`, `/storage`, `/readyz`, `/api/v1/worker/claim` and `/api/v1/portal/hello` are requested from the address the portal is published at
+- **THEN** each is answered 404 by the portal, and the page at `/login` there is the portal's own login form, not the engine's
 
 #### Scenario: Left out by default
 - **WHEN** an example is brought up as it is published
