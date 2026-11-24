@@ -143,6 +143,49 @@ axis_ip_address_is_private(const AxisIpAddress *address)
 	return (b[0] & 0xfe) == 0xfc || (b[0] == 0xfe && (b[1] & 0xc0) == 0x80);
 }
 
+gboolean
+axis_ip_address_is_link_local6(const AxisIpAddress *address)
+{
+	g_return_val_if_fail(address != NULL, FALSE);
+
+	return address->family == 6 && address->bytes[0] == 0xfe && (address->bytes[1] & 0xc0) == 0x80;
+}
+
+gboolean
+axis_ip_address_parse_zoned(
+	const gchar   *text,
+	AxisIpAddress *address
+){
+	gchar buffer[ADDRESS_TEXT_MAX];
+	AxisIpAddress parsed;
+	const gchar *zone;
+	const gchar *start;
+	gsize len;
+
+	if (text == NULL)
+		return FALSE;
+	zone = strchr(text, '%');
+	if (zone == NULL)
+		return axis_ip_address_parse(text, address);
+
+	/* "fe80::1%eth0" and "[fe80::1%eth0]": the address is what stands before
+	 * the zone, and a zone is something, and belongs to IPv6 alone. */
+	start = text[0] == '[' ? text + 1 : text;
+	len = (gsize)(zone - start);
+	if (zone < start || len == 0 || len >= sizeof(buffer) || zone[1] == '\0' || zone[1] == ']')
+		return FALSE;
+	if ((text[0] == '[') != (text[strlen(text) - 1] == ']'))
+		return FALSE;
+	memcpy(buffer, start, len);
+	buffer[len] = '\0';
+	if (strchr(buffer, ':') == NULL || !axis_ip_address_parse(buffer, &parsed) || parsed.family != 6)
+		return FALSE;
+
+	if (address != NULL)
+		*address = parsed;
+	return TRUE;
+}
+
 gchar *
 axis_proxy_address_key(const gchar *text)
 {
@@ -406,6 +449,30 @@ gboolean
 axis_proxy_list_has_names(const AxisProxyList *self)
 {
 	return self != NULL && self->names > 0;
+}
+
+gboolean
+axis_proxy_list_has_unresolved_name(const AxisProxyList *self)
+{
+	AxisProxyList *list = (AxisProxyList *)self;
+	gboolean found = FALSE;
+	gint64 now;
+	guint i;
+
+	if (self == NULL || self->names == 0)
+		return FALSE;
+
+	now = axis_proxy_list_now(list);
+	g_mutex_lock(&list->lock);
+	for (i = 0; !found && i < self->ranges->len; i++) {
+		const Range *range = &g_array_index(self->ranges, Range, i);
+
+		found = range->name != NULL && name_state(range, now) != AXIS_PROXY_NAME_RESOLVED &&
+			name_state(range, now) != AXIS_PROXY_NAME_KEPT;
+	}
+	g_mutex_unlock(&list->lock);
+
+	return found;
 }
 
 gchar **

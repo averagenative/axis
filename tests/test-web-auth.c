@@ -3036,6 +3036,78 @@ test_proxy_name_follows_address(Fixture *fx, gconstpointer data)
 	g_resolver_set_default(system);
 }
 
+/* Spec (web-auth, slice P4, after its second review): A login that arrives
+ * with a forwarding header while a trusted proxy's name has no address.
+ * With a portal configured, such a login may be the proxy's, for a client
+ * nobody can check: it is refused as a wrong password is, without a hash,
+ * until the name has its address.  A login with no forwarding header is
+ * taken meanwhile, and so is everything while no portal is configured. */
+static void
+test_portal_peers_unresolved_name(Fixture *fx, gconstpointer data)
+{
+	static const gchar *const here[] = { "127.0.0.1", NULL };
+	g_autoptr(Client) early = client_new(via_proxy);
+	g_autoptr(Client) direct = client_new(NULL);
+	g_autoptr(Client) unset = client_new(via_proxy);
+	g_autoptr(Client) browser = client_new(via_proxy);
+	g_autoptr(GResolver) system = NULL;
+	g_autoptr(GResolver) dns = NULL;
+	g_autoptr(GError) error = NULL;
+	g_autofree gchar *line = NULL;
+	Reply reply;
+	guint hashes;
+
+	SKIP_WITHOUT_DB(fx);
+	axis_test_log_allow(G_LOG_LEVEL_WARNING, "trusted proxy name*");
+	system = g_resolver_get_default();
+	dns = axis_test_resolver_new();
+	g_resolver_set_default(dns);
+	axis_test_resolver_set(dns, "edge-proxy", here);
+	/* The lookup is not answered yet: the name stands for no address. */
+	axis_test_resolver_hold(dns, TRUE);
+
+	seed(fx, "alice", ALICE_PASSWORD, AXIS_USER_ROLE_ADMIN, FALSE);
+	fx->trusted = "edge-proxy";
+	start(fx);
+	g_assert_true(axis_proxy_list_has_unresolved_name(axis_web_auth_get_trusted(fx->auth)));
+	g_assert_true(axis_web_auth_set_portal_peers(fx->auth, "198.51.100.20", &error));
+	g_assert_no_error(error);
+
+	/* The right password, forwarded for an address that is nobody's. */
+	hashes = axis_password_verify_count();
+	reply = login(fx, early, "alice", ALICE_PASSWORD, NULL);
+	g_assert_cmpuint(reply.status, ==, 401);
+	assert_contains(reply.body, "The username or password is incorrect.");
+	g_assert_null(client_cookie(early, "axis_session"));
+	reply_clear(&reply);
+	g_assert_cmpuint(axis_password_verify_count(), ==, hashes);
+	g_assert_cmpuint(axis_test_log_count(G_LOG_LEVEL_MESSAGE, "audit: login refused: it arrived with X-Forwarded-For "
+		"from 127.0.0.1, which is not a trusted proxy now, while a host name in server.trusted_proxies*"), ==, 1);
+	g_assert_cmpuint(axis_web_auth_portal_logins_barred(fx->auth, NULL), ==, 1);
+
+	/* Directly, with no forwarding header: taken. */
+	login_ok(fx, direct, "alice", ALICE_PASSWORD);
+	/* With no portal configured the rule is not there at all. */
+	g_assert_true(axis_web_auth_set_portal_peers(fx->auth, "", &error));
+	g_assert_no_error(error);
+	login_ok(fx, unset, "alice", ALICE_PASSWORD);
+	g_assert_true(axis_web_auth_set_portal_peers(fx->auth, "198.51.100.20", &error));
+	g_assert_no_error(error);
+
+	/* The name has its address: the proxy is believed, and its login taken. */
+	axis_test_resolver_hold(dns, FALSE);
+	axis_test_resolver_release(dns);
+	axis_test_resolver_drain();
+	g_assert_false(axis_proxy_list_has_unresolved_name(axis_web_auth_get_trusted(fx->auth)));
+	login_ok(fx, browser, "alice", ALICE_PASSWORD);
+	line = axis_test_log_find(G_LOG_LEVEL_MESSAGE, "audit: login: user=alice client=203.0.113.9*");
+	g_assert_nonnull(line);
+	g_assert_cmpuint(axis_web_auth_portal_logins_barred(fx->auth, NULL), ==, 1);
+
+	stop(fx);
+	g_resolver_set_default(system);
+}
+
 /* ── Themes ─────────────────────────────────────────────────────── */
 
 /* The theme id written on the root element of @html. */
@@ -3478,6 +3550,7 @@ main(int argc, char **argv)
 	ADD("/web-auth/proxy/forwarded-host-untrusted", test_proxy_forwarded_host_untrusted);
 	ADD("/web-auth/proxy/list-logged", test_proxy_list_logged);
 	ADD("/web-auth/proxy/name-follows-address", test_proxy_name_follows_address);
+	ADD("/web-auth/proxy/forwarded-login-while-name-unresolved", test_portal_peers_unresolved_name);
 
 	return g_test_run();
 }

@@ -173,6 +173,7 @@ typedef struct
 {
 	gchar        *client_address;
 	gchar        *peer_address;	/* the connection's own address, whatever it forwards; NULL if unknown */
+	gchar        *forwarded_for;	/* X-Forwarded-For as it arrived, believed or not; NULL without one */
 	gchar        *forwarded_host;	/* the public host a trusted proxy reports, or NULL */
 	gboolean      https;		/* the client's request was HTTPS */
 	gboolean      secure;		/* cookies get Secure */

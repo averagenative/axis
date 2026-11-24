@@ -459,11 +459,12 @@ handle_login(
 	 * password, and the password is not checked.  Whoever holds a portal sees
 	 * every password typed into it; an administrator's, typed there by
 	 * mistake, is then of no use from the portal's own place in the network.
-	 * The connection's own address is asked as well as the client's that a
-	 * trusted proxy names, so that neither a forged X-Forwarded-For nor a
-	 * detour through the proxy gets past.  No count is touched: nothing here
-	 * can delay a login from anywhere else. */
-	if (axis_web_auth_portal_bars_login(auth, state->peer_address, state->client_address, "login"))
+	 * The connection's own address is asked, the client's that a trusted
+	 * proxy names, and every address in X-Forwarded-For, so that neither a
+	 * forged header nor a detour through a proxy gets past.  No count is
+	 * touched: nothing here can delay a login from anywhere else. */
+	if (axis_web_auth_portal_bars_login(auth, state->peer_address, state->client_address, state->forwarded_for,
+	                                    "login"))
 		return login_page(request, 401, next, typed, LOGIN_FAILED);
 
 	/* Refused before any password work, even when it would be right; the
@@ -680,7 +681,8 @@ handle_setup(
 	/* The first administrator is not made from one of the portal's
 	 * addresses either (see handle_login()): the answer of a wrong setup
 	 * token, whatever the token, and no count is touched. */
-	if (axis_web_auth_portal_bars_login(auth, state->peer_address, state->client_address, "setup"))
+	if (axis_web_auth_portal_bars_login(auth, state->peer_address, state->client_address, state->forwarded_for,
+	                                    "setup"))
 		return setup_page(request, 403, typed, "The setup token is not correct. Copy the newest one from the Axis log.");
 
 	wait = axis_login_throttle_check(auth->by_address, state->client_address, now);

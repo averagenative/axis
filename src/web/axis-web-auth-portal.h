@@ -145,11 +145,13 @@ axis_web_auth_portal_logout(
  *    other: any other peer is refused before its token is looked at, and
  *    counts for nothing.  While the list is empty, it answers nobody;
  *  - no login at the engine's own interface (and no first setup) is taken
- *    when the connection's own address or the client's address, as the
- *    trusted proxies resolve it, is in the list.  Both are asked: a peer that
- *    is a listed proxy as well cannot forward its own address away.  The
- *    answer is that of a wrong password, no password is checked and no count
- *    is touched.  A session that exists is not affected.
+ *    when the connection's own address, the client's address as the trusted
+ *    proxies resolve it, or any address in X-Forwarded-For is in the list
+ *    (axis_web_auth_portal_bars_login() has the whole rule, with what it
+ *    does about IPv6 link-local addresses and about a trusted proxy's name
+ *    that has no address yet).  The answer is that of a wrong password, no
+ *    password is checked and no count is touched.  A session that exists is
+ *    not affected.
  *
  * Nothing is learnt and nothing expires: what a portal does, or a restart of
  * the daemon, changes none of it.  A range is as wide as it is written (an
@@ -210,18 +212,38 @@ axis_web_auth_portal_peers_overlap(
  * axis_web_auth_portal_bars_login:
  * @peer: (nullable): the connection's own address
  * @client: (nullable): the client's address as the trusted proxies resolve it
+ * @forwarded_for: (nullable): the request's X-Forwarded-For as it arrived,
+ *   whoever sent it
  * @what: "login" or "setup", for the log
  *
- * Whether a login from there is refused because one of the two is a
- * portal's address.  When it is, the refusal is counted and the log says so,
- * naming the setting: at once the first time, then once a minute at most,
- * with how many more there were.  Main loop only.
+ * Whether a login is refused for where it comes from.  With no portal
+ * address configured, never.  Otherwise it is refused when
+ *
+ *  - @peer, @client or any address in @forwarded_for is one of the portal's
+ *    addresses.  Every entry of the header is read, from a trusted sender or
+ *    not: a sender can put entries in front of the one its proxy writes and
+ *    can remove none, so a login the portal's container sends through a
+ *    proxy carries the portal's address whatever else it carries, and a
+ *    made-up entry can only stop its sender's own login;
+ *  - one of those is an IPv6 link-local address (fe80::/10, with or without
+ *    a zone): no list can name such an address, the portal's container has
+ *    one unless IPv6 is switched off in it, and it is never an
+ *    administrator's browser coming through a proxy;
+ *  - the request carries X-Forwarded-For, @peer is not a trusted proxy, and
+ *    a host name among the trusted proxies stands for no address (not looked
+ *    up yet, or failing past its grace): that peer may be the proxy, and
+ *    whom it forwards for cannot be checked.
+ *
+ * When it is refused, the refusal is counted and the log says so, naming the
+ * setting: at once the first time, then once a minute at most, with how many
+ * more there were.  Main loop only.
  */
 gboolean
 axis_web_auth_portal_bars_login(
 	AxisWebAuth *self,
 	const gchar *peer,
 	const gchar *client,
+	const gchar *forwarded_for,
 	const gchar *what
 );
 

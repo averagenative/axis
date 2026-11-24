@@ -146,19 +146,136 @@ axis_web_auth_portal_peers_overlap(
 	return axis_proxy_lists_overlap(self->portal_peers, self->trusted, peer, proxy);
 }
 
+/* Why a login is not taken. */
+typedef enum
+{
+	BAR_NONE,
+	BAR_PEER,		/* the connection's own address is listed */
+	BAR_CLIENT,		/* the client the trusted proxies name is listed */
+	BAR_FORWARDED,		/* an address in X-Forwarded-For is listed */
+	BAR_LINK_LOCAL,		/* one of them is an IPv6 link-local address */
+	BAR_UNRESOLVED		/* forwarded, while a trusted proxy's name stands for no address */
+} Bar;
+
+/* Whether @text is an address of the kind @link_local asks for: a listed
+ * one, or an IPv6 link-local one.  A zone is dropped ("fe80::1%eth0"), which
+ * is how a proxy writes a client that reached it over such an address. */
+static gboolean
+address_is(
+	AxisWebAuth *self,
+	const gchar *text,
+	gboolean     link_local
+){
+	AxisIpAddress parsed;
+
+	if (!axis_ip_address_parse_zoned(text, &parsed))
+		return FALSE;
+	return link_local ? axis_ip_address_is_link_local6(&parsed) :
+		axis_proxy_list_contains(self->portal_peers, &parsed);
+}
+
+/* An address as the log shows it: read and written again, so that nothing
+ * of a header's own text (a zone is any text) reaches the log. */
+static gchar *
+address_text(const gchar *text)
+{
+	AxisIpAddress parsed;
+
+	if (!axis_ip_address_parse_zoned(text, &parsed))
+		return g_strdup(AXIS_PROXY_UNKNOWN_CLIENT);
+	return axis_ip_address_to_string(&parsed);
+}
+
+/*
+ * The rule itself.  @which is set to the address the refusal is for.
+ *
+ * Every address of X-Forwarded-For is read, from whoever sent the header and
+ * however far the trusted proxies' walk went: a sender can add entries in
+ * front of the one its proxy writes and can take none away, so the portal's
+ * address is in the header whatever the portal put before it, whether or not
+ * the proxy that wrote it is trusted (yet), and whether the walk stopped
+ * before it or stepped over it.  The only login a made-up entry can stop is
+ * its sender's own.  An entry that is no address says nothing.
+ */
+static Bar
+login_bar(
+	AxisWebAuth  *self,
+	const gchar  *peer,
+	const gchar  *client,
+	const gchar  *forwarded_for,
+	gchar       **which
+){
+	g_auto(GStrv) hops = NULL;
+	AxisIpAddress from;
+	gboolean link_local;
+	guint i;
+
+	*which = NULL;
+	/* Nobody is the portal: nothing of this applies. */
+	if (axis_proxy_list_get_length(self->portal_peers) == 0)
+		return BAR_NONE;
+
+	if (forwarded_for != NULL) {
+		hops = g_strsplit(forwarded_for, ",", -1);
+		for (i = 0; hops[i] != NULL; i++)
+			g_strstrip(hops[i]);
+	}
+
+	/* First the listed addresses, then the link-local ones: an IPv6
+	 * link-local address is one an interface gives itself, on the portal's
+	 * networks as on any other, and no list of the portal's addresses can
+	 * name it.  It is never the browser of an administrator who comes through
+	 * a proxy from elsewhere; with a portal configured it is taken for the
+	 * portal's. */
+	for (link_local = FALSE; ; link_local = TRUE) {
+		if (address_is(self, peer, link_local)) {
+			*which = address_text(peer);
+			return link_local ? BAR_LINK_LOCAL : BAR_PEER;
+		}
+		if (address_is(self, client, link_local)) {
+			*which = address_text(client);
+			return link_local ? BAR_LINK_LOCAL : BAR_CLIENT;
+		}
+		for (i = 0; hops != NULL && hops[i] != NULL; i++) {
+			if (address_is(self, hops[i], link_local)) {
+				*which = address_text(hops[i]);
+				return link_local ? BAR_LINK_LOCAL : BAR_FORWARDED;
+			}
+		}
+		if (link_local)
+			break;
+	}
+
+	/* A trusted proxy that is named (trusted_proxies: traefik) is not
+	 * believed until its name has an address, and no longer once the name has
+	 * failed past its grace.  A login that arrives with a forwarding header
+	 * from an address that is not trusted may then be that proxy's, carrying
+	 * a client nobody can check: it is not taken.  (The listed addresses in
+	 * the header were refused above already; this is for what the header does
+	 * not say.) */
+	if (forwarded_for != NULL && axis_proxy_list_has_unresolved_name(self->trusted) &&
+	    !(axis_ip_address_parse(peer, &from) && axis_proxy_list_contains(self->trusted, &from))) {
+		*which = g_strdup(peer != NULL ? peer : AXIS_PROXY_UNKNOWN_CLIENT);
+		return BAR_UNRESOLVED;
+	}
+
+	return BAR_NONE;
+}
+
 gboolean
 axis_web_auth_portal_bars_login(
 	AxisWebAuth *self,
 	const gchar *peer,
 	const gchar *client,
+	const gchar *forwarded_for,
 	const gchar *what
 ){
-	gboolean by_peer = axis_web_auth_portal_peer_listed(self, peer);
-	gboolean by_client = !by_peer && axis_web_auth_portal_peer_listed(self, client);
+	g_autofree gchar *which = NULL;
+	Bar bar = login_bar(self, peer, client, forwarded_for, &which);
 	gint64 now = axis_web_auth_now_monotonic(self);
 	g_autofree gchar *more = NULL;
 
-	if (!by_peer && !by_client)
+	if (bar == BAR_NONE)
 		return FALSE;
 
 	self->portal_refused++;
@@ -173,17 +290,44 @@ axis_web_auth_portal_bars_login(
 	}
 	more = self->portal_refused_untold > 0 ? g_strdup_printf(" (and %u more such refusals since this was last said)",
 		self->portal_refused_untold) : g_strdup("");
-	if (by_peer)
+	switch (bar) {
+	case BAR_PEER:
 		axis_web_auth_audit("%s refused: the connection came from %s, one of the request portal's addresses "
 			"(server.portal_peers, AXIS_PORTAL_PEERS), and nobody logs in to Axis itself from those, whatever is "
 			"forwarded. The browser was told what a wrong password is told. If this was your own login, reach Axis "
-			"from an address that is not in that list, or take the address out of it and restart Axis%s", what, peer,
+			"from an address that is not in that list, or take the address out of it and restart Axis%s", what, which,
 			more);
-	else
+		break;
+	case BAR_CLIENT:
 		axis_web_auth_audit("%s refused: the client %s, as a trusted proxy names it, is one of the request portal's "
 			"addresses (server.portal_peers, AXIS_PORTAL_PEERS), and nobody logs in to Axis itself from those. The "
 			"browser was told what a wrong password is told. If this was your own login, reach Axis from an address "
-			"that is not in that list, or take the address out of it and restart Axis%s", what, client, more);
+			"that is not in that list, or take the address out of it and restart Axis%s", what, which, more);
+		break;
+	case BAR_FORWARDED:
+		axis_web_auth_audit("%s refused: X-Forwarded-For names %s, one of the request portal's addresses "
+			"(server.portal_peers, AXIS_PORTAL_PEERS), and nobody logs in to Axis itself by way of those, whoever "
+			"sent the header and whatever else is in it. The browser was told what a wrong password is told. If this "
+			"was your own login, reach Axis by a way that does not pass an address in that list, or take the address "
+			"out of it and restart Axis%s", what, which, more);
+		break;
+	case BAR_LINK_LOCAL:
+		axis_web_auth_audit("%s refused: it came from or by way of %s, an IPv6 link-local address (fe80::/10). Such "
+			"an address says which link and never which machine, the request portal's container has one unless "
+			"IPv6 is switched off in it, and no list can name it: while server.portal_peers (AXIS_PORTAL_PEERS) is "
+			"set, nobody logs in to Axis itself from one. The browser was told what a wrong password is told. If "
+			"this was your own login, reach Axis by an address that is not link-local%s", what, which, more);
+		break;
+	case BAR_UNRESOLVED:
+	default:
+		axis_web_auth_audit("%s refused: it arrived with X-Forwarded-For from %s, which is not a trusted proxy now, "
+			"while a host name in server.trusted_proxies (AXIS_TRUSTED_PROXIES) stands for no address (not looked up "
+			"yet, or the lookup fails). That may be the proxy, and whom it forwards for cannot be checked against "
+			"the request portal's addresses (server.portal_peers, AXIS_PORTAL_PEERS). The browser was told what a "
+			"wrong password is told. Try again in a few seconds; if it lasts, see the log's lines about the trusted "
+			"proxy's name, or reach Axis directly%s", what, which, more);
+		break;
+	}
 	self->portal_refused_told_us = now;
 	self->portal_refused_untold = 0;
 	return TRUE;

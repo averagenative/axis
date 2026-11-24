@@ -2936,6 +2936,7 @@ test_engine_queue_full(Fixture *fx, gconstpointer data)
 static void
 test_portal_peers_login(Fixture *fx, gconstpointer data)
 {
+	static const gchar *const names_portal[] = { "X-Forwarded-For", "203.0.113.9, 127.0.0.1", NULL };
 	g_autofree gchar *before = NULL;
 	g_autofree gchar *cookies = NULL;
 	AxisTestReply reply;
@@ -3021,6 +3022,15 @@ test_portal_peers_login(Fixture *fx, gconstpointer data)
 	reply = engine_login(fx, "root", ADMIN_PASSWORD);
 	assert_status(&reply, 303);
 	axis_test_reply_clear(&reply);
+
+	/* A header that names the portal's address refuses the login whoever
+	 * sent it: here nobody is a trusted proxy (a proxy whose name has not
+	 * resolved yet is in that place), and the header is read all the same. */
+	reply = engine_login_from(fx, fx->people, "root", ADMIN_PASSWORD, names_portal);
+	assert_status(&reply, 401);
+	assert_holds(reply.body, "The username or password is incorrect.");
+	axis_test_reply_clear(&reply);
+	g_assert_cmpuint(axis_password_verify_count(), ==, hashes + 3);
 }
 
 /*
@@ -3058,12 +3068,58 @@ test_portal_peers_forms(Fixture *fx, gconstpointer data)
 		g_test_message("%s", cases[i].address != NULL ? cases[i].address : "(null)");
 		g_assert_true(axis_web_auth_portal_peer_listed(fx->auth, cases[i].address) == cases[i].listed);
 		/* The login asks the same of the connection and of the client. */
-		g_assert_true(axis_web_auth_portal_bars_login(fx->auth, cases[i].address, "198.51.100.1", "login") ==
+		g_assert_true(axis_web_auth_portal_bars_login(fx->auth, cases[i].address, "198.51.100.1", NULL, "login") ==
 			cases[i].listed);
-		g_assert_true(axis_web_auth_portal_bars_login(fx->auth, "198.51.100.1", cases[i].address, "login") ==
+		g_assert_true(axis_web_auth_portal_bars_login(fx->auth, "198.51.100.1", cases[i].address, NULL, "login") ==
 			cases[i].listed);
+		/* And of X-Forwarded-For, wherever in it the address stands. */
+		if (cases[i].address != NULL) {
+			g_autofree gchar *first = g_strdup_printf("%s, 203.0.113.5, 198.51.100.9", cases[i].address);
+			g_autofree gchar *middle = g_strdup_printf("203.0.113.5,%s , 198.51.100.9", cases[i].address);
+			g_autofree gchar *last = g_strdup_printf("203.0.113.5, unknown, , \t%s", cases[i].address);
+
+			g_assert_true(axis_web_auth_portal_bars_login(fx->auth, "198.51.100.1", "198.51.100.2", first, "login") ==
+				cases[i].listed);
+			g_assert_true(axis_web_auth_portal_bars_login(fx->auth, "198.51.100.1", "198.51.100.2", middle, "login") ==
+				cases[i].listed);
+			g_assert_true(axis_web_auth_portal_bars_login(fx->auth, "198.51.100.1", "198.51.100.2", last, "login") ==
+				cases[i].listed);
+		}
 	}
-	g_assert_false(axis_web_auth_portal_bars_login(fx->auth, NULL, NULL, "login"));
+	g_assert_false(axis_web_auth_portal_bars_login(fx->auth, NULL, NULL, NULL, "login"));
+	g_assert_false(axis_web_auth_portal_bars_login(fx->auth, "198.51.100.1", "198.51.100.2",
+		"203.0.113.5, not an address, 127.0.0.1:443, 198.51.100.9", "login"));
+
+	/* An IPv6 link-local address, which no list can name: taken for the
+	 * portal's while there is a portal, as the connection's address, as the
+	 * client's and anywhere in the header, with a zone or without. */
+	{
+		static const struct
+		{
+			const gchar *address;
+			gboolean     link_local;
+		} local[] = {
+			{ "fe80::1", TRUE }, { "[fe80::1]", TRUE }, { "fe80::9c2d:11ff:fe22:57e8%eth1", TRUE },
+			{ "[fe80::1%eth1]", TRUE }, { "febf:ffff::1", TRUE }, { "FE80::A", TRUE }, { "fec0::1", FALSE },
+			{ "fe7f::1", FALSE }, { "fe80::1%", FALSE }, { "%eth1", FALSE }, { "fe80::1%eth1]", FALSE },
+			{ "169.254.7.7", FALSE }, { "::ffff:169.254.7.7", FALSE }, { "198.51.100.3%eth1", FALSE },
+			{ "2001:db8:5::1", FALSE }, { "fc00::1", FALSE }
+		};
+
+		for (i = 0; i < G_N_ELEMENTS(local); i++) {
+			g_autofree gchar *header = g_strdup_printf("203.0.113.5, %s", local[i].address);
+
+			g_test_message("%s", local[i].address);
+			g_assert_true(axis_web_auth_portal_bars_login(fx->auth, local[i].address, "198.51.100.1", NULL, "login") ==
+				local[i].link_local);
+			g_assert_true(axis_web_auth_portal_bars_login(fx->auth, "198.51.100.1", local[i].address, NULL, "login") ==
+				local[i].link_local);
+			g_assert_true(axis_web_auth_portal_bars_login(fx->auth, "198.51.100.1", "198.51.100.2", header, "login") ==
+				local[i].link_local);
+			/* (The portal listener's own question is the list's, no wider.) */
+			g_assert_false(axis_web_auth_portal_peer_listed(fx->auth, local[i].address));
+		}
+	}
 
 	g_assert_false(axis_web_auth_set_portal_peers(fx->auth, "127.0.0.1, axis-portal", &error));
 	g_assert_error(error, AXIS_PROXY_ERROR, AXIS_PROXY_ERROR_INVALID);
@@ -3077,6 +3133,8 @@ test_portal_peers_forms(Fixture *fx, gconstpointer data)
 	g_assert_true(axis_web_auth_set_portal_peers(fx->auth, "", &error));
 	g_assert_true(axis_web_auth_portal_peers_none(fx->auth));
 	g_assert_false(axis_web_auth_portal_peer_listed(fx->auth, "127.0.0.1"));
+	/* No portal: nobody is refused for an address, a link-local one neither. */
+	g_assert_false(axis_web_auth_portal_bars_login(fx->auth, "fe80::1", "fe80::2", "fe80::3%eth1, 127.0.0.1", "login"));
 }
 
 /*
@@ -3092,6 +3150,11 @@ test_portal_peers_forwarded(Fixture *fx, gconstpointer data)
 	static const gchar *const from_mapped[] = { "X-Forwarded-For", "::ffff:198.51.100.20", NULL };
 	static const gchar *const from_desk[] = { "X-Forwarded-For", "198.51.100.21", "X-Forwarded-Proto", "https", NULL };
 	static const gchar *const forged[] = { "X-Forwarded-For", "198.51.100.7", NULL };
+	static const gchar *const appended[] = { "X-Forwarded-For", "198.51.100.7, 127.0.0.1", NULL };
+	static const gchar *const chain[] = { "X-Forwarded-For", "198.51.100.7, 198.51.100.20, 127.0.0.1", NULL };
+	static const gchar *const beyond[] = { "X-Forwarded-For", "198.51.100.20, 203.0.113.9, 127.0.0.1", NULL };
+	static const gchar *const link_local[] = { "X-Forwarded-For", "fe80::9c2d:11ff:fe22:57e8%eth1", NULL };
+	static const gchar *const clean_chain[] = { "X-Forwarded-For", "198.51.100.7, 198.51.100.21, 127.0.0.1", NULL };
 	g_autoptr(GError) error = NULL;
 	g_autofree gchar *admin = NULL;
 	g_autofree gchar *cookies = NULL;
@@ -3157,6 +3220,55 @@ test_portal_peers_forwarded(Fixture *fx, gconstpointer data)
 	reply = engine_login_from(fx, fx->people, "root", ADMIN_PASSWORD, forged);
 	assert_status(&reply, 303);
 	axis_test_reply_clear(&reply);
+
+	/* A proxy that adds to X-Forwarded-For instead of replacing it (the
+	 * second review's S2).  The portal, at an address that is a trusted
+	 * proxy's as well, sends a made-up client to the proxy administrators
+	 * use; that proxy puts the portal's address after it.  The walk steps
+	 * over the portal's address, as over any trusted one, and stops at the
+	 * made-up client: the client is nobody's and the connection is the
+	 * proxy's.  The header still names the portal, and that refuses it. */
+	axis_web_auth_set_time_offset(fx->auth, G_GINT64_CONSTANT(240) * G_USEC_PER_SEC);
+	hashes = axis_password_verify_count();
+	reply = engine_login_from(fx, fx->people, "root", ADMIN_PASSWORD, appended);
+	assert_status(&reply, 401);
+	assert_holds(reply.body, "The username or password is incorrect.");
+	cookies = cookies_after(&reply);
+	g_assert_null(strstr(cookies, "axis_session="));
+	g_clear_pointer(&cookies, g_free);
+	axis_test_reply_clear(&reply);
+	g_assert_cmpuint(axis_password_verify_count(), ==, hashes);
+	g_assert_cmpuint(axis_test_log_count(G_LOG_LEVEL_MESSAGE, "*audit: login refused: X-Forwarded-For names 127.0.0.1, "
+		"one of the request portal's addresses*whoever sent the header*"), ==, 1);
+	/* The same chain with the portal elsewhere, two proxies deep, and beyond
+	 * where the walk stops: an entry in front of the first address that is
+	 * not a proxy's is read too. */
+	g_assert_true(axis_web_auth_set_portal_peers(fx->auth, "198.51.100.20", &error));
+	g_assert_no_error(error);
+	reply = engine_login_from(fx, fx->people, "root", ADMIN_PASSWORD, chain);
+	assert_status(&reply, 401);
+	axis_test_reply_clear(&reply);
+	reply = engine_login_from(fx, fx->people, "root", ADMIN_PASSWORD, beyond);
+	assert_status(&reply, 401);
+	axis_test_reply_clear(&reply);
+	/* Reached over an IPv6 link-local address, the proxy writes its client
+	 * with a zone, which is no address to the walk: the client would be the
+	 * proxy itself.  Refused, and the zone's text is not in the log. */
+	axis_web_auth_set_time_offset(fx->auth, G_GINT64_CONSTANT(360) * G_USEC_PER_SEC);
+	reply = engine_login_from(fx, fx->people, "root", ADMIN_PASSWORD, link_local);
+	assert_status(&reply, 401);
+	assert_holds(reply.body, "The username or password is incorrect.");
+	axis_test_reply_clear(&reply);
+	g_assert_cmpuint(axis_password_verify_count(), ==, hashes);
+	g_assert_cmpuint(axis_test_log_count(G_LOG_LEVEL_MESSAGE, "*audit: login refused: it came from or by way of "
+		"fe80::9c2d:11ff:fe22:57e8, an IPv6 link-local address*"), ==, 1);
+	g_assert_cmpuint(axis_test_log_count(G_LOG_LEVEL_MESSAGE, "*eth1*"), ==, 0);
+	/* A chain that names neither: accepted. */
+	reply = engine_login_from(fx, fx->people, "root", ADMIN_PASSWORD, clean_chain);
+	assert_status(&reply, 303);
+	axis_test_reply_clear(&reply);
+	g_assert_true(axis_web_auth_set_portal_peers(fx->auth, PORTAL_ADDRESS, &error));
+	g_assert_no_error(error);
 
 	/* That overlap is an administrator's mistake, and is said: by the
 	 * function the daemon asks at start, under "Worth a look", and on the

@@ -50,6 +50,7 @@ state_free(gpointer data)
 
 	g_free(state->client_address);
 	g_free(state->peer_address);
+	g_free(state->forwarded_for);
 	g_free(state->forwarded_host);
 	g_free(state->username);
 	g_free(state->theme);
@@ -700,8 +701,11 @@ build_state(
 		forwarded_host, &state->client_address, &state->https, &state->forwarded_host);
 	/* Kept beside it for the one rule that asks both (the portal's addresses
 	 * at the login, axis-web-auth-portal.h): what a peer forwards cannot
-	 * take its own address away. */
+	 * take its own address away.  And the header as it arrived, whoever sent
+	 * it: that rule reads every address in it, not only the one the walk
+	 * above stopped at. */
 	state->peer_address = g_strdup(peer);
+	state->forwarded_for = g_strdup(forwarded_for);
 
 	/* Forwarding headers nobody is trusted to send: perhaps a proxy that
 	 * should be (axis-web-auth-device.c). */
