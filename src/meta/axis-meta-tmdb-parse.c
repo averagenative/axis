@@ -313,12 +313,16 @@ title_from(
 	media = axis_json_string(axis_json_member(node, "media_type"));
 	if (media != NULL && strcmp(media, kind == AXIS_META_KIND_FILM ? "movie" : "tv") != 0)
 		return NULL;
-	if (!detail && !adult && axis_json_get_boolean(axis_json_member(node, "adult"), &adult_flag) && adult_flag)
+	if (!axis_json_get_boolean(axis_json_member(node, "adult"), &adult_flag))
+		adult_flag = FALSE;
+	if (!detail && !adult && adult_flag)
 		return NULL;
 	id = id_member(node, "id");
 	if (id == NULL)
 		return NULL;
 	title = axis_meta_title_new(kind);
+	/* Kept with the record however the title came to be stored. */
+	title->adult = adult_flag;
 	title->provider = g_strdup(AXIS_META_TMDB_NAME);
 	title->provider_id = g_strdup(id);
 	title->detail = detail;

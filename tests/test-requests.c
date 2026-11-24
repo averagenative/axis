@@ -2367,12 +2367,168 @@ test_one_query_a_page(Fixture *fx, gconstpointer data)
 	}
 }
 
+/*
+ * A title its provider marks as adult (add-request-portal, before slice P2):
+ * the mark is stored with the record however the title came to be stored (here
+ * a lookup by its identifier, which no search's filter sees), and a person who
+ * is not an administrator cannot ask for it by its number: the answer is that
+ * of a title that does not exist.
+ */
+static void
+test_adult_title(Fixture *fx, gconstpointer data)
+{
+	gint64 annex = film(fx, AXIS_TEST_REQUESTS_ANNEX);
+	gint64 orchard = film(fx, AXIS_TEST_REQUESTS_ORCHARD);
+	g_autoptr(GError) marked = NULL;
+	g_autoptr(GError) unknown = NULL;
+	g_autoptr(GError) error = NULL;
+	AxisRequestMade made;
+
+	g_assert_cmpint(N("SELECT adult::integer FROM meta_title WHERE id = %" G_GINT64_FORMAT, annex), ==, 1);
+	g_assert_cmpint(N("SELECT adult::integer FROM meta_title WHERE id = %" G_GINT64_FORMAT, orchard), ==, 0);
+
+	g_assert_false(ask_movie(fx, fx->r->robin, annex, &made, &marked));
+	g_assert_error(marked, AXIS_REQUESTS_ERROR, AXIS_REQUESTS_ERROR_NOT_FOUND);
+	axis_request_made_clear(&made);
+	g_assert_false(ask_movie(fx, fx->r->robin, 987654, &made, &unknown));
+	g_assert_error(unknown, AXIS_REQUESTS_ERROR, AXIS_REQUESTS_ERROR_NOT_FOUND);
+	axis_request_made_clear(&made);
+	g_assert_cmpstr(marked->message, ==, unknown->message);
+	g_assert_cmpint(N("SELECT count(*) FROM request"), ==, 0);
+	g_assert_cmpint(N("SELECT count(*) FROM request_follower"), ==, 0);
+
+	/* Nor does the person follow an administrator's request for it. */
+	g_assert_true(ask_movie(fx, fx->r->admin, annex, &made, &error));
+	g_assert_no_error(error);
+	g_assert_cmpint(made.outcome, ==, AXIS_REQUEST_MADE);
+	axis_request_made_clear(&made);
+	g_clear_error(&marked);
+	g_assert_false(ask_movie(fx, fx->r->sam, annex, &made, &marked));
+	g_assert_error(marked, AXIS_REQUESTS_ERROR, AXIS_REQUESTS_ERROR_NOT_FOUND);
+	axis_request_made_clear(&made);
+	g_assert_cmpint(N("SELECT count(*) FROM request_follower"), ==, 0);
+
+	/* An answer that does not carry the mark does not clear it. */
+	{
+		g_autoptr(GBytes) body = g_bytes_new_static("{\"id\":\"" AXIS_TEST_REQUESTS_ANNEX "\",\"kind\":\"film\","
+			"\"title\":\"Velvet Annex\",\"year\":2014}", strlen("{\"id\":\"" AXIS_TEST_REQUESTS_ANNEX "\",\"kind\":\"film\","
+			"\"title\":\"Velvet Annex\",\"year\":2014}"));
+
+		axis_test_plex_route_full(fx->r->fa->api, "/title/film/" AXIS_TEST_REQUESTS_ANNEX, 200, "application/json", body,
+			NULL);
+		N("UPDATE meta_title SET detail_fetched_at = now() - interval '400 days', fetched_at = now() - interval '400 days'"
+			" WHERE id = %" G_GINT64_FORMAT " RETURNING id", annex);
+		g_assert_cmpint(film(fx, AXIS_TEST_REQUESTS_ANNEX), ==, annex);
+		g_assert_cmpint(N("SELECT (adult AND detail_fetched_at > now() - interval '1 day')::integer FROM meta_title"
+			" WHERE id = %" G_GINT64_FORMAT, annex), ==, 1);
+	}
+}
+
+/*
+ * Scenario: The portal's daily ceiling (the engine's half; the API's answer is
+ * in tests/test-portal-api.c).  What all requests made through the portal API
+ * count on one calendar day, whoever made them and whatever became of them: a
+ * movie one, a season one each.  A request made in the engine's interface is
+ * not counted and not refused.
+ */
+static void
+test_portal_ceiling(Fixture *fx, gconstpointer data)
+{
+	gint64 orchard = film(fx, AXIS_TEST_REQUESTS_ORCHARD);
+	gint64 ledger = film(fx, AXIS_TEST_REQUESTS_LEDGER);
+	gint64 kiln = film(fx, AXIS_TEST_REQUESTS_KILN);
+	gint64 bells = film(fx, AXIS_TEST_REQUESTS_BELLS);
+	gint64 harbour = series(fx, AXIS_TEST_REQUESTS_HARBOUR);
+	g_autoptr(GError) error = NULL;
+	AxisRequestMade made;
+	AxisRequestAsk ask;
+	gboolean handed = FALSE;
+
+	g_assert_true(axis_settings_set(fx->r->settings, AXIS_REQUESTS_SETTING_PORTAL_DAY, "3", &error));
+	g_assert_no_error(error);
+	memset(&ask, 0, sizeof(ask));
+	ask.portal = TRUE;
+	ask.kind = AXIS_REQUEST_MOVIE;
+
+	ask.user_id = fx->r->robin;
+	ask.title_id = orchard;
+	g_assert_true(axis_requests_ask(fx->r->requests, &ask, &made, &error));
+	g_assert_no_error(error);
+	g_assert_cmpint(N("SELECT count(*) FROM request WHERE via = 'portal'"), ==, 1);
+	/* Withdrawn: the person's quota has it back, the portal's day does not. */
+	g_assert_true(axis_requests_withdraw(fx->r->requests, made.public_id, fx->r->robin, &handed, &error));
+	g_assert_no_error(error);
+	axis_request_made_clear(&made);
+
+	/* Two seasons with two places left: made.  Three seasons would not be. */
+	ask.user_id = fx->r->sam;
+	ask.title_id = harbour;
+	ask.kind = AXIS_REQUEST_SERIES;
+	ask.seasons = AXIS_REQUEST_SEASONS_ALL;
+	g_assert_false(axis_requests_ask(fx->r->requests, &ask, &made, &error));
+	g_assert_error(error, AXIS_REQUESTS_ERROR, AXIS_REQUESTS_ERROR_PORTAL_FULL);
+	g_clear_error(&error);
+	axis_request_made_clear(&made);
+	g_assert_cmpint(N("SELECT count(*) FROM request WHERE kind = 'series'"), ==, 0);
+	{
+		static const gint two[] = { 1, 2 };
+
+		ask.seasons = AXIS_REQUEST_SEASONS_PICKED;
+		ask.picked = two;
+		ask.n_picked = 2;
+		g_assert_true(axis_requests_ask(fx->r->requests, &ask, &made, &error));
+		g_assert_no_error(error);
+		axis_request_made_clear(&made);
+	}
+
+	/* The day is full: another person, with quota left, is refused. */
+	ask.user_id = fx->r->robin;
+	ask.title_id = ledger;
+	ask.kind = AXIS_REQUEST_MOVIE;
+	ask.picked = NULL;
+	ask.n_picked = 0;
+	g_assert_cmpuint(quota_of(fx, fx->r->robin).movies.left, >, 0);
+	g_assert_false(axis_requests_ask(fx->r->requests, &ask, &made, &error));
+	g_assert_error(error, AXIS_REQUESTS_ERROR, AXIS_REQUESTS_ERROR_PORTAL_FULL);
+	g_clear_error(&error);
+	axis_request_made_clear(&made);
+	g_assert_cmpint(N("SELECT count(*) FROM request WHERE title_id = %" G_GINT64_FORMAT, ledger), ==, 0);
+
+	/* Following what is asked for already makes no row and is not refused. */
+	ask.title_id = harbour;
+	ask.kind = AXIS_REQUEST_SERIES;
+	ask.seasons = AXIS_REQUEST_SEASONS_FIRST;
+	g_assert_true(axis_requests_ask(fx->r->requests, &ask, &made, &error));
+	g_assert_no_error(error);
+	g_assert_cmpint(made.outcome, ==, AXIS_REQUEST_FOLLOWED);
+	axis_request_made_clear(&made);
+
+	/* In the engine's interface the same person asks as before. */
+	ask.portal = FALSE;
+	ask.title_id = kiln;
+	ask.kind = AXIS_REQUEST_MOVIE;
+	g_assert_true(axis_requests_ask(fx->r->requests, &ask, &made, &error));
+	g_assert_no_error(error);
+	g_assert_cmpint(N("SELECT count(*) FROM request WHERE via = 'web'"), ==, 1);
+	axis_request_made_clear(&made);
+
+	/* The next day the portal's count starts again. */
+	axis_requests_set_clock(fx->r->requests, AXIS_TEST_REQUESTS_NOW_US + G_TIME_SPAN_DAY);
+	ask.portal = TRUE;
+	ask.title_id = bells;
+	g_assert_true(axis_requests_ask(fx->r->requests, &ask, &made, &error));
+	g_assert_no_error(error);
+	axis_request_made_clear(&made);
+}
+
 int
 main(int argc, char **argv)
 {
 	g_test_init(&argc, &argv, NULL);
 
 	g_test_add_func("/requests/quota/window-bounds", test_window_bounds);
+	AXIS_TEST_ADD_DB_CASE("/requests/model/adult-title", Fixture, NULL, test_adult_title);
+	AXIS_TEST_ADD_DB_CASE("/requests/quota/portal-ceiling", Fixture, NULL, test_portal_ceiling);
 	AXIS_TEST_ADD_DB_CASE("/requests/model/movie", Fixture, NULL, test_movie);
 	AXIS_TEST_ADD_DB_CASE("/requests/model/whole-series-is-a-list", Fixture, NULL, test_seasons);
 	AXIS_TEST_ADD_DB_CASE("/requests/model/first-and-latest", Fixture, NULL, test_latest_and_specials);

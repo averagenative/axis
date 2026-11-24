@@ -145,6 +145,11 @@ axis_test_requests_new(void)
 	film_route(r, AXIS_TEST_REQUESTS_BELLS, "Quarry Bells", 2008);
 	film_route(r, AXIS_TEST_REQUESTS_COMPASS, "Tin Compass", 2021);
 	film_route(r, AXIS_TEST_REQUESTS_ALMANAC, "Low Tide Almanac", 2017);
+	/* One its provider marks as adult: no search of the tests returns it, and
+	 * a lookup by its identifier stores it with the mark. */
+	route(r, "/title/film/" AXIS_TEST_REQUESTS_ANNEX, "{\"id\":\"" AXIS_TEST_REQUESTS_ANNEX "\",\"kind\":\"film\","
+		"\"title\":\"Velvet Annex\",\"year\":2014,\"runtime\":90,\"status\":\"released\",\"release_date\":\"2014-03-01\","
+		"\"overview\":\"A made-up film.\",\"adult\":true}");
 	series_route(r, AXIS_TEST_REQUESTS_HARBOUR, "Harbour of Glass", 2020, 0, 3, 2);
 	series_route(r, AXIS_TEST_REQUESTS_WINTERS, "Nine Winters", 2012, 1, 9, 1);
 	series_route(r, AXIS_TEST_REQUESTS_CLOCKWORK, "Tidal Clockwork", 2018, 1, 2, 8);

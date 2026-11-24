@@ -303,7 +303,7 @@ merge(
 		"UPDATE meta_id_claim SET held_by = $1::bigint WHERE held_by = $2::bigint",
 		"UPDATE meta_title k SET viewed_at = CASE WHEN k.viewed_at IS NULL THEN o.viewed_at"
 		"   WHEN o.viewed_at IS NULL THEN k.viewed_at ELSE greatest(k.viewed_at, o.viewed_at) END,"
-		" created_at = least(k.created_at, o.created_at)"
+		" created_at = least(k.created_at, o.created_at), adult = k.adult OR o.adult"
 		" FROM meta_title o WHERE k.id = $1::bigint AND o.id = $2::bigint",
 		"UPDATE meta_search SET result_ids = array_replace(result_ids, $2::bigint, $1::bigint)"
 		" WHERE $2::bigint = ANY (result_ids)",
@@ -513,7 +513,9 @@ store_title_in_transaction(
 		g_ptr_array_add(params, title->provider_id);
 		g_ptr_array_add(params, (gpointer)(title->detail ? "true" : "false"));
 		g_ptr_array_add(params, regional);
-		/* A search's answer never takes a full record's year and dates: the
+		g_ptr_array_add(params, (gpointer)(title->adult ? "true" : "false"));
+		/* The adult mark is set by any answer that carries it and cleared by
+		 * none: a brief record need not say.  A search's answer never takes a full record's year and dates: the
 		 * full record's own release date (its first release) and its date in
 		 * the region stand, whatever date a search gives; the year of its
 		 * theatrical release in the region is a full record's alone. */
@@ -535,7 +537,8 @@ store_title_in_transaction(
 		        " backdrop_ref = coalesce($14, backdrop_ref),"
 		        " provider = $15, provider_id = $16, fetched_at = now(),"
 		        " detail_fetched_at = CASE WHEN $17::boolean THEN now() ELSE detail_fetched_at END,"
-		        " regional_year = CASE WHEN $17::boolean THEN $18::integer ELSE regional_year END"
+		        " regional_year = CASE WHEN $17::boolean THEN $18::integer ELSE regional_year END,"
+		        " adult = adult OR $19::boolean"
 		        " WHERE id = $1::bigint", params, NULL, error))
 			return FALSE;
 	}
@@ -726,7 +729,7 @@ axis_meta_store_title_from(
 	"id, kind, title, original_title, year, overview, runtime_minutes, status," \
 	" array_to_string(genres, E'\\x1f'), cardinality(genres), original_language, release_date::text," \
 	" first_air_date::text, last_air_date::text, poster_ref, backdrop_ref, provider, provider_id, " \
-	EPOCH_US("fetched_at") ", " EPOCH_US("detail_fetched_at") ", " EPOCH_US("viewed_at") ", coalesce(regional_year, 0)"
+	EPOCH_US("fetched_at") ", " EPOCH_US("detail_fetched_at") ", " EPOCH_US("viewed_at") ", coalesce(regional_year, 0), adult"
 
 static AxisMetaTitle *
 title_from_row(
@@ -767,6 +770,7 @@ title_from_row(
 	title->detail_fetched_us = result_int(result, row, 19);
 	title->viewed_us = result_int(result, row, 20);
 	title->regional_year = (gint)result_int(result, row, 21);
+	axis_db_result_get_boolean(result, row, 22, &title->adult);
 	title->detail = title->detail_fetched_us > 0;
 	return title;
 }

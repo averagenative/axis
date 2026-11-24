@@ -149,6 +149,11 @@ typedef struct
  *   provider with several episode orders: the sources of numbering it has
  *   (axis_meta_source_valid(), the provider's own, each once, at most
  *   %AXIS_META_MAX_SOURCES); %NULL when the answer does not say
+ * @adult: the provider marks the title as adult (an answer that says so; a
+ *   stored title: any answer about it ever said so).  A search leaves such a
+ *   title out unless the administrator asked for them; a title stored another
+ *   way keeps the mark, and a person who is not an administrator cannot ask
+ *   for it (requests/axis-requests.h)
  *
  * Text fields are cleaned (valid UTF-8, no control characters, cut to
  * their limits) or %NULL; numbers are 0 for unknown.
@@ -181,6 +186,7 @@ typedef struct
 	gint64          detail_fetched_us;
 	gint64          viewed_us;
 	GPtrArray      *sources;
+	gboolean        adult;
 } AxisMetaTitle;
 
 AxisMetaTitle *

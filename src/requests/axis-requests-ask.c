@@ -197,6 +197,8 @@ ask_locked(
 	AxisRequestQuota quota;
 	gboolean found = FALSE;
 	gboolean auto_on = FALSE;
+	gboolean adult = FALSE;
+	gboolean admin = FALSE;
 	gint64 root_id = 0;
 	gint64 profile_id = 0;
 	gint64 managed_id = 0;
@@ -212,7 +214,7 @@ ask_locked(
 		gboolean closed = FALSE;
 
 		if (!axis_db_conn_exec(conn, "SELECT t.kind, EXISTS (SELECT 1 FROM request_closed_title c"
-		        " WHERE c.title_id = t.id) FROM meta_title t WHERE t.id = $1::bigint", 1, params, &result, error))
+		        " WHERE c.title_id = t.id), t.adult FROM meta_title t WHERE t.id = $1::bigint", 1, params, &result, error))
 			return FALSE;
 		if (axis_db_result_get_n_rows(result) == 0)
 			return refuse(error, AXIS_REQUESTS_ERROR_NOT_FOUND, "there is no such title");
@@ -221,6 +223,7 @@ ask_locked(
 			return refuse(error, AXIS_REQUESTS_ERROR_INVALID, ask->kind == AXIS_REQUEST_SERIES ?
 				"the title is not a series" : "the title is not a movie");
 		axis_db_result_get_boolean(result, 0, 1, &closed);
+		axis_db_result_get_boolean(result, 0, 2, &adult);
 		if (closed)
 			return refuse(error, AXIS_REQUESTS_ERROR_CLOSED, "the title is closed to requests");
 	}
@@ -228,7 +231,6 @@ ask_locked(
 		g_autoptr(AxisDbResult) result = NULL;
 		const gchar *params[] = { user };
 		guint column = ask->kind == AXIS_REQUEST_SERIES ? 4 : 3;
-		gboolean admin = FALSE;
 		gint64 limit;
 
 		/* FOR SHARE: a disable of the account waits until this request is
@@ -243,6 +245,12 @@ ask_locked(
 		username = g_strdup(axis_db_result_get_text(result, 0, 0));
 		axis_db_result_get_boolean(result, 0, ask->kind == AXIS_REQUEST_SERIES ? 2 : 1, &auto_on);
 		axis_db_result_get_boolean(result, 0, 5, &admin);
+		/* A title its provider marks as adult is not one a person who is not
+		 * an administrator can ask for, however it came to be stored and
+		 * whatever the search's setting: the answer of a title that does not
+		 * exist, so that its number says nothing. */
+		if (adult && !admin)
+			return refuse(error, AXIS_REQUESTS_ERROR_NOT_FOUND, "there is no such title");
 		limit = axis_requests_setting_int(self, ask->kind == AXIS_REQUEST_SERIES ? AXIS_REQUESTS_SETTING_SEASONS :
 			AXIS_REQUESTS_SETTING_MOVIES, 5);
 		if (!axis_db_result_is_null(result, 0, column))
@@ -439,6 +447,37 @@ ask_locked(
 			g_set_error(error, AXIS_REQUESTS_ERROR, AXIS_REQUESTS_ERROR_TOO_MANY, "you made %d requests in the last 24 "
 				"hours, withdrawn ones included, and that is the most anyone may; ask again later",
 				AXIS_REQUESTS_MAX_A_DAY);
+			return FALSE;
+		}
+	}
+
+	/* Through the portal API: what all such requests count on this calendar
+	 * day, whoever made them and whatever became of them (a movie one, a
+	 * season one each).  One lock for all of them, taken last, so that two
+	 * people at the same moment cannot both take the last place. */
+	if (ask->portal) {
+		g_autoptr(GTimeZone) local = self->zone != NULL ? g_time_zone_ref(self->zone) : g_time_zone_new_local();
+		g_autoptr(AxisDbResult) result = NULL;
+		g_autofree gchar *from = NULL;
+		const gchar *params[1];
+		gint64 ceiling = axis_requests_setting_int(self, AXIS_REQUESTS_SETTING_PORTAL_DAY, AXIS_REQUESTS_PORTAL_A_DAY);
+		gint64 start = 0;
+		gint64 end = 0;
+		gint64 counted = 0;
+
+		axis_request_window_bounds(local, axis_requests_now(self), AXIS_REQUEST_WINDOW_DAY, &start, &end);
+		from = axis_requests_int_text(start);
+		params[0] = from;
+		if (!axis_db_conn_exec(conn, "SELECT pg_advisory_xact_lock(hashtext('axis.request.portal'), 0)", 0, NULL, NULL,
+		        error) ||
+		    !axis_db_conn_exec(conn, "SELECT coalesce(sum(CASE WHEN r.kind = 'movie' THEN 1 ELSE (SELECT count(*)"
+		        " FROM request_season s WHERE s.request_id = r.id) END), 0) FROM request r WHERE r.via = 'portal'"
+		        " AND r.created_at >= " AXIS_REQUESTS_TS(1), 1, params, &result, error))
+			return FALSE;
+		axis_db_result_get_int64(result, 0, 0, &counted);
+		if (counted + need > ceiling) {
+			g_set_error_literal(error, AXIS_REQUESTS_ERROR, AXIS_REQUESTS_ERROR_PORTAL_FULL,
+				"the portal's limit for today is reached; ask again tomorrow");
 			return FALSE;
 		}
 	}

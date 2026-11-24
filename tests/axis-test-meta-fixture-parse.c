@@ -147,6 +147,9 @@ title_from(
 	title->last_air_date = date_member(node, "last_air_date");
 	title->poster_ref = ref_member(node, "poster");
 	title->backdrop_ref = ref_member(node, "backdrop");
+	/* The provider's adult mark (the fixture provider filters nothing). */
+	if (!axis_json_get_boolean(axis_json_member(node, "adult"), &title->adult))
+		title->adult = FALSE;
 
 	ids = axis_json_member(node, "ids");
 	for (i = 0; i < axis_json_length(ids) && axis_json_type(ids) == AXIS_JSON_OBJECT; i++) {
