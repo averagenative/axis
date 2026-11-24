@@ -44,7 +44,7 @@
 # need on top: clang for the fuzz targets, ffmpeg and ffprobe for the tests
 # that make and read small media files, and strace for the test that watches
 # a worker's system calls.  The apt packages are not cached: installing them
-# takes about a minute.
+# takes half a minute, and a few minutes on a day when the mirror is slow.
 #
 # WHAT IS DIFFERENT FROM A DEVELOPER'S MACHINE, each for a stated reason:
 #   - Ubuntu refuses user namespaces to programs without an AppArmor profile.
@@ -113,8 +113,9 @@ jobs:
   check:
     name: make check
     runs-on: ubuntu-26.04
-    # About 40 minutes when it passes: 2 to compile, 20 for the tests, 18
-    # for the fuzz targets' compile.
+    # About 40 minutes when it passes: 2 to compile, 23 for the tests, 13
+    # for the fuzz targets' compile (measured; the compile varies by half
+    # between one runner and the next).
     timeout-minutes: 120
     permissions:
       contents: read      # check out the source
@@ -201,7 +202,7 @@ jobs:
   fuzz:
     name: make fuzz
     runs-on: ubuntu-26.04
-    # About 25 minutes when it passes: 18 to compile, 6 to run.
+    # 18 to 24 minutes when it passes: 11 to 18 to compile, 5 to run.
     timeout-minutes: 90
     permissions:
       contents: read      # check out the source

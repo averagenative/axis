@@ -15,11 +15,11 @@ The repository is public, so GitHub's standard runners cost nothing. Each gate c
 - Nothing is skipped silently. `make check` lists in the run's summary the tests that skipped themselves, with their reasons. A part of `make check-examples` that is skipped fails the job, because the workflow installs every prerequisite.
 - The README shows the workflow's result for `main` as a badge, and says how to run the same four commands before opening a pull request.
 - The image workflow is no longer the repository's only workflow. It still builds images and nothing else.
-- No change to the daemon, the worker, the Makefile or the tests.
+- No change to the daemon, the worker or the Makefile. One test is changed, `tests/test-web-jobs.c` (`/web-jobs/live/activity-indicator`): on a busy four-core runner it took an earlier message to the header for the one that follows a job's end.
 
 ## Impact
 
 - Capabilities: `deployment`.
-- Files: `.github/workflows/checks.yml` (new), `README.md`, `deploy/README.md`, `openspec/project.md`.
+- Files: `.github/workflows/checks.yml` (new), `README.md`, `deploy/README.md`, `openspec/project.md`, `tests/test-web-jobs.c`.
 - Behavior that differs: none in Axis. A push to `main` now starts a run of the checks; a green run for a commit is the sign that it can be deployed.
 - Not covered: the hardware encoder tests (`make check-hwenc`), the scale tests and the Jellyfin check stay outside the gates, on GitHub as elsewhere. The arm64 build is tested only by the image workflow, in its build stage.

@@ -7,7 +7,8 @@
 - [x] 1.3 Give the runner what a developer's machine has: user namespaces for the tests that mount a private tmpfs, a systemd session for the runner's user, and podman-compose as the Compose front end.
 - [x] 1.4 On a failure, print the end of the log again and keep the whole log as an artifact for seven days.
 - [x] 1.5 Name the tests that skipped themselves in the run's summary; fail `check-examples` when a part is skipped.
-- [x] 1.6 Mark the one place where `TEST_JOBS` and `FUZZ_JOBS` are set once the Makefile has them.
+- [x] 1.6 Set `TEST_JOBS` and `FUZZ_JOBS` in one marked place (4 and 4, the processors of a standard runner).
+- [x] 1.7 `tests/test-web-jobs.c`: wait for the message that follows the job's end, not for the first one that says 0 (it failed once on the runner).
 
 ## 2. Documents
 
