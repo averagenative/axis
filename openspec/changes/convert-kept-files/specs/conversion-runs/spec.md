@@ -77,6 +77,14 @@ A run made without the choice SHALL offer, on the row of the files left out as k
 - **WHEN** an episode left out as kept is added and its series is a unit of the list
 - **THEN** it is a file of that unit, after the episodes that were listed, and the unit's totals count it
 
+#### Scenario: The count on the switch to replacing originals
+- **WHEN** a run of trials is shown with the switch to replacing originals, and kept files were added to it as trials
+- **THEN** the form says how many originals the run replaces from now on within its caps and how many of them are files Axis keeps, and the request is refused, with the run unchanged, when the run holds more kept files than the count the form carried (read under the run's lock)
+
+#### Scenario: Kept files added to a run that waits for its profile to be proven
+- **WHEN** the add form is shown for a run paused until its profile is proven
+- **THEN** it says that the files are added as trials now and are replaced like the rest once the run is switched to replacing originals, which asks again with the numbers
+
 #### Scenario: Refused
 - **WHEN** the action is asked for a run that is running, being listed or cancelled, that has a file in flight, or that has the choice already
 - **THEN** it is refused and the run is unchanged

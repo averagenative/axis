@@ -66,5 +66,7 @@ ALTER TABLE conversion_run_entry
 		(confirmed_by IS NULL) = (confirmed_at IS NULL)
 		AND (confirmed_by IS NULL OR char_length(confirmed_by) BETWEEN 1 AND 200)) NOT VALID;
 
+ALTER TABLE conversion_run_entry VALIDATE CONSTRAINT conversion_run_entry_confirmed;
+
 ALTER TABLE conversion
 	ADD COLUMN convert_kept boolean NOT NULL DEFAULT false;

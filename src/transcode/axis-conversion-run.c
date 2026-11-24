@@ -982,6 +982,7 @@ axis_conversion_runs_replace(
 	AxisConversionRuns  *self,
 	gint64               run_id,
 	gboolean             confirmed,
+	gint64               kept_seen,
 	const gchar         *user,
 	GError             **error
 ){
@@ -1023,6 +1024,27 @@ axis_conversion_runs_replace(
 	if (why != NULL) {
 		refuse(error, "%s", why);
 		goto rollback;
+	}
+	if (kept_seen >= 0) {
+		/* The tick covers the files the person saw: files Axis keeps added
+		 * since the page was drawn are not among them. */
+		g_autoptr(AxisDbResult) counted = NULL;
+		const gchar *count_params[1];
+		gint64 kept_now;
+
+		count_params[0] = id;
+		if (!axis_db_conn_exec(conn, "SELECT count(*) FROM conversion_run_entry e JOIN conversion_run r ON r.id = e.run_id"
+		        " WHERE e.run_id = $1::bigint AND (e.state = 'waiting' OR (e.state = 'done' AND e.outcome = 'trial'))"
+		        " AND e.convert_kept AND (r.cap_unit IS NULL OR e.unit_position <= r.cap_unit)", 1, count_params, &counted,
+		        error))
+			goto rollback;
+		kept_now = int_at(counted, 0, 0);
+		if (kept_now > kept_seen) {
+			refuse(error, "Files Axis keeps were added to the run since this page was drawn (%" G_GINT64_FORMAT " now, %"
+				G_GINT64_FORMAT " shown). Nothing was changed: look at the run again and confirm again.", kept_now,
+				kept_seen);
+			goto rollback;
+		}
 	}
 	if (!other_running(conn, run_id, &other, error))
 		goto rollback;

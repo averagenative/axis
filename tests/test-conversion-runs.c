@@ -1357,11 +1357,11 @@ test_trials_then_replace(Fixture *fx, gconstpointer data)
 	g_assert_cmpint(N(fx, "SELECT count(*) FROM conversion WHERE run_id = %" G_GINT64_FORMAT, run), ==, 2);
 
 	/* Not without the revision proven. */
-	g_assert_false(axis_conversion_runs_replace(fx->runs, run, TRUE, "carol", &error));
+	g_assert_false(axis_conversion_runs_replace(fx->runs, run, TRUE, -1, "carol", &error));
 	g_assert_error(error, AXIS_CONVERSION_ERROR, AXIS_CONVERSION_ERROR_REFUSED);
 	g_clear_error(&error);
 	/* Nor without the box. */
-	g_assert_false(axis_conversion_runs_replace(fx->runs, run, FALSE, "carol", &error));
+	g_assert_false(axis_conversion_runs_replace(fx->runs, run, FALSE, -1, "carol", &error));
 	g_assert_error(error, AXIS_CONVERSION_ERROR, AXIS_CONVERSION_ERROR_REFUSED);
 	g_clear_error(&error);
 
@@ -1376,7 +1376,7 @@ test_trials_then_replace(Fixture *fx, gconstpointer data)
 	g_assert_no_error(error);
 
 	/* The same run, replacing: the trial files are asked for again. */
-	g_assert_true(axis_conversion_runs_replace(fx->runs, run, TRUE, "carol", &error));
+	g_assert_true(axis_conversion_runs_replace(fx->runs, run, TRUE, -1, "carol", &error));
 	g_assert_no_error(error);
 	assert_state(fx, run, "running");
 	g_assert_cmpint(N(fx, "SELECT count(*) FROM conversion_run_entry WHERE run_id = %" G_GINT64_FORMAT
@@ -1907,7 +1907,7 @@ test_link_after_stop(Fixture *fx, gconstpointer data)
 	/* Proven; the run replaces from now on, with the same list. */
 	sql(fx, "INSERT INTO conversion_profile_proof (revision_id, method) VALUES (%" G_GINT64_FORMAT ", 'canary')",
 		fx->space_saver);
-	g_assert_true(axis_conversion_runs_replace(fx->runs, run, TRUE, "alice", &error));
+	g_assert_true(axis_conversion_runs_replace(fx->runs, run, TRUE, -1, "alice", &error));
 	g_assert_no_error(error);
 	g_assert_cmpstr(Q(fx, "SELECT state FROM conversion_run_entry WHERE id = %" G_GINT64_FORMAT, entry), ==, "waiting");
 
@@ -2329,7 +2329,7 @@ test_kept_trials_then_replace(Fixture *fx, gconstpointer data)
 
 	sql(fx, "INSERT INTO conversion_profile_proof (revision_id, method) VALUES (%" G_GINT64_FORMAT ", 'canary')",
 		fx->space_saver);
-	g_assert_true(axis_conversion_runs_replace(fx->runs, run, TRUE, "carol", &error));
+	g_assert_true(axis_conversion_runs_replace(fx->runs, run, TRUE, -1, "carol", &error));
 	g_assert_no_error(error);
 	/* The choice, and who made it, are as they were: not the switch's. */
 	g_assert_cmpstr(Q(fx, "SELECT outcome || ' ' || convert_kept::text || ' ' || convert_kept_by || ' ' || confirmed_by"

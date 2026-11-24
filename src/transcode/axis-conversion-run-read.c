@@ -340,7 +340,11 @@ axis_conversion_runs_get(
 	        " (SELECT count(*) FROM (SELECT 1 FROM conversion_run_entry x WHERE x.run_id = $1::bigint GROUP BY x.unit_position"
 	        "   HAVING count(*) FILTER (WHERE x.state IN ('waiting', 'asked')) = 0"
 	        "   AND count(*) FILTER (WHERE x.state = 'done') > 0) d),"
-	        " count(*) FILTER (WHERE e.state = 'waiting' AND ($2::integer < 0 OR e.unit_position <= $2::integer))"
+	        " count(*) FILTER (WHERE e.state = 'waiting' AND ($2::integer < 0 OR e.unit_position <= $2::integer)),"
+	        " count(*) FILTER (WHERE (e.state = 'waiting' OR (e.state = 'done' AND e.outcome = 'trial'))"
+	        "   AND ($2::integer < 0 OR e.unit_position <= $2::integer)),"
+	        " count(*) FILTER (WHERE (e.state = 'waiting' OR (e.state = 'done' AND e.outcome = 'trial'))"
+	        "   AND e.convert_kept AND ($2::integer < 0 OR e.unit_position <= $2::integer))"
 	        " FROM conversion_run_entry e WHERE e.run_id = $1::bigint", 2, params, &entries, error))
 		return FALSE;
 	counts_from(info, entries, 0, 0);
@@ -350,6 +354,8 @@ axis_conversion_runs_get(
 	info->done_trials = int_at(entries, 0, 9);
 	info->units_done = int_at(entries, 0, 10);
 	info->waiting_in = int_at(entries, 0, 11);
+	info->replace_in = int_at(entries, 0, 12);
+	info->replace_kept_in = int_at(entries, 0, 13);
 
 	if (!exec(self, "SELECT count(*), coalesce(sum(u.files), 0), coalesce(sum(u.bytes), 0), coalesce(sum(u.mid), 0),"
 	        " count(*) FILTER (WHERE $2::integer < 0 OR u.position <= $2::integer),"

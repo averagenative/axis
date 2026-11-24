@@ -313,12 +313,17 @@ axis_conversion_runs_cancel(
  * converted as trials are asked for again as replacements (a trial's file
  * is never put in a library).  A run paused because its trials could prove
  * the revision runs again.
+ *
+ * @kept_seen: the number of files Axis keeps, among those the switch
+ *   replaces, that the person saw when ticking; the switch is refused when
+ *   the list holds more now (checked under the run's lock).  -1 skips the check.
  */
 gboolean
 axis_conversion_runs_replace(
 	AxisConversionRuns  *self,
 	gint64               run_id,
 	gboolean             confirmed,
+	gint64               kept_seen,
 	const gchar         *user,
 	GError             **error
 );
@@ -517,6 +522,11 @@ typedef struct
 	 * only). */
 	gint64     waiting;
 	gint64     waiting_in;
+	/* The files a switch to replacing originals would ask for within the
+	 * caps (those that wait and those converted as trials), and how many of
+	 * them are files Axis keeps (axis_conversion_runs_get() only). */
+	gint64     replace_in;
+	gint64     replace_kept_in;
 	gint64     asked;
 	gint64     done;
 	gint64     skipped;

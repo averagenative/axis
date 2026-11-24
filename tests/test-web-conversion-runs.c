@@ -1860,7 +1860,9 @@ test_kept_replacing(Fixture *fx, gconstpointer data)
 	assert_contains(reply.body, "I understand: the originals will be deleted");
 	assert_contains(reply.body, "name=\"confirm\"");
 	assert_contains(reply.body, "Add these 2 files to the run");
-	assert_contains(reply.body, "Resume the run, replacing up to 0 originals");
+	/* Nothing waits within its caps: the plain label, no figure of zero. */
+	assert_lacks(reply.body, "replacing up to");
+	assert_contains(reply.body, "Resume the run");
 	assert_lacks(reply.body, "They are added as trials");
 	axis_test_reply_clear(&reply);
 
@@ -1911,6 +1913,8 @@ test_kept_replacing(Fixture *fx, gconstpointer data)
 	g_assert_cmpint(N(fx, "SELECT count(*) FROM conversion_run_entry WHERE run_id = %" G_GINT64_FORMAT
 		" AND state = 'asked'", trials), ==, 0);
 	trials_path = g_strdup_printf("/conversions/runs/%" G_GINT64_FORMAT, trials);
+	sql(fx, "UPDATE conversion_run SET pause_code = 'person', pause_text = 'Paused in a test.' WHERE id = %" G_GINT64_FORMAT,
+		trials);
 	reply = page(fx, trials_path, "run-kept-trials");
 	assert_contains(reply.body, "They are added as trials: each is converted and checked, and the converted file is kept "
 		"aside to be played. The library is not touched. The run waits, paused, until you resume it.");
@@ -1918,6 +1922,62 @@ test_kept_replacing(Fixture *fx, gconstpointer data)
 	assert_lacks(reply.body, "This run replaces originals");
 	assert_lacks(reply.body, "replacing up to");
 	axis_test_reply_clear(&reply);
+
+	/* The same run, paused for its profile to be proven: the add form says
+	 * that the files are trials now and are replaced like the rest after the
+	 * switch, which asks again. */
+	sql(fx, "UPDATE conversion_run SET pause_code = 'proven' WHERE id = %" G_GINT64_FORMAT, trials);
+	reply = page(fx, trials_path, "run-kept-trials-proven");
+	assert_contains(reply.body, "They are added as trials now");
+	assert_contains(reply.body, "for its profile to be proven");
+	assert_contains(reply.body, "these files are replaced like the rest, and that form asks again, with the numbers.");
+	assert_lacks(reply.body, "The library is not touched. The run waits, paused, until you resume it.");
+	/* No kept file in the list yet: the switch form says so. */
+	assert_contains(reply.body, "0 of them files Axis keeps");
+	axis_test_reply_clear(&reply);
+
+	/* Add them (as trials, no tick), then look at the switch again. */
+	g_free(action);
+	action = g_strdup_printf("%s/include-kept", trials_path);
+	reply = post_as(fx, fx->admin, action, "");
+	g_assert_cmpuint(reply.status, ==, 303);
+	axis_test_reply_clear(&reply);
+	list(fx, trials);
+	g_assert_cmpint(N(fx, "SELECT count(*) FROM conversion_run_entry WHERE run_id = %" G_GINT64_FORMAT
+		" AND convert_kept", trials), ==, 2);
+	sql(fx, "UPDATE conversion_run SET pause_code = 'person', pause_text = 'Paused in a test.' WHERE id = %" G_GINT64_FORMAT,
+		trials);
+	{
+		g_autofree gchar *count = g_strdup_printf("This run will replace up to %" G_GINT64_FORMAT " originals, 2 of them "
+			"files Axis keeps, each once every check of its converted file passes. A replaced original cannot be brought "
+			"back.", N(fx, "SELECT count(*) FROM conversion_run_entry WHERE run_id = %" G_GINT64_FORMAT
+			" AND (state = 'waiting' OR (state = 'done' AND outcome = 'trial'))", trials));
+
+		reply = page(fx, trials_path, "run-kept-trials-switch");
+		assert_contains(reply.body, count);
+		assert_contains(reply.body, "name=\"kept_seen\"");
+		axis_test_reply_clear(&reply);
+	}
+
+	/* A tick given on a page that showed fewer kept files (or none) is
+	 * refused, and the run stays as it was. */
+	g_free(action);
+	action = g_strdup_printf("%s/replace", trials_path);
+	reply = post_as(fx, fx->admin, action, "confirm=yes&kept_seen=1");
+	g_assert_cmpuint(reply.status, ==, 409);
+	assert_contains(reply.body, "were added to the run since this page was drawn");
+	axis_test_reply_clear(&reply);
+	reply = post_as(fx, fx->admin, action, "confirm=yes");
+	g_assert_cmpuint(reply.status, ==, 409);
+	axis_test_reply_clear(&reply);
+	g_assert_cmpstr(Q(fx, "SELECT state || ' ' || outcome FROM conversion_run WHERE id = %" G_GINT64_FORMAT, trials), ==,
+		"paused trial");
+
+	/* With the count the person saw, it switches. */
+	reply = post_as(fx, fx->admin, action, "confirm=yes&kept_seen=2");
+	g_assert_cmpuint(reply.status, ==, 303);
+	axis_test_reply_clear(&reply);
+	g_assert_cmpstr(Q(fx, "SELECT outcome FROM conversion_run WHERE id = %" G_GINT64_FORMAT, trials), ==, "replace");
 }
 
 int

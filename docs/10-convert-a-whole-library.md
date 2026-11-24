@@ -112,7 +112,11 @@ You need:
     replacing, after you proved the version, select **Replace originals
     from now on**. The files converted as trials are converted again as
     replacements. The run keeps its choice about kept files when you switch
-    it.
+    it. The form says how many originals the run replaces from now on, and
+    how many of them are files that Axis keeps, including kept files you
+    added as trials. If someone adds kept files after you load the page,
+    Axis refuses your tick and changes nothing, so reload the page and
+    confirm again.
 
 ## Convert files that Axis keeps
 

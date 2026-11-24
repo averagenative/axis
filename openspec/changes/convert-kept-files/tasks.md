@@ -52,6 +52,8 @@
 - [x] 7.5 The progress block answers a conversion that is gone with a block that asks for nothing more; a fraction past the end is the end; speed and time left guarded; the source's duration is read for conversions in flight only.
 - [x] 7.6 Tests: the claim, check 10 and the placement with the choice without an encoder (`/conversion-runs/kept/claim-check-place`); a file kept after listing (`/conversion-runs/kept/after-listing`); adding to a replacing run, with and without the tick (`/conversion-runs/kept/added-to-replacing`, `/web/conversion-runs/kept-replacing`); beyond the cap (`/conversion-runs/kept/added-beyond-cap`); the failed addition (`/conversion-runs/kept/add-fails`); pinned, remembered and in flight (`/conversion-runs/kept/other-reasons`); the figures at their edges (`/web/conversion-runs/progress-figures`).
 
+- [x] 7.7 The switch to replacing originals says how many originals the run replaces from now on and how many of them are files Axis keeps, and refuses (409, nothing changed) when the run holds more kept files than the form showed; the add form of a run that waits for its profile to be proven says that the files are replaced after the switch, which asks again; a paused replacing run with nothing waiting resumes with the plain label (`/web/conversion-runs/kept-replacing`).
+
 ## 8. Not done here
 
 - [ ] 8.1 A kept file converted in a real library, and the bars looked at in a browser in every theme.

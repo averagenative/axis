@@ -1266,7 +1266,7 @@ controls_card(
 
 		if (running) {
 			ADD(card, small_post(request, pause, "Pause the run", NULL));
-		} else if (g_strcmp0(info->outcome, "replace") == 0) {
+		} else if (g_strcmp0(info->outcome, "replace") == 0 && info->waiting_in > 0) {
 			/* What resuming does to the library, in numbers: the files that
 			 * wait within its caps, each replaced once every check passes. */
 			g_autofree gchar *label = g_strdup_printf("Resume the run, replacing up to %" G_GINT64_FORMAT " original%s",
@@ -1285,9 +1285,16 @@ controls_card(
 	if ((ready || running || paused) && g_strcmp0(info->outcome, "trial") == 0 && may_replace && !ready) {
 		g_autofree gchar *action = g_strdup_printf("%s/replace", base);
 		HtmxNode *form = axis_web_auth_post_form(request, action);
+		g_autofree gchar *count = g_strdup_printf("This run will replace up to %" G_GINT64_FORMAT " original%s, %"
+			G_GINT64_FORMAT " of them %s Axis keeps, each once every check of its converted file passes. A replaced "
+			"original cannot be brought back.", info->replace_in, info->replace_in == 1 ? "" : "s",
+			info->replace_kept_in, info->replace_kept_in == 1 ? "a file" : "files");
+		g_autofree gchar *seen = g_strdup_printf("%" G_GINT64_FORMAT, info->replace_kept_in);
 
 		ADD(form, axis_web_storage_text("help", "The version is proven: the run can replace originals from now on, with "
 			"the same list. The files it converted as trials are converted again as replacements."));
+		ADD(form, axis_web_storage_text("notice notice-warning", count));
+		ADD(form, axis_web_auth_hidden("kept_seen", seen));
 		replace_confirmation(form, conversions);
 		ADD(form, axis_web_auth_button("Replace originals from now on", "button-danger"));
 		ADD(card, form);
@@ -1453,11 +1460,21 @@ include_kept_form(
 		replace_confirmation(form, axis_conversion_runs_get_conversions(self->runs));
 		ADD(form, axis_web_auth_button(label, "button-small button-danger"));
 	} else {
-		ADD(form, axis_web_storage_text("help", g_strcmp0(info->state, "ready") == 0 ?
-			"They join the list. Nothing is converted until you start the run: with trials, or replacing originals "
-			"once you confirm that for every file of the list. They stay kept." :
-			"They are added as trials: each is converted and checked, and the converted file is kept aside to be "
-			"played. The library is not touched. The run waits, paused, until you resume it."));
+		gboolean for_proof = g_strcmp0(info->state, "paused") == 0 && (g_strcmp0(info->pause_code, "prove") == 0 ||
+			g_strcmp0(info->pause_code, "proven") == 0);
+		const gchar *help;
+
+		if (g_strcmp0(info->state, "ready") == 0)
+			help = "They join the list. Nothing is converted until you start the run: with trials, or replacing "
+				"originals once you confirm that for every file of the list. They stay kept.";
+		else if (for_proof)
+			help = "They are added as trials now: each is converted and checked, and the converted file is kept aside "
+				"to be played. The run waits, paused, for its profile to be proven. When you then switch the run to "
+				"replacing originals, these files are replaced like the rest, and that form asks again, with the numbers.";
+		else
+			help = "They are added as trials: each is converted and checked, and the converted file is kept aside to be "
+				"played. The library is not touched. The run waits, paused, until you resume it.";
+		ADD(form, axis_web_storage_text("help", help));
 		ADD(form, axis_web_auth_button(label, "button-small"));
 	}
 	ADD(box, form);
@@ -2046,6 +2063,7 @@ typedef struct
 	gint                     after;	/* the page of the list to go back to */
 	AxisConversionOutcome    outcome;
 	gboolean                 confirmed;
+	gint64                   kept_seen;	/* the files Axis keeps the page showed (a switch to replacing) */
 	AxisConversionRunLimits  limits;
 	gchar                   *user;
 	GError                  *error;
@@ -2082,7 +2100,7 @@ act_run(
 		axis_conversion_runs_cancel(self->runs, work->id, work->user, &work->error);
 		break;
 	case ACT_REPLACE:
-		axis_conversion_runs_replace(self->runs, work->id, work->confirmed, work->user, &work->error);
+		axis_conversion_runs_replace(self->runs, work->id, work->confirmed, work->kept_seen, work->user, &work->error);
 		break;
 	case ACT_LIMITS:
 		axis_conversion_runs_set_limits(self->runs, work->id, &work->limits, work->user, &work->error);
@@ -2210,6 +2228,13 @@ act(
 		act_work_free(work);
 		return axis_web_error_respond(request, 400, "Not done", "Replacing originals deletes them: tick the box to "
 			"confirm.");
+	}
+	if (what == ACT_REPLACE) {
+		guint64 seen = 0;
+
+		/* A form without the count covers none of the files Axis keeps. */
+		if (axis_web_storage_form_u64(request, "kept_seen", &seen) && seen <= G_MAXINT32)
+			work->kept_seen = (gint64)seen;
 	}
 	if (what == ACT_LIMITS) {
 		gint64 at_once = 0;
