@@ -18,12 +18,37 @@
 #include <htmx-glib.h>
 #include <libsoup/soup.h>
 #include <signal.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "axis-portal-app.h"
 #include "axis-portal-config.h"
 #include "axis-version.h"
 #include "core/axis-log.h"
+
+#define TOKEN_VARIABLE "AXIS_PORTAL_TOKEN"
+
+/* Once the configuration is read, a token given in the environment is in
+ * the configuration only.  The copy @envp is overwritten; so is the
+ * process's own environment, whose bytes /proc/<pid>/environ shows to the
+ * user's other processes and which unsetenv() alone leaves there; then the
+ * variable is taken out.  (Before any thread is started: nothing else reads
+ * the environment then.) */
+static void
+forget_token_in_environment(gchar **envp)
+{
+	gchar *value = getenv(TOKEN_VARIABLE);
+	guint i;
+
+	for (i = 0; envp != NULL && envp[i] != NULL; i++) {
+		if (g_str_has_prefix(envp[i], TOKEN_VARIABLE "="))
+			memset(envp[i] + strlen(TOKEN_VARIABLE "="), 0, strlen(envp[i] + strlen(TOKEN_VARIABLE "=")));
+	}
+	if (value != NULL) {
+		memset(value, 0, strlen(value));
+		g_unsetenv(TOKEN_VARIABLE);
+	}
+}
 
 static gboolean
 on_signal(gpointer user_data)
@@ -32,18 +57,35 @@ on_signal(gpointer user_data)
 	return G_SOURCE_CONTINUE;
 }
 
-/* Asks the portal on this machine for its probe: 0 when it answers. */
+/* Asks the portal on this machine for its probe: 0 when it answers.  The
+ * portal answers it only to this machine itself, so the probe is asked at a
+ * loopback address: the one the portal listens on, or the loopback address
+ * of the family when it listens on all of them. */
 static int
 healthcheck(const AxisPortalConfig *config)
 {
 	g_autoptr(SoupSession) session = soup_session_new_with_options("proxy-resolver", (GProxyResolver *)NULL,
 		"timeout", 5u, NULL);
-	g_autofree gchar *url = g_strdup_printf("http://%s:%u/healthz",
-		strchr(config->listen_host, ':') != NULL ? "[::1]" : "127.0.0.1", (guint)config->listen_port);
-	g_autoptr(SoupMessage) message = soup_message_new(SOUP_METHOD_GET, url);
+	g_autoptr(GInetAddress) bound = g_inet_address_new_from_string(config->listen_host);
+	g_autofree gchar *host = NULL;
+	g_autofree gchar *url = NULL;
+	g_autoptr(SoupMessage) message = NULL;
 	g_autoptr(GError) error = NULL;
 	g_autoptr(GBytes) body = NULL;
+	gboolean six = bound != NULL && g_inet_address_get_family(bound) == G_SOCKET_FAMILY_IPV6;
 
+	if (bound != NULL && g_inet_address_get_is_loopback(bound)) {
+		host = six ? g_strdup_printf("[%s]", config->listen_host) : g_strdup(config->listen_host);
+	} else if (bound != NULL && g_inet_address_get_is_any(bound)) {
+		host = g_strdup(six ? "[::1]" : "127.0.0.1");
+	} else {
+		g_printerr("axis-portal: --healthcheck asks the portal at a loopback address, and web_listen_host is %s, "
+			"which is neither a loopback address nor all addresses (0.0.0.0 or ::): the portal answers its probe to "
+			"this machine itself only\n", config->listen_host);
+		return 1;
+	}
+	url = g_strdup_printf("http://%s:%u/healthz", host, (guint)config->listen_port);
+	message = soup_message_new(SOUP_METHOD_GET, url);
 	if (message == NULL)
 		return 1;
 	soup_message_add_flags(message, SOUP_MESSAGE_NO_REDIRECT);
@@ -79,6 +121,9 @@ run(const AxisPortalConfig *config)
 	if (config->insecure_browser_http)
 		g_warning("insecure_browser_http is set: logins are served over plain http and the cookies are not Secure. "
 			"This is for tests only.");
+	if (config->token_file_readable_by_all)
+		g_warning("the token file can be read by every user of this machine: let only the portal's own user read it "
+			"(chmod 600, or defaultMode 0400 for a Kubernetes secret)");
 	if (!config->https && !config->loopback)
 		g_warning("the daemon's address is plain http to %s, which is not this machine: the portal's token, and "
 			"every password and session that passes through, cross that network unencrypted (allow_insecure_http is "
@@ -149,6 +194,7 @@ main(int argc, char **argv)
 
 	envp = g_get_environ();
 	config = axis_portal_config_load(config_path, envp, !check_health, &error);
+	forget_token_in_environment(envp);
 	if (config == NULL) {
 		g_printerr("axis-portal: %s\n", error->message);
 		return 1;

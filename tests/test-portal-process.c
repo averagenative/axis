@@ -74,6 +74,7 @@ typedef struct
 	guint16      port;		/* the portal's pages */
 	gchar       *token;
 	gchar       *token_file;
+	gboolean     token_in_env;	/* start_portal() gives the token in AXIS_PORTAL_TOKEN */
 	gint64       root;
 	gint64       robin;
 	gint64       sam;
@@ -386,8 +387,8 @@ start_portal(
 
 	env[n++] = "AXIS_PORTAL_URL";
 	env[n++] = url;
-	env[n++] = "AXIS_PORTAL_TOKEN_FILE";
-	env[n++] = fx->token_file;
+	env[n++] = fx->token_in_env ? "AXIS_PORTAL_TOKEN" : "AXIS_PORTAL_TOKEN_FILE";
+	env[n++] = fx->token_in_env ? fx->token : fx->token_file;
 	env[n++] = "AXIS_PORTAL_WEB_LISTEN_PORT";
 	env[n++] = port;
 	env[n++] = "AXIS_PORTAL_TRUSTED_PROXIES";
@@ -898,8 +899,73 @@ test_refuses_to_start(Fixture *fx, gconstpointer data)
 	assert_has(err, "the token is never given on the command line");
 	assert_lacks(err, fx->token);
 	g_clear_pointer(&err, g_free);
+
+	/* Found by the review of P3 (M8): --healthcheck asked 127.0.0.1
+	 * whatever the listener was bound to.  A listener on one address that is
+	 * not loopback cannot answer it, and it says so. */
+	env[0] = "AXIS_PORTAL_WEB_LISTEN_HOST";
+	env[1] = "192.0.2.10";
+	env[2] = NULL;
+	g_assert_cmpint(run_portal(fx, env, "--healthcheck", NULL, &err), ==, 1);
+	assert_has(err, "web_listen_host is 192.0.2.10, which is neither a loopback address nor all addresses");
+	g_clear_pointer(&err, g_free);
+	/* (M10) Nor does the test-only override start on such a listener. */
+	env[2] = "AXIS_PORTAL_INSECURE_BROWSER_HTTP";
+	env[3] = "true";
+	env[4] = NULL;
+	g_assert_cmpint(run_portal(fx, env, "--healthcheck", NULL, &err), ==, 1);
+	assert_has(err, "is for tests only and is refused unless web_listen_host is a loopback address");
+	g_clear_pointer(&err, g_free);
 	/* A token the daemon did not give is found out at the first page, not
 	 * at start: the portal starts, and its pages are the plain one. */
+}
+
+/* Found by the review of P3 (M9): a token file that every user could read
+ * was taken in silence, and a token given in the environment stayed in the
+ * process's environment for as long as it ran, where the user's other
+ * processes can read it (/proc/<pid>/environ).  The first is said at start;
+ * the second is overwritten and taken out once read. */
+static void
+test_token_out_of_sight(Fixture *fx, gconstpointer data)
+{
+	g_autofree gchar *log = NULL;
+	g_autofree gchar *path = NULL;
+	g_autofree gchar *environ_text = NULL;
+	const gchar *pid;
+	gsize length = 0;
+	Browser robin;
+
+	if (fx->db == NULL)
+		return;
+	g_assert_cmpint(g_chmod(fx->token_file, 0644), ==, 0);
+	start_portal(fx, NULL, NULL);
+	g_assert_cmpint(stop(&fx->portal), ==, 0);
+	log = read_log(fx->portal_log);
+	assert_has(log, "the token file can be read by every user of this machine");
+	g_clear_pointer(&log, g_free);
+	g_assert_cmpint(g_chmod(fx->token_file, 0600), ==, 0);
+	start_portal(fx, NULL, NULL);
+	g_assert_cmpint(stop(&fx->portal), ==, 0);
+	log = read_log(fx->portal_log);
+	assert_lacks(log, "can be read by every user");
+	g_clear_pointer(&log, g_free);
+
+	fx->token_in_env = TRUE;
+	start_portal(fx, NULL, NULL);
+	pid = g_subprocess_get_identifier(fx->portal);
+	g_assert_nonnull(pid);
+	path = g_strdup_printf("/proc/%s/environ", pid);
+	g_assert_true(g_file_get_contents(path, &environ_text, &length, NULL));
+	/* (What was read is the portal's environment, and the token is not in
+	 * it.) */
+	g_assert_nonnull(memmem(environ_text, length, "AXIS_PORTAL_URL=http://127.0.0.1:",
+		strlen("AXIS_PORTAL_URL=http://127.0.0.1:")));
+	g_assert_null(memmem(environ_text, length, fx->token, strlen(fx->token)));
+	/* The portal has it where it needs it. */
+	g_assert_cmpuint(portal_login(fx, "robin", ROBIN_PASSWORD, OUTSIDE, NULL, &robin), ==, 303);
+	browser_clear(&robin);
+	g_assert_cmpint(stop(&fx->portal), ==, 0);
+	fx->token_in_env = FALSE;
 }
 
 /* Spec (portal): Disabled while logged in -- the requester's next request,
@@ -1100,11 +1166,16 @@ test_nothing_writable(Fixture *fx, gconstpointer data)
 	 * kernel has Landlock, the process is denied every write to every file
 	 * system (the test's own strictest stand-in for a read-only root with
 	 * no volume and no tmpfs). */
+	/* Found by the review of P3 (M15): without Landlock this passed on a
+	 * directory of mode 0555 alone, which root (an image build) can write
+	 * to.  Without Landlock it is skipped, and says so. */
+	rules.abi = landlock_abi();
+	if (rules.abi == 0) {
+		g_test_skip("no Landlock in this kernel: nothing here can deny the portal every write");
+		return;
+	}
 	nowhere = g_build_filename(fx->scratch, "nowhere", NULL);
 	g_assert_cmpint(g_mkdir(nowhere, 0555), ==, 0);
-	rules.abi = landlock_abi();
-	if (rules.abi == 0)
-		g_test_message("no Landlock here: the portal runs in a directory that cannot be written to, and no more");
 	start_portal(fx, &rules, nowhere);
 
 	g_assert_cmpuint(portal_login(fx, "robin", ROBIN_PASSWORD, OUTSIDE, NULL, &robin), ==, 303);
@@ -1170,6 +1241,8 @@ main(int argc, char **argv)
 
 	g_test_add("/portal/process/restart", Fixture, NULL, fixture_setup, test_restart, fixture_teardown);
 	g_test_add("/portal/process/refuses-to-start", Fixture, NULL, fixture_setup, test_refuses_to_start,
+		fixture_teardown);
+	g_test_add("/portal/process/token-out-of-sight", Fixture, NULL, fixture_setup, test_token_out_of_sight,
 		fixture_teardown);
 	g_test_add("/portal/process/disabled-while-logged-in", Fixture, NULL, fixture_setup, test_account_changes,
 		fixture_teardown);

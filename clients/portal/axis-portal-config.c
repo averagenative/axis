@@ -585,6 +585,9 @@ load_token(
 			close(fd);
 			return fail(error, "the token file %s is not a regular file", file);
 		}
+		/* A mounted secret is often readable by all: said at start, not
+		 * refused. */
+		config->token_file_readable_by_all = (st.st_mode & S_IROTH) != 0;
 		length = 0;
 		while (length < sizeof(buffer) - 1 && (n = read(fd, buffer + length, sizeof(buffer) - 1 - length)) > 0)
 			length += (gsize)n;
@@ -685,6 +688,13 @@ axis_portal_config_load(
 		goto out;
 	}
 	config->listen_host = g_strdup(text != NULL ? text : "127.0.0.1");
+	/* The test-only override turns the cookies' Secure and __Host- off: not
+	 * on a listener that anything but this machine can reach. */
+	if (config->insecure_browser_http && !host_is_loopback(config->listen_host)) {
+		fail(error, "%s is for tests only and is refused unless web_listen_host is a loopback address (it is %s)",
+			raw_from(&raw, "insecure_browser_http"), config->listen_host);
+		goto out;
+	}
 	text = raw_get(&raw, "trusted_proxies");
 	if (text != NULL) {
 		g_autoptr(GError) local = NULL;

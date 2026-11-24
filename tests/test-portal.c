@@ -890,6 +890,50 @@ test_config_plain_http(void)
 	g_clear_error(&error);
 	g_assert_null(load("[portal]\nurl = http://zzuser:zzpass@127.0.0.1:7801\n" TOKEN_LINE, NULL, NULL, &error));
 	assert_has(error->message, "no user name, password");
+
+	/* Found by the review of P3 (M10): the test-only override, which turns
+	 * the cookies' Secure off, is refused on a listener that anything but
+	 * this machine can reach. */
+	{
+		static const gchar *const open[] = {
+			"AXIS_PORTAL_INSECURE_BROWSER_HTTP", "true", "AXIS_PORTAL_WEB_LISTEN_HOST", "0.0.0.0", NULL
+		};
+		static const gchar *const here[] = {
+			"AXIS_PORTAL_INSECURE_BROWSER_HTTP", "true", "AXIS_PORTAL_WEB_LISTEN_HOST", "::1", NULL
+		};
+
+		g_clear_error(&error);
+		g_assert_null(load_env(open, &error));
+		assert_has(error->message, "AXIS_PORTAL_INSECURE_BROWSER_HTTP is for tests only");
+		assert_has(error->message, "0.0.0.0");
+		g_clear_error(&error);
+		config = load_env(here, &error);
+		g_assert_no_error(error);
+		g_assert_true(config->insecure_browser_http);
+		g_clear_pointer(&config, axis_portal_config_free);
+	}
+	/* (M9) A token file that every user may read is said at start. */
+	{
+		g_autofree gchar *path = NULL;
+		g_autofree gchar *text = NULL;
+		gint fd = g_file_open_tmp("axis-portal-test-XXXXXX.token", &path, NULL);
+
+		g_assert_cmpint(fd, >=, 0);
+		g_close(fd, NULL);
+		g_assert_true(g_file_set_contents(path, "zzPortalToken" "AAAAAAAAAA" "AAAAAAAAAA" "AAAAAAAAAA\n", -1, NULL));
+		text = g_strdup_printf("[portal]\nurl = http://127.0.0.1:7801\ntoken_file = %s\n", path);
+		g_assert_cmpint(g_chmod(path, 0644), ==, 0);
+		config = load(text, NULL, NULL, &error);
+		g_assert_no_error(error);
+		g_assert_true(config->token_file_readable_by_all);
+		g_clear_pointer(&config, axis_portal_config_free);
+		g_assert_cmpint(g_chmod(path, 0600), ==, 0);
+		config = load(text, NULL, NULL, &error);
+		g_assert_no_error(error);
+		g_assert_false(config->token_file_readable_by_all);
+		g_clear_pointer(&config, axis_portal_config_free);
+		g_unlink(path);
+	}
 }
 
 /* ── The messages ───────────────────────────────────────────────── */
