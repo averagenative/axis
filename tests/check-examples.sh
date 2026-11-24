@@ -1175,7 +1175,7 @@ part_worker() {
 		worker_config "$dir" "$proj" "$work/worker-vaapi.out" \
 			"worker: compose config accepts compose.yaml with the VA-API lines"
 		check "worker: with them it passes the render node and the group, and no NVIDIA GPU" \
-			sh -c "grep -q '/dev/dri/renderD128:/dev/dri/renderD128' '$work/worker-vaapi.out' && grep -q '105' '$work/worker-vaapi.out' && ! grep -qi 'nvidia' '$work/worker-vaapi.out'"
+			sh -c "grep -q '/dev/dri/renderD128:/dev/dri/renderD128' '$work/worker-vaapi.out' && grep -A2 'group_add' '$work/worker-vaapi.out' | grep -q '105' && ! grep -qi 'nvidia' '$work/worker-vaapi.out'"
 
 		# ENCODER, for the CPU only: those lines commented out again.
 		edit "$dir/compose.yaml" \

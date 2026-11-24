@@ -84,10 +84,14 @@ that user can read:
 
 ```sh
 mkdir -p ~/.config/axis-worker
-umask 077
-cat > ~/.config/axis-worker/token     # paste the token, Enter, then Ctrl-D
-chmod 600 ~/.config/axis-worker/token
+install -m 600 /dev/null ~/.config/axis-worker/token
+# the next command reads the token: paste it, Enter, then Ctrl-D
+( umask 077; cat > ~/.config/axis-worker/token )
 ```
+
+The block is safe to paste whole: the file has its mode before anything
+reads into it, the command that reads is the last line, and your shell's own
+`umask` is not changed.
 
 Never put the token on a command line or in an environment variable: every
 user of the machine can read those. The worker reads it from the file
@@ -135,7 +139,7 @@ makes everything the desktop writes Axis's, whatever user writes it), and
 mount it:
 
 ```sh
-sudo mount -t nfs4 -o rw,hard server.example.org:/srv/disk1 /mnt/server/disk1
+sudo mount -t nfs4 -o rw,hard,nosuid,nodev,noexec server.example.org:/srv/disk1 /mnt/server/disk1
 ```
 
 Nothing else is needed: leave `AXIS_WORKER_VOLUMES_WITHOUT_FILE_IDENTITY`
@@ -144,20 +148,31 @@ empty.
 **sshfs.** Easy where you have SSH already, but it does not keep file
 identities: through it a file's inode number is made up (a small number such
 as 7) and its modification time has no fraction of a second, and every file
-shows one link. Log in as Axis's user on the server, and let other users,
-the container among them, see the mount:
+shows one link. Log in as Axis's user on the server. With rootless Podman
+(`--userns=keep-id`, as `run` and `axis-worker.container` use), the
+container runs as the user who mounts, so mount for that user alone:
 
 ```sh
-# once, as root: let a user's FUSE mount be seen by others
-echo user_allow_other | sudo tee -a /etc/fuse.conf
-
 sshfs axis@server.example.org:/srv/disk1 /mnt/server/disk1 \
-    -o allow_other,reconnect,ServerAliveInterval=15,ServerAliveCountMax=3
+    -o reconnect,ServerAliveInterval=15,ServerAliveCountMax=3
 ```
 
-`allow_other` (and `user_allow_other` in `/etc/fuse.conf`) was needed in the
-first real run for a rootless container to see the mount at all. List the
-disk in `AXIS_WORKER_VOLUMES_WITHOUT_FILE_IDENTITY` (`run` does by default).
+If the container sees an empty or refused mount, or you run Docker, whose
+daemon is root and which a user's FUSE mount refuses unless `allow_other` is
+given, add the option with `default_permissions` (so the kernel keeps the
+files' own modes and other accounts on the machine get no more than the
+files allow), and add `user_allow_other` to `/etc/fuse.conf` once:
+
+```sh
+grep -qx user_allow_other /etc/fuse.conf || echo user_allow_other | sudo tee -a /etc/fuse.conf
+
+sshfs axis@server.example.org:/srv/disk1 /mnt/server/disk1 \
+    -o allow_other,default_permissions,idmap=user,reconnect,ServerAliveInterval=15,ServerAliveCountMax=3
+```
+
+The first real run, with rootless Podman, used `allow_other`; whether it is
+needed with `--userns=keep-id` has not been tried. List the disk in
+`AXIS_WORKER_VOLUMES_WITHOUT_FILE_IDENTITY` (`run` does by default).
 
 **SMB/CIFS.** Also loses identities: times are kept in tenths of a
 microsecond and inode numbers are the server's file index. Mount with the
@@ -166,7 +181,7 @@ Samba user that is Axis's user on the server, and list the disk in
 
 ```sh
 sudo mount -t cifs //server.example.org/disk1 /mnt/server/disk1 \
-    -o credentials=/home/you/.config/axis-worker/smb,uid=$(id -u),gid=$(id -g),serverino
+    -o credentials=/home/you/.config/axis-worker/smb,uid=$(id -u),gid=$(id -g),serverino,nosuid,nodev,noexec
 ```
 
 What the setting changes. For a listed disk the worker checks a film by its

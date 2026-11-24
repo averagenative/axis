@@ -29,14 +29,22 @@
 - [x] 4.1 `deploy/examples/remote-worker/compose.yaml`; the encoder switch in `run`, `axis-worker.container` and `compose.yaml`.
 - [x] 4.2 The example's README: the guide first, the three files, VA-API and the CPU only, and a table of what ran on real hardware.
 - [x] 4.3 `tests/check-examples.sh`: the `worker` part (the script's syntax, `compose config` for each encoder, Quadlet's dry run). Written and checked by hand step by step; the part itself was not run here.
-- [x] 4.4 `docs/11-run-conversions-on-a-worker.md` around the guide, with "A small ARM board as a worker" and a marked sentence to replace with a measurement.
+- [x] 4.4 `docs/11-run-conversions-on-a-worker.md` around the guide, with "A small ARM board as a worker", which gives a measurement.
 - [x] 4.5 `deploy/README.md`: the example's row, the worker section, the checks.
+
+## 6. After the independent review
+
+- [x] 6.1 The token block is safe to paste whole: the file is made with its mode first, the command that reads the token is the last line and runs in a subshell with the `umask`; the Compose text starts in a new directory. Tested on the exact text.
+- [x] 6.2 Step 4 makes every text before it creates the worker; a version that is not an image tag gives a plain refusal and no worker or token. Tested.
+- [x] 6.3 sshfs: no `allow_other` and no `/etc/fuse.conf` for Podman and Quadlet; for Docker and Compose, `allow_other,default_permissions,idmap=user` with a check-then-add of `user_allow_other`. NFS and SMB mounts get `nosuid,nodev,noexec`.
+- [x] 6.4 The `docker run` and `podman run` text stops as root or without the token file; no address is offered when the browser used a loopback address; the page says the tag must be the image the server runs.
+- [x] 6.5 `tests/check-examples.sh` matches the VA-API group with `group_add`; the test's heading no longer claims the pages' addresses are examined; the offered address is tested with hostile `Host` values.
 
 ## 5. Not done here
 
 - [ ] 5.1 Start a worker on a second machine from the generated text, for each tool.
 - [ ] 5.2 Run the VA-API text on a machine with an Intel or AMD GPU, and the Docker texts on a Docker host with an NVIDIA GPU.
-- [ ] 5.3 Time a conversion on an ARM board and put the figure in the guide.
+- [x] 5.3 Time a conversion on an ARM board and put the figure in the guide. (About 1 frame a second at 1080p, 10 bits, HEVC `fast`; the guide says such a board is for a trial, not a library.)
 - [ ] 5.4 Run `make check-examples worker` (and the whole gate) on the merged tree.
 - [ ] 5.5 A screenshot of the guide for `docs/SCREENSHOTS.md`.
 - [ ] 5.6 Keep the plan of a worker (its tool, its ticked disks) so that the last page can be opened again from the worker's card without its address.

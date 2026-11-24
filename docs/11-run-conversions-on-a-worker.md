@@ -174,12 +174,14 @@ Be realistic about what you get:
   the board too. Leave **Where converted files are checked** on **On this
   server** unless your server is weaker than the board.
 
-<!-- MEASUREMENT NEEDED: replace the next sentence with a measured figure. -->
-No conversion has been timed on an ARM board for this page yet, so it gives
-you no figure.
+On a four-core ARM single-board computer with 8 GB of memory, software HEVC
+encoding of 1080p video at 10 bits ran at about 1 frame a second with the
+`fast` preset and about 0.8 with `medium`, so a two-hour film takes about two
+days. The board's hardware HEVC encoder was listed by ffmpeg but did not
+work.
 
-A board is a reasonable worker for a few small files, or when you don't
-mind waiting. For a whole library, use a machine with a GPU.
+Such a board is fine for trying the worker out on a short file. It is not
+for converting a library: for that, use a machine with a GPU.
 
 ## Choose where Axis checks converted files
 

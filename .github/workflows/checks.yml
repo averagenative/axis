@@ -13,7 +13,8 @@
 #   check-container  make check-container    builds the image and checks its
 #                                            hardening, probes and secrets
 #   check-examples   make check-examples     runs the Compose, full-stack,
-#                                            Traefik and Quadlet examples
+#                                            Traefik, Quadlet and remote
+#                                            worker examples
 #
 # The four jobs start together, do not wait for each other and do not stop
 # each other: when one fails, the other three still run to their end, so one
