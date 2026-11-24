@@ -48,7 +48,7 @@ refused() {
 	elif [ -e "$scratch/called" ]; then
 		echo "  FAIL     with the prefix \"$1\" a tool was called before the refusal: $(head -n 1 "$scratch/called")" >&2
 		failed=$((failed + 1))
-	elif [[ $out != *"AXIS_XTEST_PREFIX must be axis-xtest or axis-p4x"*"Nothing was listed and nothing was removed."* ]]; then
+	elif [[ $out != *"AXIS_XTEST_PREFIX must be axis-xtest, with"*"Nothing was listed and nothing was removed."* ]]; then
 		echo "  FAIL     the refusal of \"$1\" does not say why: $out" >&2
 		failed=$((failed + 1))
 	fi
@@ -56,7 +56,7 @@ refused() {
 
 # What a real installation is called, what is not a test's prefix, and what
 # would say more than a name.
-for prefix in axis axis- axis-portal axis-proxy axis-db systemd-axis pod_axis AXIS-XTEST axis-p4 axis-xtes \
+for prefix in axis axis- axis-portal axis-proxy axis-db systemd-axis pod_axis AXIS-XTEST axis-p4 axis-p4x axis-xtes \
 	xaxis-xtest axis-xtest- axis-xtest-two axis-xtest_two "axis-xtest two" 'axis-xtest*' 'axis-xtest/..' \
 	axis-xtestabcdefghijklm a '*' '?' ' ' 'axis-xtest
 axis'; do

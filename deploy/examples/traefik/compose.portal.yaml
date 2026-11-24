@@ -30,18 +30,24 @@
 # page, its interface and its worker API by that way round:
 #
 #   1. Traefik answers the portal's address with 403 whatever it asks for
-#      (the router axis-from-portal below).  The portal never needs to ask
-#      Traefik anything: Traefik calls the portal, not the reverse.
+#      (the router axis-from-portal, among Traefik's own labels below, so
+#      that it is there whatever state the portal's container is in).  The
+#      portal never needs to ask Traefik anything: Traefik calls the portal,
+#      not the reverse.
 #   2. Axis is told which addresses are the portal's (AXIS_PORTAL_PEERS: the
 #      one it calls the portal API from, and the one Traefik would name as
 #      the client).  From those it takes no login, whether the connection
-#      comes from one or Traefik forwards for one; and its portal API
-#      answers the first of them and nobody else.
+#      comes from one or X-Forwarded-For names one anywhere; and its portal
+#      API answers the first of them and nobody else.
 #   3. A requester's account cannot log in to Axis at all, and the portal
 #      API accepts no administrator.
 #
-# Each of the three holds without the others.  For 1 and 2 the portal has a
-# fixed address on both of its networks.
+# Each of the three holds without the others.  1 and 2 name the portal by
+# address, so the portal has a fixed IPv4 address on both of its networks
+# and no IPv6 address at all (the sysctls of its service below): by an IPv6
+# link-local address it would be neither of the two.  Should it have one
+# after all, Traefik refuses every link-local client, and Axis takes no login
+# that came from or by way of one while AXIS_PORTAL_PEERS is set.
 #
 # The networks:
 #
@@ -59,6 +65,29 @@
 
 services:
   traefik:
+    # Whatever the portal's own container asks Traefik for is refused (403),
+    # before any other router is tried: the name of Axis, the portal's own
+    # name, anything.  These labels are Traefik's own, not the portal's:
+    # Traefik drops the routers of a container that is not healthy, and the
+    # portal's container decides whether it is healthy.
+    #
+    # ClientIP is the address of the connection to Traefik (Traefik 3: a
+    # router rule; no forwarded header is read for it).  172.30.2.3 is the
+    # portal's address on the network it shares with Traefik; fe80::/10 is
+    # every IPv6 link-local address, which a container's interface has unless
+    # IPv6 is switched off in the container (it is, in the portal's, below),
+    # and which nobody else reaches Traefik from.  The allow list that follows
+    # admits only Traefik's own loopback address, which is nobody: Traefik has
+    # a middleware that allows addresses and none that refuses them.
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.axis-from-portal.rule=ClientIP(`172.30.2.3`) || ClientIP(`fe80::/10`)
+      - traefik.http.routers.axis-from-portal.priority=100000
+      - traefik.http.routers.axis-from-portal.entrypoints=websecure
+      - traefik.http.routers.axis-from-portal.tls=true
+      - traefik.http.routers.axis-from-portal.service=noop@internal
+      - traefik.http.routers.axis-from-portal.middlewares=axis-from-portal-refused
+      - traefik.http.middlewares.axis-from-portal-refused.ipallowlist.sourcerange=127.0.0.1/32
     networks:
       axis-portal-proxy:
         ipv4_address: 172.30.2.2
@@ -99,6 +128,15 @@ services:
       - no-new-privileges:true
     pids_limit: 64
     mem_limit: 256m
+    # No IPv6 in this container.  The daemon and Traefik know the portal by
+    # its two IPv4 addresses below; an interface also gives itself an IPv6
+    # link-local address (fe80::...), which is neither, and by which this
+    # container could reach Traefik as somebody else.  With these two lines
+    # it has no such address, and it cannot take them back: that needs a
+    # capability it does not have.  Do not remove them.
+    sysctls:
+      net.ipv6.conf.all.disable_ipv6: "1"
+      net.ipv6.conf.default.disable_ipv6: "1"
     # No volume and no tmpfs: the portal writes no file.  (Docker then gives
     # it nothing writable.  Podman mounts its own small tmpfs on /tmp, /run
     # and /var/tmp in every read-only container; the portal does not use
@@ -132,21 +170,8 @@ services:
       - traefik.http.services.axis-portal.loadbalancer.server.port=7802
       - traefik.http.routers.axis-portal.service=axis-portal
       - traefik.http.routers.axis-portal.middlewares=axis-portal-headers,axis-portal-body,axis-portal-inflight,axis-portal-rate
-      # Whatever the portal's own container asks Traefik for is refused (403),
-      # before any other router is tried: the name of Axis, the portal's own
-      # name, anything.  ClientIP is the address of the connection to Traefik
-      # (Traefik 3: a router rule; no forwarded header is read for it), and
-      # 172.30.2.3 is the portal's address on the network it shares with
-      # Traefik.  The allow list that follows admits only Traefik's own
-      # loopback address, which is nobody: Traefik has a middleware that
-      # allows addresses and none that refuses them.
-      - traefik.http.routers.axis-from-portal.rule=ClientIP(`172.30.2.3`)
-      - traefik.http.routers.axis-from-portal.priority=100000
-      - traefik.http.routers.axis-from-portal.entrypoints=websecure
-      - traefik.http.routers.axis-from-portal.tls=true
-      - traefik.http.routers.axis-from-portal.service=axis-portal
-      - traefik.http.routers.axis-from-portal.middlewares=axis-from-portal-refused
-      - traefik.http.middlewares.axis-from-portal-refused.ipallowlist.sourcerange=127.0.0.1/32
+      # (The router that refuses this container's own requests to Traefik is
+      # among Traefik's labels, above: it must not depend on this container.)
       # What the portal cannot do itself, so the proxy must: HSTS (the portal
       # sends it too), a cap on a request's size before it is read, a cap on
       # the requests one address has open, and on how many it makes.
@@ -188,9 +213,14 @@ networks:
   # (PostgreSQL's, or the daemon's on Traefik's network), which a container
   # on an ordinary network can reach by address even when no name resolves.
   # Do not remove these two lines.
+  #
+  # enable_ipv6: false says what the default is: these two networks give out
+  # IPv4 addresses only.  Do not give them an IPv6 subnet: the portal is
+  # named by its IPv4 addresses, and its container has IPv6 switched off.
   axis-portal:
     name: axis-portal
     internal: true
+    enable_ipv6: false
     ipam:
       config:
         - subnet: 172.30.1.0/24
@@ -199,6 +229,7 @@ networks:
   axis-portal-proxy:
     name: axis-portal-proxy
     internal: true
+    enable_ipv6: false
     ipam:
       config:
         - subnet: 172.30.2.0/24

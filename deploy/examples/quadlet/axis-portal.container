@@ -25,6 +25,13 @@ Entrypoint=/usr/bin/axis-portal
 # the one the daemon is told is the portal's (AXIS_PORTAL_PEERS in
 # axis.container), and see AXIS_PORTAL_TRUSTED_PROXIES below.
 Network=axis-portal.network:ip=172.31.78.3
+# No IPv6 in this container.  The daemon knows the portal by that IPv4
+# address; an interface also gives itself an IPv6 link-local address
+# (fe80::...), which is not it.  With these two lines the container has no
+# such address, and it cannot take them back: that needs a capability it does
+# not have.  Do not remove them.
+Sysctl=net.ipv6.conf.all.disable_ipv6=1
+Sysctl=net.ipv6.conf.default.disable_ipv6=1
 # For the reverse proxy on this machine, and only for it: never 0.0.0.0.  The
 # portal must be reached through a proxy that terminates TLS.
 PublishPort=127.0.0.1:7802:7802

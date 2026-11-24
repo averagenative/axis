@@ -49,8 +49,13 @@
 #            PostgreSQL nor the daemon's main listener can be reached, and
 #            Traefik answers it 403 for the engine's host name, so that the
 #            administrator's right password posted that way opens no
-#            session; and a login that Traefik does forward, for an address
-#            the check lists among the portal's, is refused by the daemon.
+#            session; the portal's container has no IPv6 address but
+#            loopback's and can make no IPv6 connection to Traefik; a login
+#            that Traefik does forward, for an address the check lists among
+#            the portal's, is refused by the daemon; and with the portal's
+#            container stopped, Traefik still refuses the portal's address.
+#            (Traefik logs at debug level here, for the one step that prints
+#            what its provider did when it fails.)
 #   quadlet  deploy/examples/quadlet installed for the current user under
 #            ~/.config/containers/systemd/ (every file prefixed axis-xtest-),
 #            started with systemctl --user, ready, the read-only disk added, a
@@ -63,7 +68,9 @@
 #            database not reachable from the portal; the daemon's main port
 #            open from there (this example cannot close it), and the
 #            administrator's right password, posted to it from the portal's
-#            container, refused by the daemon as a wrong one is.
+#            container, refused by the daemon as a wrong one is; the portal's
+#            container has no IPv6 address but loopback's and can make no
+#            IPv6 connection to the daemon.
 #
 #   worker   deploy/examples/remote-worker, as far as it can be checked on one
 #            machine without a GPU: `run` is valid shell; `compose config`
@@ -96,20 +103,21 @@ repo=$PWD
 image=${AXIS_XTEST_IMAGE:-localhost/axis:latest}
 # AXIS_XTEST_PREFIX: another prefix for what the Compose parts make (compose,
 # full, traefik), so that one of them can be run by hand beside nothing of
-# the usual name: axis-xtest or axis-p4x, and up to twelve letters or digits
-# more (anything else is refused, below).  The quadlet part's names are
-# axis-xtest-* whatever it says.
+# the usual name: axis-xtest and up to twelve letters or digits more
+# (axis-xtesthand, say; anything else is refused, below).  The quadlet part's
+# names are axis-xtest-* whatever it says, so that part runs with the usual
+# prefix only and is skipped with another.
 prefix=${AXIS_XTEST_PREFIX:-axis-xtest}
 # The prefix decides what this script removes: every container, pod, network,
 # volume and secret named <prefix>-*, and Podman's name server files of such
 # networks.  A prefix like "axis" would be the real installation's names
 # (axis-portal, axis-proxy, axis-db).  So it is a test's prefix or the script
-# does nothing: axis-xtest or axis-p4x, with at most twelve lower-case
-# letters or digits after it and nothing else.  Refused here, before the
-# cleanup is armed and before anything is listed.
-if [[ ! $prefix =~ ^axis-(xtest|p4x)[a-z0-9]{0,12}$ ]]; then
-	echo "check-examples: AXIS_XTEST_PREFIX must be axis-xtest or axis-p4x, with at most twelve lower-case letters or" \
-		"digits after it; \"$prefix\" could be the name of something real, and this script removes everything named" \
+# does nothing: axis-xtest, with at most twelve lower-case letters or digits
+# after it and nothing else.  Refused here, before the cleanup is armed and
+# before anything is listed.
+if [[ ! $prefix =~ ^axis-xtest[a-z0-9]{0,12}$ ]]; then
+	echo "check-examples: AXIS_XTEST_PREFIX must be axis-xtest, with at most twelve lower-case letters or digits" \
+		"after it; \"$prefix\" could be the name of something real, and this script removes everything named" \
 		"after its prefix. Nothing was listed and nothing was removed." >&2
 	exit 2
 fi
@@ -325,6 +333,24 @@ wait_for() {
 	shift
 	while [ "$n" -lt "$limit" ]; do
 		"$@" >/dev/null 2>&1 && return 0
+		sleep 1
+		n=$((n + 1))
+	done
+	return 1
+}
+
+# steady TIMES LIMIT COMMAND...: true once the command has succeeded TIMES
+# times on end, a second apart, within LIMIT tries.
+steady() {
+	local need=$1 limit=$2 run=0 n=0
+	shift 2
+	while [ "$n" -lt "$limit" ]; do
+		if "$@" >/dev/null 2>&1; then
+			run=$((run + 1))
+			[ "$run" -ge "$need" ] && return 0
+		else
+			run=0
+		fi
 		sleep 1
 		n=$((n + 1))
 	done
@@ -902,7 +928,7 @@ part_traefik() {
 		-e "s|172\.30\.0\.|$net.|g" \
 		-e "s|name: axis-proxy|name: $network|" \
 		-e "s|--providers.docker.network=axis-proxy|--providers.docker.network=$network|" \
-		-e 's|^\( *\)- --certificatesresolvers.letsencrypt.acme.email=.*$|&\n\1- --certificatesresolvers.letsencrypt.acme.caserver=https://127.0.0.1:9/dir|'
+		-e 's|^\( *\)- --certificatesresolvers.letsencrypt.acme.email=.*$|&\n\1- --certificatesresolvers.letsencrypt.acme.caserver=https://127.0.0.1:9/dir\n\1- --log.level=DEBUG|'
 	selinux_edit compose.yaml
 	if [ "$(getenforce 2>/dev/null)" = Enforcing ]; then
 		# The two commented lines the file offers for Traefik and the socket.
@@ -1056,7 +1082,7 @@ part_traefik() {
 # no_portal PART PORTAL-CONTAINER AXIS-CONTAINER: the example as published
 # runs no portal, and its daemon has no portal listener.
 no_portal() {
-	if [ -z "$2" ] && ! podman ps -a --format '{{.Names}}' | grep -q -e "$prefix.*portal" -e 'axis-xtest.*portal'; then
+	if [ -z "$2" ] && ! podman ps -a --format '{{.Names}}' | grep -q -e "^$prefix-.*portal" -e '^axis-xtest-.*portal' -e '^systemd-axis-xtest-.*portal'; then
 		pass "$1: as published, no portal runs"
 	else
 		fail "$1: as published, no portal runs"
@@ -1077,11 +1103,60 @@ reach_from() {
 		sed -n 's/^reach=//p'
 }
 
+# inet6_of CONTAINER: the IPv6 addresses CONTAINER has that are not
+# loopback's (the link-local ones among them), from the kernel's table, one a
+# word.  Nothing when it has none.
+inet6_of() {
+	podman exec "$1" cat /proc/net/if_inet6 2>/dev/null |
+		awk '$6 != "lo" { a = $1; gsub(/..../, "&:", a); sub(/:$/, "", a); print a }' | tr '\n' ' '
+}
+
+# portal_no_ipv6 PART PORTAL SCHEME PORT HOST ADMIN-PASSWORD TARGET AXIS WHOM:
+# the portal's container is named by its IPv4 addresses (AXIS_PORTAL_PEERS,
+# Traefik's router), so it must have no other kind.  An interface on a bridge
+# has an IPv6 link-local address (fe80::/10) of the kernel's own making unless
+# IPv6 is switched off in the container, which the examples do by sysctl.
+# Asked from inside the portal's container: it has no IPv6 address but
+# loopback's, and the administrator's right password, posted over IPv6 to
+# each IPv6 address the container TARGET (WHOM, for the sentence) has, through
+# each of the portal's interfaces, comes to no connection.
+portal_no_ipv6() {
+	local part=$1 portal=$2 scheme=$3 port=$4 host=$5 admin=$6 target=$7 axis=$8 whom=$9 targets out
+	targets=$(inet6_of "$target")
+	# shellcheck disable=SC2086
+	out=$(podman exec -i "$portal" python3 - v6 "$scheme" "$port" "$host" admin "$admin" $targets \
+		< "$repo/tests/check-portal-client.py" 2>&1)
+	echo "$out" | sed 's/^/           portal: /'
+	case $out in
+	inet6=none*) pass "$part: the portal's container has no IPv6 address but loopback's (IPv6 is switched off in it)" ;;
+	*) fail "$part: the portal's container has no IPv6 address but loopback's (IPv6 is switched off in it)" ;;
+	esac
+	if [ -z "$targets" ]; then
+		say info "$part: $whom has no IPv6 address on this host, so there is none to try from the portal's container"
+	elif echo "$out" | grep -q '^try=.*connect=open'; then
+		fail "$part: from the portal's container, no IPv6 connection to $whom can be made ($targets)"
+		podman logs "$axis" 2>&1 | grep 'audit: login' | tail -n 4 | cut -c 1-400 >&2
+	elif echo "$out" | grep -q '^try=.*connect=failed'; then
+		pass "$part: from the portal's container, no IPv6 connection to $whom can be made ($targets)"
+	else
+		fail "$part: from the portal's container, no IPv6 connection to $whom can be made (nothing was tried: $targets)"
+	fi
+}
+
+# proxy_name_resolved CONTAINER: the daemon in CONTAINER has said that the
+# name of its trusted proxy has an address (its own line, written when a
+# lookup first finds one and whenever the addresses change).
+proxy_name_resolved() {
+	podman logs "$1" 2>&1 | grep -q 'trusted proxy name traefik resolves to '
+}
+
 # portal_page NETWORK IP BASE: the portal's login page as a container of its
 # own at IP on NETWORK gets it from Traefik at BASE (check-portal-client.py,
 # "page"); portal_page_is ... WORD: whether that answer has WORD in it.
+# (Each client container has a name of its own: one removed a moment ago can
+# still hold its name when the next is made.)
 portal_page() {
-	podman run --rm --name "$prefix-client" --network "$1" --ip "$2" --security-opt label=disable \
+	podman run --rm --name "$prefix-client-$RANDOM$RANDOM" --network "$1" --ip "$2" --security-opt label=disable \
 		-v "$repo/tests/check-portal-client.py:/client.py:ro" "$client_image" \
 		python3 /client.py page "$3" requests.example.com /login 2>&1
 }
@@ -1139,8 +1214,9 @@ traefik_portal() {
 	local dir=$1 proj=$2 net=$3 network=$4 https_port=$5 jar=$6 base=$7 admin=$8
 	shift 8
 	local -a resolve=("$@")
-	local pnet=10.89.$((200 + RANDOM % 50)) xnet=10.89.$((50 + RANDOM % 40))
-	local portal axis token requester title out code line pg_ip
+	# (Subnets of this part's own: the Quadlet part's is 10.89.60 to 10.89.89.)
+	local pnet=10.89.$((200 + RANDOM % 50)) xnet=10.89.$((20 + RANDOM % 30))
+	local portal axis token requester title out code line pg_ip audits
 	local pbase=https://requests.example.com:$https_port
 	local -a presolve=(--resolve "requests.example.com:$https_port:127.0.0.1")
 	local -a both=(-f compose.yaml -f compose.portal.yaml)
@@ -1188,12 +1264,44 @@ traefik_portal() {
 	# Steps 3 to 5: the token, its file, a requester.  The administrator's
 	# session is the one from before: sessions are in the database.
 	curl_extra=("${resolve[@]}")
-	# (The daemon was started again, and believes Traefik once it has looked
-	# its name up: until then a request through it is plain http to the
-	# daemon, and the session's Secure cookie is not read.  One run by hand
-	# failed at the next step and the one after it did not; this wait is for
-	# that, and the cause is believed, not shown.)
-	wait_for 30 page_has "$base" "$jar" /storage 'name="_csrf"'
+	# The daemon was started again, and believes Traefik once it has looked
+	# its name up: until then a request through Traefik is plain http to the
+	# daemon, the session's Secure cookie is not read, and (with a portal
+	# configured) a login that Traefik forwards is refused.  The daemon says
+	# when it has the name's address; that line is waited for, and then the
+	# session must be read: both are asserted, so that a failure here says
+	# which of the two it was.
+	#
+	# The session must be read six times on end, a second apart.  Two runs by
+	# hand failed at the token's making, in the second after the daemon had
+	# started, with Traefik's own 404 for a host name it had routed a moment
+	# before (the page before it had answered).  Traefik's debug log of a
+	# later run shows why: around the restart its provider makes
+	# configurations without the router of Axis (the old container's end,
+	# then the new one "unhealthy or starting"), and one with it once the
+	# first health check has passed, all within two seconds; Traefik applies
+	# what its provider reports at most once in two seconds, the newest only.
+	# Meanwhile the new container, at the old one's address, answers through
+	# the old route.  When an interval ends between those reports, the route
+	# is gone until the next one.  Six seconds without a break is three such
+	# intervals.  (Traefik logs at debug level in this check, so that a run
+	# that fails here prints what its provider did.)
+	if wait_for 60 proxy_name_resolved "$axis"; then
+		pass "traefik: the daemon, started again, has looked up the name of Traefik ($(podman logs "$axis" 2>&1 |
+			sed -n 's/.*trusted proxy name traefik resolves to \([0-9a-f.:, ]*\).*/\1/p' | tail -n 1))"
+	else
+		fail "traefik: the daemon, started again, has looked up the name of Traefik"
+		podman logs "$axis" 2>&1 | grep -i 'trusted prox' | tail -n 6 | cut -c 1-300 >&2
+	fi
+	if steady 6 60 page_has "$base" "$jar" /storage 'name="_csrf"'; then
+		pass "traefik: the administrator's session from before is read again through Traefik, six times on end"
+	else
+		fail "traefik: the administrator's session from before is read again through Traefik, six times on end (see below)"
+		echo "           /storage: status $(curl -sk --max-time 10 "${curl_extra[@]}" -b "$jar" -o /dev/null -w '%{http_code} -> %{redirect_url}' "$base/storage")" >&2
+		echo "           cookies in the jar: $(grep -v '^# ' "$jar" | awk -F'\t' 'NF >= 7 { printf "%s ", $6 }')" >&2
+		podman logs "$axis" 2>&1 | grep -i -e 'trusted prox' -e 'forward' | tail -n 6 | cut -c 1-300 >&2
+		podman logs --tail 6 "$(container_of "$proj" traefik)" 2>&1 | cut -c 1-300 >&2
+	fi
 	token=$(make_portal_token "$base" "$base" "$jar")
 	if [ -n "$token" ]; then
 		pass "traefik: the administrator makes a portal token on the page Request portal"
@@ -1201,6 +1309,8 @@ traefik_portal() {
 		fail "traefik: the administrator makes a portal token on the page Request portal"
 		head -n 12 "$work/portal-token-page" 2>/dev/null | cut -c 1-200 >&2
 		podman logs --tail 12 "$axis" 2>&1 | cut -c 1-400 >&2
+		podman logs "$(container_of "$proj" traefik)" 2>&1 | grep -i -e 'filter' -e 'configuration received' -e 'skipping' |
+			tail -n 30 | cut -c 1-400 >&2
 		curl_extra=()
 		return
 	fi
@@ -1338,8 +1448,11 @@ traefik_portal() {
 	# The way round: Traefik shares a network with the portal, and routes to
 	# Axis by host name.  First that the question is a real one: the same
 	# client, from a container on Traefik's other network, does log in with
-	# the administrator's password.
-	out=$(podman run --rm --network "$network" --ip "$net.80" --security-opt label=disable \
+	# the administrator's password.  (The daemon believes Traefik by now: if
+	# the last `up -d` started it again, its log has the line again.)
+	wait_for 60 proxy_name_resolved "$axis" && pass "traefik: (the daemon has the address of Traefik's name)" ||
+		fail "traefik: (the daemon has the address of Traefik's name)"
+	out=$(podman run --rm --name "$prefix-client-$RANDOM$RANDOM" --network "$network" --ip "$net.80" --security-opt label=disable \
 		-v "$repo/tests/check-portal-client.py:/client.py:ro" "$client_image" \
 		python3 /client.py engine-login "https://$net.2" axis.example.com admin "$admin" 2>&1)
 	case $out in
@@ -1347,7 +1460,10 @@ traefik_portal() {
 	*) fail "traefik: (from another container, the administrator's password opens a session through Traefik): $(echo "$out" | tr '\n' ' ')" ;;
 	esac
 	# From the portal's own container, the same request to Traefik, with the
-	# engine's host name and the administrator's right password.
+	# engine's host name and the administrator's right password.  The daemon
+	# writes an audit line for every login it is asked for, taken or refused,
+	# under whatever address: they are counted before and after.
+	audits=$(podman logs "$axis" 2>&1 | grep -c 'audit:')
 	[ "$(reach_from "$portal" "$xnet.2" 443)" = open ] &&
 		pass "traefik: (the portal's container can open a connection to Traefik)" ||
 		fail "traefik: (the portal's container can open a connection to Traefik)"
@@ -1369,14 +1485,22 @@ traefik_portal() {
 	"/setup 403 /api/v1/worker/claim 403 /livez 403 ") pass "traefik: nor does it reach the setup page, the worker API or a probe that way (403)" ;;
 	*) fail "traefik: nor does it reach the setup page, the worker API or a probe that way (got: $out)" ;;
 	esac
-	podman logs "$axis" 2>&1 | grep -q -e "client=$xnet.3" -e "client $xnet.3" &&
-		fail "traefik: no request of the portal's container reached Axis through Traefik" ||
-		pass "traefik: no request of the portal's container reached Axis through Traefik"
+	# The same over IPv6, by which the portal's container would be neither
+	# $xnet.3 to Traefik nor a listed address to Axis.
+	portal_no_ipv6 traefik "$portal" https 443 axis.example.com "$admin" "$(container_of "$proj" traefik)" "$axis" Traefik
+	# What this proves: no login the portal's container sent, over IPv4 or
+	# IPv6, was put to the daemon at all, under any address.  (Not that no
+	# request of another kind reached it: the daemon does not log those; the
+	# 403 answers above are Traefik's.)
+	line=$(podman logs "$axis" 2>&1 | grep -c 'audit:')
+	[ "$line" = "$audits" ] &&
+		pass "traefik: the daemon was asked for no login while the portal's container tried (its audit lines: $audits before, $line after)" ||
+		fail "traefik: the daemon was asked for no login while the portal's container tried (its audit lines: $audits before, $line after)"
 	# The daemon's own rule, should a login from one of the portal's addresses
 	# reach it through Traefik after all: a container at an address this check
 	# listed among the portal's ($net.81), through Traefik, with the right
 	# password.  Traefik carries it; Axis refuses it, and says why.
-	out=$(podman run --rm --name "$prefix-client" --network "$network" --ip "$net.81" --security-opt label=disable \
+	out=$(podman run --rm --name "$prefix-client-$RANDOM$RANDOM" --network "$network" --ip "$net.81" --security-opt label=disable \
 		-v "$repo/tests/check-portal-client.py:/client.py:ro" "$client_image" \
 		python3 /client.py engine-login "https://$net.2" axis.example.com admin "$admin" 2>&1 | tr '\n' ' ')
 	case $out in
@@ -1409,6 +1533,27 @@ traefik_portal() {
 	*"$token"*) fail "traefik: the portal's token is not in the containers' configuration" ;;
 	*) pass "traefik: the portal's token is not in the containers' configuration" ;;
 	esac
+
+	# Last: Traefik's refusal of the portal's address does not depend on the
+	# portal's container.  Traefik drops the routers of a container that is
+	# stopped or not healthy, and whoever holds the portal's container decides
+	# that.  The portal is stopped; once Traefik has dropped the portal's own
+	# router (its host name is 404), a container at the portal's address on
+	# the network the portal shares with Traefik asks for the engine's host
+	# name with the administrator's right password, and is still refused.
+	podman stop -t 5 "$portal" >/dev/null 2>&1
+	if wait_for 90 portal_page_is "$network" "$net.82" "https://$net.2" status=404; then
+		pass "traefik: with the portal's container stopped, Traefik has dropped the portal's own router (404 at its host name)"
+	else
+		fail "traefik: with the portal's container stopped, Traefik has dropped the portal's own router ($(portal_page "$network" "$net.82" "https://$net.2" | head -n 1))"
+	fi
+	out=$(podman run --rm --name "$prefix-client-$RANDOM$RANDOM" --network "$prefix-portal-proxy" --ip "$xnet.3" \
+		--security-opt label=disable -v "$repo/tests/check-portal-client.py:/client.py:ro" "$client_image" \
+		python3 /client.py engine-login "https://$xnet.2" axis.example.com admin "$admin" 2>&1 | tr '\n' ' ')
+	case $out in
+	*form=403*login=403*session=no*) pass "traefik: and still refuses the portal's address the engine's host name and the administrator's password ($out)" ;;
+	*) fail "traefik: and still refuses the portal's address the engine's host name and the administrator's password ($out)" ;;
+	esac
 }
 
 # ---------------------------------------------------------------------------
@@ -1419,6 +1564,13 @@ part_quadlet() {
 	local quadlet=/usr/libexec/podman/quadlet axis_unit=axis-xtest-axis.service
 
 	echo "quadlet: deploy/examples/quadlet"
+	# This part's names are axis-xtest-* whatever the prefix is, and the
+	# removal at the end goes by the prefix: with another prefix its network,
+	# volumes and secrets would be left behind.
+	if [ "$prefix" != axis-xtest ]; then
+		skip "quadlet: its names are axis-xtest-*, which the prefix \"$prefix\" would not remove; run it without AXIS_XTEST_PREFIX"
+		return
+	fi
 	[ -x "$quadlet" ] || { skip "quadlet: $quadlet is not installed (Podman 5 with Quadlet)"; return; }
 	port=$(free_port) || { fail "quadlet: no free port"; return; }
 	mkdir -p "$dir"
@@ -1720,6 +1872,9 @@ quadlet_portal() {
 	podman logs axis-xtest-axis 2>&1 | grep -q "audit: login refused: the connection came from $pnet.3, one of the request portal's addresses (server.portal_peers, AXIS_PORTAL_PEERS)" &&
 		pass "quadlet: and the daemon's log says why, naming the portal's address ($pnet.3) and the setting" ||
 		fail "quadlet: and the daemon's log says why, naming the portal's address ($pnet.3) and the setting"
+	# The same over IPv6, by which the portal's container would not be
+	# $pnet.3 to the daemon.
+	portal_no_ipv6 quadlet "$portal" http 7800 axis "$admin" axis-xtest-axis axis-xtest-axis "the daemon"
 	# And still, afterwards, from where the administrator is: no count was
 	# touched by the refusals.
 	check "quadlet: (and the administrator still logs in through the published port afterwards)" \

@@ -18,6 +18,10 @@
 # proxy's (axis-portal.container).
 # EDIT: another subnet if 172.31.78.0/24 is in use on this machine (and then
 # the addresses in axis.container and axis-portal.container).
+#
+# IPv4 only (IPv6=false says what the default is).  Do not give this network
+# an IPv6 subnet: the portal is named by its IPv4 address, and its container
+# has IPv6 switched off (axis-portal.container).
 [Unit]
 Description=The network of Axis and its request portal
 
@@ -25,3 +29,4 @@ Description=The network of Axis and its request portal
 NetworkName=axis-portal
 Subnet=172.31.78.0/24
 Internal=true
+IPv6=false

@@ -42,6 +42,13 @@
 #       runs.  Prints "reach=open", "reach=refused", "reach=unreachable" (no
 #       route to it), "reach=unresolved" (the name is not known here) or
 #       "reach=timeout".
+#   check-portal-client.py v6 http|https PORT HOST USER PASSWORD [TARGET...]
+#       Whether the container this runs in has an IPv6 address, and what the
+#       login of Axis comes to over IPv6.  Prints "inet6=none", or
+#       "inet6=ADDRESS INTERFACE" for each address that is not loopback's;
+#       then, for each TARGET (an IPv6 address without a zone) and each
+#       interface of this container, "try=TARGET%INTERFACE connect=failed
+#       (WHY)" or "try=... connect=open form=NNN login=NNN session=yes|no".
 #   check-portal-client.py probe HOST PORT
 #       For a check that failed: the resolver's configuration, what HOST
 #       resolves to and how long that took, and what a connection to each
@@ -252,6 +259,100 @@ def reach(host, port):
     print("reach=%s" % result)
 
 
+def inet6_here():
+    """This container's IPv6 addresses that are not loopback's, as (address,
+    interface), from the kernel's own table.  No table (IPv6 is switched off
+    for the whole container): none."""
+    found = []
+    try:
+        with open("/proc/net/if_inet6", encoding="ascii") as handle:
+            for line in handle:
+                fields = line.split()
+                if len(fields) == 6 and fields[5] != "lo":
+                    raw = fields[0]
+                    found.append((":".join(raw[i : i + 4] for i in range(0, 32, 4)), fields[5]))
+    except OSError:
+        pass
+    return found
+
+
+def v6_exchange(scheme, sockaddr, host, user, password):
+    """The engine's login over one IPv6 connection.  The connection is made
+    here, so that an address with a zone needs no URL."""
+    import http.client
+
+    raw = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+    raw.settimeout(6)
+    try:
+        raw.connect(sockaddr)
+    except OSError as error:
+        raw.close()
+        return "connect=failed (%s)" % (errno.errorcode.get(error.errno, "timeout") if error.errno else "timeout")
+    try:
+        if scheme == "https":
+            conn = http.client.HTTPSConnection(host, timeout=10)
+            conn.sock = ssl._create_unverified_context().wrap_socket(raw, server_hostname=host)
+        else:
+            conn = http.client.HTTPConnection(host, timeout=10)
+            conn.sock = raw
+        conn.request("GET", "/login", headers={"Host": host, "Connection": "keep-alive"})
+        response = conn.getresponse()
+        page = response.read().decode("utf-8", "replace")
+        form = response.status
+        cookies = {}
+        for value in response.headers.get_all("Set-Cookie") or []:
+            name, _, rest = value.partition("=")
+            cookies[name.strip()] = rest.split(";", 1)[0]
+        token = ""
+        for tag in re.findall(r"<input[^>]*>", page):
+            if 'name="_csrf"' in tag:
+                match = re.search(r'value="([^"]*)"', tag)
+                if match:
+                    token = match.group(1)
+        body = urllib.parse.urlencode({"_csrf": token, "username": user, "password": password})
+        headers = {
+            "Host": host,
+            "Origin": "%s://%s" % (scheme, host),
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Cookie": "; ".join("%s=%s" % pair for pair in cookies.items()),
+        }
+        if response.will_close:
+            return "connect=open form=%03d login=000 session=no" % form
+        conn.request("POST", "/login", body=body, headers=headers)
+        response = conn.getresponse()
+        response.read()
+        session = False
+        for value in response.headers.get_all("Set-Cookie") or []:
+            name, _, rest = value.partition("=")
+            if name.strip().endswith("axis_session") and rest.split(";", 1)[0]:
+                session = True
+        return "connect=open form=%03d login=%03d session=%s" % (form, response.status, "yes" if session else "no")
+    except (OSError, ssl.SSLError, http.client.HTTPException) as error:
+        return "connect=open exchange=failed (%s)" % type(error).__name__
+    finally:
+        raw.close()
+
+
+def v6(scheme, port, host, user, password, targets):
+    """Whether this container has an IPv6 address at all, and what the
+    engine's login comes to over IPv6 at each of TARGETS, through each of
+    this container's interfaces."""
+    mine = inet6_here()
+    if not mine:
+        print("inet6=none")
+    for address, interface in mine:
+        print("inet6=%s %s" % (address, interface))
+    interfaces = [name for _, name in socket.if_nameindex() if name != "lo"]
+    for target in targets:
+        for interface in interfaces:
+            try:
+                scope = socket.if_nametoindex(interface)
+            except OSError:
+                continue
+            result = v6_exchange(scheme, (target, int(port), 0, scope), host, user, password)
+            print("try=%s%%%s %s" % (target, interface, result))
+
+
 def probe(host, port):
     """For a check that failed: what the name resolves to here, how long that
     took, and what a connection to each address comes to."""
@@ -295,6 +396,8 @@ def main(argv):
         paths(argv[2], argv[3], argv[4:])
     elif len(argv) == 4 and argv[1] == "reach":
         reach(argv[2], argv[3])
+    elif len(argv) >= 7 and argv[1] == "v6" and argv[2] in ("http", "https"):
+        v6(argv[2], argv[3], argv[4], argv[5], argv[6], argv[7:])
     else:
         sys.stderr.write("usage: see the head of tests/check-portal-client.py\n")
         return 2

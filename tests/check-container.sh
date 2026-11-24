@@ -1053,6 +1053,7 @@ proxy_ip=${portal_subnet%.*}.250
 "$runtime" run --detach --name "$portal" --label "axis-check=$prefix" \
 	--user "$portal_uid:$portal_uid" --read-only --read-only-tmpfs=false --cap-drop ALL \
 	--security-opt no-new-privileges --pids-limit 64 --memory 256m \
+	--sysctl net.ipv6.conf.all.disable_ipv6=1 --sysctl net.ipv6.conf.default.disable_ipv6=1 \
 	--network "$prefix-private2:alias=portal,ip=$portal_ip" \
 	--secret "$prefix-axis_portal_token,target=axis_portal_token,uid=$portal_uid,mode=0400" \
 	--env AXIS_PORTAL_URL=http://axis:7801 --env AXIS_PORTAL_ALLOW_INSECURE_HTTP=true \
@@ -1158,6 +1159,15 @@ case $("$runtime" logs "$any" 2>&1) in
 *"audit: login refused: the connection came from $portal_ip, one of the request portal's addresses (server.portal_peers, AXIS_PORTAL_PEERS)"*)
 	pass "and the daemon's log says why, naming the address and the setting" ;;
 *) fail "and the daemon's log says why, naming the address and the setting" ;;
+esac
+# The daemon knows the portal by its IPv4 address.  The portal's container
+# has IPv6 switched off, as the examples run it, so it has no link-local
+# address to be somebody else by: asked from inside it.
+out=$("$runtime" exec -i "$portal" python3 - v6 http 7800 axis admin "$admin_password" \
+	< tests/check-portal-client.py 2>&1 | tr '\n' ' ')
+case $out in
+"inet6=none "*) pass "the portal's container has no IPv6 address but loopback's (IPv6 is switched off in it)" ;;
+*) fail "the portal's container has no IPv6 address but loopback's (got: $out)" ;;
 esac
 case $("$runtime" logs "$portal" "$any" 2>&1) in
 *"$portal_token"*|*"$requester_password"*) fail "the portal's token and the requester's password are in no log" ;;
