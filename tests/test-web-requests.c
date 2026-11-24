@@ -545,6 +545,8 @@ test_mine(Fixture *fx, gconstpointer data)
 	g_autofree gchar *unfollow_others = g_strdup_printf("/requests/%s/unfollow", s2);
 	g_autofree gchar *follow = g_strdup_printf("title=%" G_GINT64_FORMAT "&kind=movie", bells);
 	g_autofree gchar *unknown_body = NULL;
+	g_autofree gchar *unknown_withdraw = NULL;
+	g_autofree gchar *unknown_unfollow = NULL;
 	g_autoptr(GError) error = NULL;
 	gboolean added = FALSE;
 	AxisTestReply reply;
@@ -571,9 +573,11 @@ test_mine(Fixture *fx, gconstpointer data)
 	reply = get_as(fx, fx->robin, "/requests");
 	g_assert_cmpuint(reply.status, ==, 200);
 	assert_contains(reply.body, "My requests");
-	/* Three asked of five. */
+	/* Three asked of five, and the ceiling that withdrawing does not give
+	 * back. */
 	assert_contains(reply.body, "Movies: 2 of 5 left this week.");
 	assert_contains(reply.body, "Seasons of series: 5 of 5 left this week.");
+	assert_contains(reply.body, "you can make at most 100 requests in 24 hours");
 	/* Those three and the one followed; none of sam's others. */
 	assert_contains(reply.body, "The Lantern Orchard");
 	assert_contains(reply.body, "Saltmarsh Ledger");
@@ -626,11 +630,22 @@ test_mine(Fixture *fx, gconstpointer data)
 	g_assert_cmpstr(reply.body, ==, unknown_body);
 	assert_lacks(reply.body, "Tin Compass");
 	axis_test_reply_clear(&reply);
+	/* To change: the same status and body as a change of one never issued. */
+	reply = post_as(fx, fx->robin, "/requests", "/requests/AAAAAAAAAAAAAAAAAAAAAA/withdraw", "");
+	g_assert_cmpuint(reply.status, ==, 404);
+	unknown_withdraw = g_strdup(reply.body);
+	axis_test_reply_clear(&reply);
 	reply = post_as(fx, fx->robin, "/requests", withdraw_others, "");
 	g_assert_cmpuint(reply.status, ==, 404);
+	g_assert_cmpstr(reply.body, ==, unknown_withdraw);
+	axis_test_reply_clear(&reply);
+	reply = post_as(fx, fx->robin, "/requests", "/requests/AAAAAAAAAAAAAAAAAAAAAA/unfollow", "");
+	g_assert_cmpuint(reply.status, ==, 404);
+	unknown_unfollow = g_strdup(reply.body);
 	axis_test_reply_clear(&reply);
 	reply = post_as(fx, fx->robin, "/requests", unfollow_others, "");
 	g_assert_cmpuint(reply.status, ==, 404);
+	g_assert_cmpstr(reply.body, ==, unknown_unfollow);
 	axis_test_reply_clear(&reply);
 	g_assert_cmpint(N("SELECT count(*) FROM request WHERE public_id = '%s' AND decision = 'waiting'", s2), ==, 1);
 	/* An administrator reads any. */
@@ -878,6 +893,33 @@ test_try_again(Fixture *fx, gconstpointer data)
 	axis_test_reply_clear(&reply);
 	g_assert_cmpint(N("SELECT count(*) FROM movie WHERE title_id = %" G_GINT64_FORMAT, orchard), ==, 1);
 	g_assert_cmpint(N("SELECT count(*) FROM job WHERE kind = 'movies.search'"), ==, 1);
+	/* Added and in Axis: a crafted "Try again" changes nothing. */
+	reply = post_as(fx, fx->admin, "/requests", retry, good);
+	g_assert_cmpuint(reply.status, ==, 409);
+	axis_test_reply_clear(&reply);
+	g_assert_cmpint(N("SELECT count(*) FROM job WHERE kind = 'movies.search'"), ==, 1);
+
+	/* Removed from Axis by an administrator: closed, and the person who
+	 * asked is told so; the title can be requested again. */
+	{
+		g_autoptr(GError) error = NULL;
+		g_autofree gchar *page_path = title_path(orchard);
+
+		g_assert_true(axis_movies_remove(fx->r->movies, N("SELECT id FROM movie WHERE title_id = %" G_GINT64_FORMAT,
+			orchard), "root", &error));
+		g_assert_no_error(error);
+		reply = get_as(fx, fx->robin, "/requests");
+		assert_contains(reply.body, "Removed from Axis");
+		axis_test_reply_clear(&reply);
+		reply = get_as(fx, fx->robin, page_path);
+		assert_contains(reply.body, "Can be requested");
+		assert_contains(reply.body, "action=\"/requests\"");
+		axis_test_reply_clear(&reply);
+		reply = get_as(fx, fx->admin, "/requests");
+		assert_contains(reply.body, "Removed from Axis");
+		assert_lacks(reply.body, retry);
+		axis_test_reply_clear(&reply);
+	}
 }
 
 /* ── States and who is told what ────────────────────────────────── */

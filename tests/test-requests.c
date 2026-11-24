@@ -18,6 +18,7 @@
 #include "axis-test-case.h"
 #include "axis-test-db.h"
 #include "axis-test-requests.h"
+#include "requests/axis-requests-private.h"
 #include "web/axis-user-store.h"
 
 typedef struct
@@ -540,11 +541,13 @@ typedef struct
 {
 	Fixture      *fx;
 	const gchar  *public_id;
+	gint64        request_id;
 	gint64        user;
 	gint64        title;
 	gint         *go;
-	gint          what;	/* 0 approve, 1 decline, 2 withdraw, 3 ask for a movie */
+	gint          what;	/* 0 approve, 1 decline, 2 withdraw, 3 ask for a movie, 4 place */
 	gboolean      ok;
+	gboolean      added;
 	GError       *error;
 	AxisRequestOutcome outcome;
 } Racer;
@@ -568,6 +571,9 @@ racer_main(gpointer data)
 	case 2:
 		racer->ok = axis_requests_withdraw(fx->r->requests, racer->public_id, racer->user, NULL, &racer->error);
 		break;
+	case 4:
+		racer->ok = axis_requests_place(fx->r->requests, racer->request_id, &racer->added, &racer->error);
+		break;
 	default: {
 		AxisRequestMade made;
 
@@ -586,9 +592,13 @@ racer_main(gpointer data)
  * read and lock rows but lets none write.  Each racer then runs until it
  * waits, either for that lock (it has made its checks and is about to write)
  * or for a lock of the layer's own, held by a racer that is.  Only when all
- * of them wait is the table let go.  Code that took no lock of its own would
- * have every racer past its checks at that moment, and all of them would
- * write.  No timing decides the outcome.
+ * of them wait is the table let go, so every racer has started before any
+ * writes.  The count of waiting racers proves only that: it is the same with
+ * or without the layer's locks, since a racer that took none would wait for
+ * the table lock all the same, past its checks.  What a lock of the layer's
+ * prevents is shown by the outcome each test asserts (code without it lets
+ * every racer pass its checks before any writes, and all of them write).  No
+ * timing decides the outcome.
  */
 static void
 race(
@@ -618,7 +628,7 @@ race(
 	axis_test_db_exec(fx->r->t->db, "COMMIT");
 	for (i = 0; i < n; i++)
 		g_thread_join(threads[i]);
-	/* Every racer was held at a lock before any wrote. */
+	/* Every racer had started, and was held at a lock, before any wrote. */
 	g_assert_cmpint(waiting, ==, n);
 }
 
@@ -657,6 +667,97 @@ test_two_at_once(Fixture *fx, gconstpointer data)
 		g_clear_error(&racers[0].error);
 		g_clear_error(&racers[1].error);
 	}
+}
+
+/*
+ * Two placings of one series at the same moment, for two people's requests:
+ * one lists a season the series' record has lost since it was made, the other
+ * a season it has.  Neither undoes the other: the series is added once and
+ * stays, the season that exists is monitored, the request that could not be
+ * completed says why, and "Try again" completes it on the same series once
+ * the season is there.
+ */
+static void
+test_two_placings(Fixture *fx, gconstpointer data)
+{
+	static const gint one[] = { 1 };
+	static const gint two[] = { 2 };
+	gint64 harbour = series(fx, AXIS_TEST_REQUESTS_HARBOUR);
+	g_autofree gchar *failing = NULL;
+	g_autofree gchar *working = NULL;
+	g_autofree gchar *monitored = NULL;
+	g_autofree gchar *completed = NULL;
+	g_autoptr(AxisRequestInfo) stuck = NULL;
+	g_autoptr(AxisRequestInfo) fine = NULL;
+	g_autoptr(AxisRequestInfo) done = NULL;
+	g_autoptr(GError) error = NULL;
+	AxisRequestMade made;
+	Racer racers[2];
+	gboolean added = FALSE;
+	gint64 series_id;
+	guint i;
+
+	axis_test_requests_set_defaults(fx->r);
+	g_assert_true(ask_series(fx, fx->r->robin, harbour, AXIS_REQUEST_SEASONS_PICKED, one, 1, &made, &error));
+	g_assert_no_error(error);
+	failing = g_strdup(made.public_id);
+	axis_request_made_clear(&made);
+	g_assert_true(ask_series(fx, fx->r->sam, harbour, AXIS_REQUEST_SEASONS_PICKED, two, 1, &made, &error));
+	g_assert_no_error(error);
+	working = g_strdup(made.public_id);
+	axis_request_made_clear(&made);
+	/* robin's season is one the record no longer has (renumbered since). */
+	N("UPDATE request_season SET season = 7 WHERE request_id = (SELECT id FROM request WHERE public_id = '%s')"
+		" RETURNING season", failing);
+	/* Both approved, as the approval's transaction leaves them, and placed
+	 * at the same moment. */
+	N("UPDATE request SET decision = 'approved', approved_how = 'admin', decided_by = 'root',"
+		" decided_at = 'epoch'::timestamptz + %" G_GINT64_FORMAT " * interval '1 microsecond', root_id = %"
+		G_GINT64_FORMAT ", quality_profile_id = %" G_GINT64_FORMAT " WHERE title_id = %" G_GINT64_FORMAT
+		" RETURNING id", AXIS_TEST_REQUESTS_NOW_US, fx->r->series_root, fx->r->profile_id, harbour);
+	memset(racers, 0, sizeof(racers));
+	for (i = 0; i < 2; i++) {
+		racers[i].fx = fx;
+		racers[i].what = 4;
+		racers[i].request_id = N("SELECT id FROM request WHERE public_id = '%s'", i == 0 ? failing : working);
+	}
+	race(fx, racers, 2);
+	for (i = 0; i < 2; i++) {
+		g_assert_no_error(racers[i].error);
+		g_assert_true(racers[i].ok);
+	}
+	g_assert_false(racers[0].added);
+	g_assert_true(racers[1].added);
+
+	g_assert_cmpint(N("SELECT count(*) FROM series WHERE title_id = %" G_GINT64_FORMAT, harbour), ==, 1);
+	series_id = N("SELECT id FROM series WHERE title_id = %" G_GINT64_FORMAT, harbour);
+	monitored = Q("SELECT string_agg(number || ':' || monitored, ',' ORDER BY number) FROM series_season"
+		" WHERE series_id = %" G_GINT64_FORMAT, series_id);
+	g_assert_cmpstr(monitored, ==, "0:false,1:false,2:true,3:false");
+	fine = info_of(fx, working);
+	g_assert_cmpint(fine->decision, ==, AXIS_REQUEST_APPROVED);
+	g_assert_cmpint(fine->series_id, ==, series_id);
+	g_assert_cmpint(fine->state, ==, AXIS_REQUEST_STATE_APPROVED);
+	stuck = info_of(fx, failing);
+	g_assert_cmpint(stuck->decision, ==, AXIS_REQUEST_APPROVED);
+	g_assert_cmpint(stuck->state, ==, AXIS_REQUEST_STATE_FAILED);
+	g_assert_cmpint(stuck->cause, ==, AXIS_REQUEST_CAUSE_NOT_ADDED);
+	g_assert_nonnull(stuck->add_error);
+
+	/* The season is there again: tried again, on the series that stayed. */
+	N("UPDATE request_season SET season = 1 WHERE request_id = (SELECT id FROM request WHERE public_id = '%s')"
+		" RETURNING season", failing);
+	g_assert_true(axis_requests_try_again(fx->r->requests, failing, "root", 0, 0, &added, &error));
+	g_assert_no_error(error);
+	g_assert_true(added);
+	g_assert_cmpint(N("SELECT count(*) FROM series"), ==, 1);
+	completed = Q("SELECT string_agg(number || ':' || monitored, ',' ORDER BY number) FROM series_season"
+		" WHERE series_id = %" G_GINT64_FORMAT, series_id);
+	g_assert_cmpstr(completed, ==, "0:false,1:true,2:true,3:false");
+	done = info_of(fx, failing);
+	g_assert_cmpint(done->series_id, ==, series_id);
+	g_assert_null(done->add_error);
+	g_assert_cmpint(done->state, ==, AXIS_REQUEST_STATE_APPROVED);
 }
 
 /* ── Automatic approval ─────────────────────────────────────────── */
@@ -1007,6 +1108,78 @@ test_quota_race(Fixture *fx, gconstpointer data)
 	g_assert_cmpuint(quota_of(fx, fx->r->robin).movies.left, ==, 0);
 }
 
+/* Rows made by asking and withdrawing again and again are bounded: whatever
+ * became of them, a person who is not an administrator makes at most
+ * AXIS_REQUESTS_MAX_A_DAY requests in any 24 hours.  A request withdrawn, or
+ * taken over by a follower, stays counted for the person who made it. */
+static void
+test_daily_ceiling(Fixture *fx, gconstpointer data)
+{
+	gint64 orchard = film(fx, AXIS_TEST_REQUESTS_ORCHARD);
+	gint64 compass = film(fx, AXIS_TEST_REQUESTS_COMPASS);
+	g_autofree gchar *withdrawn = NULL;
+	g_autofree gchar *handed = NULL;
+	g_autoptr(GError) error = NULL;
+	AxisRequestMade made;
+	gboolean handed_over = FALSE;
+
+	set_person(fx, fx->r->robin, FALSE, FALSE, 1000, 1000);
+	/* 98 asked and withdrawn in the last hour, as such a loop leaves them,
+	 * the oldest 49 minutes ago. */
+	N("INSERT INTO request (public_id, title_id, kind, requested_by, requested_name, made_by, created_at, counted_at,"
+		" decision, decided_at) SELECT 'ceil' || lpad(i::text, 18, '0'), %" G_GINT64_FORMAT ", 'movie', %"
+		G_GINT64_FORMAT ", 'robin', %" G_GINT64_FORMAT ", t, t, 'withdrawn', t FROM generate_series(1, %d) i,"
+		" LATERAL (SELECT 'epoch'::timestamptz + (%" G_GINT64_FORMAT " - i::bigint * 30000000) * interval '1 microsecond'"
+		" AS t) w"
+		" RETURNING 1", orchard, fx->r->robin, fx->r->robin, AXIS_REQUESTS_MAX_A_DAY - 2, AXIS_TEST_REQUESTS_NOW_US);
+	/* The 99th, withdrawn: its quota comes back, its place under the
+	 * ceiling does not. */
+	withdrawn = must_ask_movie(fx, fx->r->robin, orchard);
+	g_assert_true(axis_requests_withdraw(fx->r->requests, withdrawn, fx->r->robin, NULL, &error));
+	g_assert_no_error(error);
+	g_assert_cmpuint(quota_of(fx, fx->r->robin).movies.left, ==, 1000);
+	/* The 100th, taken over by a follower: still robin's under the ceiling. */
+	handed = must_ask_movie(fx, fx->r->robin, compass);
+	g_assert_true(ask_movie(fx, fx->r->sam, compass, &made, &error));
+	g_assert_cmpint(made.outcome, ==, AXIS_REQUEST_FOLLOWED);
+	axis_request_made_clear(&made);
+	g_assert_true(axis_requests_withdraw(fx->r->requests, handed, fx->r->robin, &handed_over, &error));
+	g_assert_no_error(error);
+	g_assert_true(handed_over);
+	g_assert_false(ask_movie(fx, fx->r->robin, film(fx, AXIS_TEST_REQUESTS_ALMANAC), &made, &error));
+	g_assert_error(error, AXIS_REQUESTS_ERROR, AXIS_REQUESTS_ERROR_TOO_MANY);
+	g_assert_nonnull(strstr(error->message, "100 requests in the last 24 hours"));
+	g_clear_error(&error);
+	axis_request_made_clear(&made);
+	g_assert_cmpint(N("SELECT count(*) FROM request WHERE made_by = %" G_GINT64_FORMAT, fx->r->robin), ==,
+		AXIS_REQUESTS_MAX_A_DAY);
+	/* Another person is not touched by it, nor is an administrator who made
+	 * as many. */
+	g_assert_true(ask_movie(fx, fx->r->sam, film(fx, AXIS_TEST_REQUESTS_LEDGER), &made, &error));
+	g_assert_no_error(error);
+	axis_request_made_clear(&made);
+	N("INSERT INTO request (public_id, title_id, kind, requested_by, requested_name, made_by, created_at, counted_at,"
+		" decision, decided_at) SELECT 'ceiladmin' || lpad(i::text, 13, '0'), %" G_GINT64_FORMAT ", 'movie', %"
+		G_GINT64_FORMAT ", 'root', %" G_GINT64_FORMAT ", now(), now(), 'withdrawn', now() FROM generate_series(1, %d) i"
+		" RETURNING 1", orchard, fx->r->admin, fx->r->admin, AXIS_REQUESTS_MAX_A_DAY);
+	g_assert_true(ask_movie(fx, fx->r->admin, film(fx, AXIS_TEST_REQUESTS_KILN), &made, &error));
+	g_assert_no_error(error);
+	g_assert_cmpint(made.outcome, ==, AXIS_REQUEST_MADE);
+	axis_request_made_clear(&made);
+
+	/* A day after the oldest of robin's, one place is free again. */
+	axis_requests_set_clock(fx->r->requests, AXIS_TEST_REQUESTS_NOW_US + G_TIME_SPAN_DAY -
+		(AXIS_REQUESTS_MAX_A_DAY - 2) * 30 * G_TIME_SPAN_SECOND + G_TIME_SPAN_SECOND);
+	g_assert_true(ask_movie(fx, fx->r->robin, orchard, &made, &error));
+	g_assert_no_error(error);
+	g_assert_cmpint(made.outcome, ==, AXIS_REQUEST_MADE);
+	axis_request_made_clear(&made);
+	g_assert_false(ask_movie(fx, fx->r->robin, film(fx, AXIS_TEST_REQUESTS_BELLS), &made, &error));
+	g_assert_error(error, AXIS_REQUESTS_ERROR, AXIS_REQUESTS_ERROR_TOO_MANY);
+	g_clear_error(&error);
+	axis_request_made_clear(&made);
+}
+
 /* ── Followers ──────────────────────────────────────────────────── */
 
 /* Scenarios: Following a movie request; Asked twice. */
@@ -1049,6 +1222,18 @@ test_follow_movie(Fixture *fx, gconstpointer data)
 	g_assert_cmpint(made.outcome, ==, AXIS_REQUEST_UNCHANGED);
 	axis_request_made_clear(&made);
 	g_assert_cmpint(N("SELECT count(*) FROM request_follower"), ==, 1);
+	/* A person whose limit for movies is none follows nothing either. */
+	{
+		gint64 kim = axis_test_requests_person(fx->r, "kim", FALSE);
+
+		set_person(fx, kim, FALSE, FALSE, 0, -1);
+		g_assert_false(ask_movie(fx, kim, orchard, &made, &error));
+		g_assert_error(error, AXIS_REQUESTS_ERROR, AXIS_REQUESTS_ERROR_QUOTA);
+		g_assert_nonnull(strstr(error->message, "cannot ask for movies"));
+		g_clear_error(&error);
+		axis_request_made_clear(&made);
+		g_assert_cmpint(N("SELECT count(*) FROM request_follower WHERE user_id = %" G_GINT64_FORMAT, kim), ==, 0);
+	}
 }
 
 /* Asked twice, and by two people, at the same moment: one request. */
@@ -1461,21 +1646,82 @@ test_movie_states(Fixture *fx, gconstpointer data)
 	after = Q("SELECT md5(r::text) FROM request r WHERE public_id = '%s'", id);
 	g_assert_cmpstr(after, ==, before);
 
-	/* Removed before it had a file. */
+	/* Removed before it had a file: closed, and the title can be asked for
+	 * again; what it used of the quota stays used. */
 	{
 		gint64 ledger = film(fx, AXIS_TEST_REQUESTS_LEDGER);
 		g_autofree gchar *other = must_ask_movie(fx, fx->r->robin, ledger);
+		g_autofree gchar *again = NULL;
+		g_autofree gchar *words = NULL;
 		g_autoptr(AxisRequestInfo) info = NULL;
+		g_autoptr(GPtrArray) mine = NULL;
+		guint used;
+		guint i;
 
 		approve(fx, other);
+		used = quota_of(fx, fx->r->robin).movies.used;
 		g_assert_true(axis_movies_remove(fx->r->movies, N("SELECT id FROM movie WHERE title_id = %" G_GINT64_FORMAT,
 			ledger), "root", &error));
 		g_assert_no_error(error);
+		assert_decision(fx, other, "removed");
 		info = info_of(fx, other);
-		g_assert_cmpint(info->state, ==, AXIS_REQUEST_STATE_FAILED);
-		g_assert_cmpint(info->cause, ==, AXIS_REQUEST_CAUSE_REMOVED);
-		g_assert_cmpstr(axis_request_cause_words(info->cause), ==, "The title was removed.");
+		words = axis_request_info_words(info);
+		g_assert_cmpint(info->state, ==, AXIS_REQUEST_STATE_REMOVED);
+		g_assert_cmpstr(words, ==, "Removed from Axis");
+		g_assert_cmpint(state_of_title(fx, ledger), ==, AXIS_REQUEST_STATE_CAN);
+		g_assert_cmpuint(quota_of(fx, fx->r->robin).movies.used, ==, used);
+		/* The person who asked sees it so among their requests. */
+		g_assert_true(axis_requests_list_mine(fx->r->requests, fx->r->robin, 50, &mine, &error));
+		g_assert_no_error(error);
+		for (i = 0; i < mine->len; i++) {
+			const AxisRequestInfo *one = g_ptr_array_index(mine, i);
+
+			if (g_strcmp0(one->public_id, other) == 0)
+				g_assert_cmpint(one->state, ==, AXIS_REQUEST_STATE_REMOVED);
+		}
+		/* Nothing to try again: it is closed. */
+		g_assert_false(axis_requests_try_again(fx->r->requests, other, "root", 0, 0, NULL, &error));
+		g_assert_error(error, AXIS_REQUESTS_ERROR, AXIS_REQUESTS_ERROR_DECIDED);
+		g_clear_error(&error);
+		/* Asked for again: a new request, which waits. */
+		again = must_ask_movie(fx, fx->r->robin, ledger);
+		assert_decision(fx, again, "waiting");
+		assert_decision(fx, other, "removed");
 	}
+}
+
+/* A series removed from Axis after its request was approved: the request is
+ * closed, its seasons are open to a new request, and the series can be asked
+ * for again. */
+static void
+test_series_removed(Fixture *fx, gconstpointer data)
+{
+	static const gint two[] = { 2 };
+	gint64 harbour = series(fx, AXIS_TEST_REQUESTS_HARBOUR);
+	g_autofree gchar *id = NULL;
+	g_autoptr(AxisRequestInfo) info = NULL;
+	g_autoptr(GError) error = NULL;
+	AxisRequestMade made;
+
+	axis_test_requests_set_defaults(fx->r);
+	g_assert_true(ask_series(fx, fx->r->robin, harbour, AXIS_REQUEST_SEASONS_PICKED, two, 1, &made, &error));
+	g_assert_no_error(error);
+	id = g_strdup(made.public_id);
+	axis_request_made_clear(&made);
+	approve(fx, id);
+	g_assert_true(axis_tv_remove(fx->r->tv, N("SELECT id FROM series WHERE title_id = %" G_GINT64_FORMAT, harbour),
+		"root", &error));
+	g_assert_no_error(error);
+	assert_decision(fx, id, "removed");
+	g_assert_cmpint(N("SELECT count(*) FROM request_season WHERE open"), ==, 0);
+	info = info_of(fx, id);
+	g_assert_cmpint(info->state, ==, AXIS_REQUEST_STATE_REMOVED);
+	/* Season 2 can be asked for again, by anyone. */
+	g_assert_true(ask_series(fx, fx->r->sam, harbour, AXIS_REQUEST_SEASONS_PICKED, two, 1, &made, &error));
+	g_assert_no_error(error);
+	g_assert_cmpint(made.outcome, ==, AXIS_REQUEST_MADE);
+	g_assert_cmpint(made.n_followed, ==, 0);
+	axis_request_made_clear(&made);
 }
 
 /* Scenario: A series is partly available. */
@@ -1534,6 +1780,12 @@ test_could_not_be_added(Fixture *fx, gconstpointer data)
 	g_assert_false(axis_requests_approve(fx->r->requests, id, "root", fx->r->films_root, 0, &added, &error));
 	g_assert_error(error, AXIS_REQUESTS_ERROR, AXIS_REQUESTS_ERROR_PLACEMENT);
 	g_clear_error(&error);
+	/* A folder of the other kind is refused, and nothing is approved. */
+	g_assert_false(axis_requests_approve(fx->r->requests, id, "root", fx->r->series_root, fx->r->profile_id, &added,
+		&error));
+	g_assert_error(error, AXIS_REQUESTS_ERROR, AXIS_REQUESTS_ERROR_INVALID);
+	g_assert_nonnull(strstr(error->message, "not one for movies"));
+	g_clear_error(&error);
 	assert_decision(fx, id, "waiting");
 
 	/* The folder chosen no longer exists at that moment. */
@@ -1562,6 +1814,13 @@ test_could_not_be_added(Fixture *fx, gconstpointer data)
 	done = info_of(fx, id);
 	g_assert_null(done->add_error);
 	g_assert_cmpint(done->state, ==, AXIS_REQUEST_STATE_APPROVED);
+	/* Not again once its title is added and in Axis: nothing is changed. */
+	g_assert_false(axis_requests_try_again(fx->r->requests, id, "root", fx->r->films_root, 0, &added, &error));
+	g_assert_error(error, AXIS_REQUESTS_ERROR, AXIS_REQUESTS_ERROR_DECIDED);
+	g_assert_nonnull(strstr(error->message, "still in Axis"));
+	g_clear_error(&error);
+	g_assert_cmpint(N("SELECT count(*) FROM movie"), ==, 1);
+	g_assert_cmpint(N("SELECT count(*) FROM job WHERE kind = 'movies.search'"), ==, 1);
 	/* Only an approved request can be tried again. */
 	{
 		g_autofree gchar *waiting = must_ask_movie(fx, fx->r->robin, film(fx, AXIS_TEST_REQUESTS_LEDGER));
@@ -1705,6 +1964,43 @@ test_lists(Fixture *fx, gconstpointer data)
 	}
 }
 
+/* Who asked, hidden, for a series: a person with a request for another
+ * season of it is not the person whose name the title's state carries. */
+static void
+test_who_asked_series(Fixture *fx, gconstpointer data)
+{
+	static const gint one[] = { 1 };
+	static const gint two[] = { 2 };
+	gint64 harbour = series(fx, AXIS_TEST_REQUESTS_HARBOUR);
+	g_autoptr(GHashTable) keep = NULL;
+	g_autoptr(GError) error = NULL;
+	const AxisRequestTitleState *state;
+	AxisRequestTitleView view;
+	AxisRequestMade made;
+
+	g_assert_true(ask_series(fx, fx->r->robin, harbour, AXIS_REQUEST_SEASONS_PICKED, one, 1, &made, &error));
+	g_assert_no_error(error);
+	axis_request_made_clear(&made);
+	g_assert_true(ask_series(fx, fx->r->sam, harbour, AXIS_REQUEST_SEASONS_PICKED, two, 1, &made, &error));
+	g_assert_no_error(error);
+	g_assert_cmpint(made.outcome, ==, AXIS_REQUEST_MADE);
+	axis_request_made_clear(&made);
+	state = title_state(fx, harbour, &keep);
+	g_assert_cmpstr(state->asked_by, ==, "robin");
+	g_assert_cmpint(state->asked_by_id, ==, fx->r->robin);
+	/* Off: sam made a request of the title, and is not told robin's name. */
+	axis_request_title_view(state, fx->r->sam, FALSE, FALSE, &view);
+	g_assert_true(view.mine);
+	g_assert_null(view.asked_by);
+	axis_request_title_view(state, fx->r->robin, FALSE, FALSE, &view);
+	g_assert_cmpstr(view.asked_by, ==, "robin");
+	axis_request_title_view(state, fx->r->admin, TRUE, FALSE, &view);
+	g_assert_cmpstr(view.asked_by, ==, "robin");
+	/* On: everyone who can ask is told it. */
+	axis_request_title_view(state, fx->r->sam, FALSE, TRUE, &view);
+	g_assert_cmpstr(view.asked_by, ==, "robin");
+}
+
 /* Scenario: A disabled requester (an ordinary user in this slice); and an
  * account that is deleted. */
 static void
@@ -1756,32 +2052,196 @@ test_account_gone(Fixture *fx, gconstpointer data)
 	g_assert_cmpint(N("SELECT count(*) FROM request WHERE requested_by IS NULL AND requested_name = 'sam'"), ==, 2);
 }
 
-/* Two records of a title merge: the requests of the one that goes follow. */
+/* As the metadata store merges two records of a title: every identifier of
+ * the record that goes moves to the one kept, then the record is deleted. */
+static void
+merge_titles(
+	Fixture     *fx,
+	gint64       going,
+	gint64       kept,
+	const gchar *kind
+){
+	N("INSERT INTO meta_external_id (title_id, kind, scheme, value) VALUES (%" G_GINT64_FORMAT ", '%s', 'madeup',"
+		" 'merge%" G_GINT64_FORMAT "') ON CONFLICT DO NOTHING RETURNING title_id", going, kind, going);
+	N("UPDATE meta_external_id SET title_id = %" G_GINT64_FORMAT " WHERE title_id = %" G_GINT64_FORMAT
+		" RETURNING title_id", kept, going);
+	N("DELETE FROM meta_title WHERE id = %" G_GINT64_FORMAT " RETURNING id", going);
+	g_assert_cmpint(N("SELECT count(*) FROM meta_title WHERE id = %" G_GINT64_FORMAT, going), ==, 0);
+	g_assert_cmpint(N("SELECT count(*) FROM request WHERE title_id = %" G_GINT64_FORMAT, going), ==, 0);
+}
+
+/* Approved, as the approval's transaction leaves a request, and not placed. */
+static void
+mark_approved(
+	Fixture     *fx,
+	const gchar *public_id
+){
+	N("UPDATE request SET decision = 'approved', approved_how = 'admin', decided_by = 'root', decided_at = now()"
+		" WHERE public_id = '%s' RETURNING id", public_id);
+}
+
+static gchar *
+followers_of(
+	Fixture     *fx,
+	const gchar *public_id
+){
+	return Q("SELECT coalesce(string_agg(u.username, ',' ORDER BY u.username), '') FROM request_follower f"
+		" JOIN request r ON r.id = f.request_id JOIN app_user u ON u.id = f.user_id WHERE r.public_id = '%s'",
+		public_id);
+}
+
+/* Two records of a title merge: the requests of the one that goes follow.
+ * Of two waiting requests for the movie, the kept record's stays, and the
+ * other's maker and followers follow it. */
 static void
 test_title_merge(Fixture *fx, gconstpointer data)
 {
 	gint64 orchard = film(fx, AXIS_TEST_REQUESTS_ORCHARD);
 	gint64 ledger = film(fx, AXIS_TEST_REQUESTS_LEDGER);
+	gint64 kim = axis_test_requests_person(fx->r, "kim", FALSE);
 	g_autofree gchar *going = must_ask_movie(fx, fx->r->robin, orchard);
 	g_autofree gchar *kept = must_ask_movie(fx, fx->r->sam, ledger);
+	g_autofree gchar *followers = NULL;
+	g_autofree gchar *words = NULL;
+	g_autoptr(AxisRequestInfo) info = NULL;
+	g_autoptr(GPtrArray) mine = NULL;
 	g_autoptr(GError) error = NULL;
+	AxisRequestMade made;
 
+	g_assert_true(ask_movie(fx, kim, orchard, &made, &error));
+	g_assert_cmpint(made.outcome, ==, AXIS_REQUEST_FOLLOWED);
+	axis_request_made_clear(&made);
 	g_assert_true(axis_requests_set_title_closed(fx->r->requests, orchard, TRUE, "root", &error));
 	g_assert_no_error(error);
-	/* As the metadata store merges: every identifier of the record that goes
-	 * moves to the one kept, then the record is deleted. */
-	N("INSERT INTO meta_external_id (title_id, kind, scheme, value) VALUES (%" G_GINT64_FORMAT ", 'film', 'madeup',"
-		" 'merge1') ON CONFLICT DO NOTHING RETURNING title_id", orchard);
-	N("UPDATE meta_external_id SET title_id = %" G_GINT64_FORMAT " WHERE title_id = %" G_GINT64_FORMAT
-		" RETURNING title_id", ledger, orchard);
-	N("DELETE FROM meta_title WHERE id = %" G_GINT64_FORMAT " RETURNING id", orchard);
-	g_assert_cmpint(N("SELECT count(*) FROM meta_title WHERE id = %" G_GINT64_FORMAT, orchard), ==, 0);
+	merge_titles(fx, orchard, ledger, "film");
 	g_assert_cmpint(N("SELECT count(*) FROM request WHERE title_id = %" G_GINT64_FORMAT, ledger), ==, 2);
 	/* One open request for the title: the one of the record that went was
-	 * replaced. */
+	 * replaced, and its people follow the one that stayed. */
 	assert_decision(fx, going, "replaced");
 	assert_decision(fx, kept, "waiting");
+	followers = followers_of(fx, kept);
+	g_assert_cmpstr(followers, ==, "kim,robin");
+	g_assert_true(axis_requests_list_mine(fx->r->requests, fx->r->robin, 50, &mine, &error));
+	g_assert_no_error(error);
+	g_assert_cmpuint(mine->len, ==, 1);
+	g_assert_cmpstr(((AxisRequestInfo *)g_ptr_array_index(mine, 0))->public_id, ==, kept);
+	g_assert_true(((AxisRequestInfo *)g_ptr_array_index(mine, 0))->follows);
+	/* An administrator reads what became of it, not "declined". */
+	info = info_of(fx, going);
+	words = axis_request_info_words(info);
+	g_assert_cmpstr(words, ==, "Joined to another request for the same title");
 	g_assert_cmpint(N("SELECT count(*) FROM request_closed_title WHERE title_id = %" G_GINT64_FORMAT, ledger), ==, 1);
+}
+
+/* A merge keeps the approved request over the waiting one, whichever record
+ * it is on. */
+static void
+test_merge_approved_wins(Fixture *fx, gconstpointer data)
+{
+	gint64 orchard = film(fx, AXIS_TEST_REQUESTS_ORCHARD);
+	gint64 ledger = film(fx, AXIS_TEST_REQUESTS_LEDGER);
+	gint64 kiln = film(fx, AXIS_TEST_REQUESTS_KILN);
+	gint64 bells = film(fx, AXIS_TEST_REQUESTS_BELLS);
+	g_autofree gchar *going_approved = must_ask_movie(fx, fx->r->robin, orchard);
+	g_autofree gchar *kept_waiting = must_ask_movie(fx, fx->r->sam, ledger);
+	g_autofree gchar *going_waiting = must_ask_movie(fx, fx->r->robin, kiln);
+	g_autofree gchar *kept_approved = must_ask_movie(fx, fx->r->sam, bells);
+	g_autofree gchar *first = NULL;
+	g_autofree gchar *second = NULL;
+
+	/* On the record that goes. */
+	mark_approved(fx, going_approved);
+	merge_titles(fx, orchard, ledger, "film");
+	assert_decision(fx, going_approved, "approved");
+	assert_decision(fx, kept_waiting, "replaced");
+	g_assert_cmpint(N("SELECT title_id FROM request WHERE public_id = '%s'", going_approved), ==, ledger);
+	first = followers_of(fx, going_approved);
+	g_assert_cmpstr(first, ==, "sam");
+	/* On the record kept. */
+	mark_approved(fx, kept_approved);
+	merge_titles(fx, kiln, bells, "film");
+	assert_decision(fx, kept_approved, "approved");
+	assert_decision(fx, going_waiting, "replaced");
+	second = followers_of(fx, kept_approved);
+	g_assert_cmpstr(second, ==, "robin");
+	g_assert_cmpint(N("SELECT count(*) FROM request WHERE decision IN ('waiting', 'approved')"), ==, 2);
+}
+
+/* A merge of two records of a series: each season two requests share goes
+ * to one of them (the approved one, else the kept record's); a request keeps
+ * the seasons it does not share and stays open with them, and its people
+ * follow the requests that took the others. */
+static void
+test_merge_seasons(Fixture *fx, gconstpointer data)
+{
+	static const gint specials[] = { 0 };
+	static const gint three[] = { 1, 2, 3 };
+	static const gint one[] = { 1 };
+	static const gint two[] = { 2 };
+	gint64 harbour = series(fx, AXIS_TEST_REQUESTS_HARBOUR);
+	gint64 clockwork = series(fx, AXIS_TEST_REQUESTS_CLOCKWORK);
+	gint64 kim = axis_test_requests_person(fx->r, "kim", FALSE);
+	gint64 jo = axis_test_requests_person(fx->r, "jo", FALSE);
+	g_autofree gchar *robins = NULL;
+	g_autofree gchar *jos = NULL;
+	g_autofree gchar *kims = NULL;
+	g_autofree gchar *sams = NULL;
+	g_autofree gchar *left = NULL;
+	g_autofree gchar *kept_two = NULL;
+	g_autofree gchar *open = NULL;
+	g_autofree gchar *of_jo = NULL;
+	g_autofree gchar *of_kim = NULL;
+	g_autofree gchar *of_sam = NULL;
+	g_autoptr(GError) error = NULL;
+	AxisRequestMade made;
+
+	/* The record that goes: robin waits for 1, 2 and 3; jo's specials are
+	 * approved. */
+	g_assert_true(ask_series(fx, fx->r->robin, harbour, AXIS_REQUEST_SEASONS_PICKED, three, 3, &made, &error));
+	g_assert_no_error(error);
+	robins = g_strdup(made.public_id);
+	axis_request_made_clear(&made);
+	g_assert_true(ask_series(fx, jo, harbour, AXIS_REQUEST_SEASONS_PICKED, specials, 1, &made, &error));
+	g_assert_no_error(error);
+	jos = g_strdup(made.public_id);
+	axis_request_made_clear(&made);
+	mark_approved(fx, jos);
+	/* The record kept: kim's season 1 is approved; sam waits for 2, and for
+	 * the specials (as the record held them once). */
+	g_assert_true(ask_series(fx, kim, clockwork, AXIS_REQUEST_SEASONS_PICKED, one, 1, &made, &error));
+	g_assert_no_error(error);
+	kims = g_strdup(made.public_id);
+	axis_request_made_clear(&made);
+	mark_approved(fx, kims);
+	g_assert_true(ask_series(fx, fx->r->sam, clockwork, AXIS_REQUEST_SEASONS_PICKED, two, 1, &made, &error));
+	g_assert_no_error(error);
+	sams = g_strdup(made.public_id);
+	axis_request_made_clear(&made);
+	N("INSERT INTO request_season (request_id, title_id, season) SELECT id, title_id, 0 FROM request"
+		" WHERE public_id = '%s' RETURNING season", sams);
+
+	merge_titles(fx, harbour, clockwork, "series");
+	/* No request was left with nothing: all four stay open. */
+	assert_decision(fx, robins, "waiting");
+	assert_decision(fx, jos, "approved");
+	assert_decision(fx, kims, "approved");
+	assert_decision(fx, sams, "waiting");
+	/* robin keeps season 3 alone; jo's approval took the specials from sam;
+	 * kim's approval and sam's (the kept record's) took 1 and 2 from robin. */
+	left = seasons_of(fx, robins);
+	g_assert_cmpstr(left, ==, "3");
+	kept_two = seasons_of(fx, sams);
+	g_assert_cmpstr(kept_two, ==, "2");
+	g_assert_cmpint(N("SELECT title_id FROM request WHERE public_id = '%s'", robins), ==, clockwork);
+	open = Q("SELECT string_agg(season::text, ',' ORDER BY season) FROM request_season WHERE title_id = %"
+		G_GINT64_FORMAT " AND open", clockwork);
+	g_assert_cmpstr(open, ==, "0,1,2,3");
+	of_jo = followers_of(fx, jos);
+	of_kim = followers_of(fx, kims);
+	of_sam = followers_of(fx, sams);
+	g_assert_cmpstr(of_jo, ==, "sam");
+	g_assert_cmpstr(of_kim, ==, "robin");
+	g_assert_cmpstr(of_sam, ==, "robin");
 }
 
 /* ── At scale ───────────────────────────────────────────────────── */
@@ -1902,6 +2362,7 @@ main(int argc, char **argv)
 	AXIS_TEST_ADD_DB_CASE("/requests/decide/widens-never-narrows", Fixture, NULL, test_widens_never_narrows);
 	AXIS_TEST_ADD_DB_CASE("/requests/decide/decline-has-reason", Fixture, NULL, test_decline_has_reason);
 	AXIS_TEST_ADD_DB_CASE("/requests/decide/two-at-once", Fixture, NULL, test_two_at_once);
+	AXIS_TEST_ADD_DB_CASE("/requests/decide/two-placings", Fixture, NULL, test_two_placings);
 	AXIS_TEST_ADD_DB_CASE("/requests/decide/folder-gone", Fixture, NULL, test_could_not_be_added);
 	AXIS_TEST_ADD_DB_CASE("/requests/decide/stopped-before-placing", Fixture, NULL, test_stopped_before_placing);
 	AXIS_TEST_ADD_DB_CASE("/requests/auto/movie", Fixture, NULL, test_auto);
@@ -1911,6 +2372,7 @@ main(int argc, char **argv)
 	AXIS_TEST_ADD_DB_CASE("/requests/quota/seasons-count-each", Fixture, NULL, test_quota_seasons);
 	AXIS_TEST_ADD_DB_CASE("/requests/quota/new-window", Fixture, NULL, test_quota_windows);
 	AXIS_TEST_ADD_DB_CASE("/requests/quota/race", Fixture, NULL, test_quota_race);
+	AXIS_TEST_ADD_DB_CASE("/requests/quota/daily-ceiling", Fixture, NULL, test_daily_ceiling);
 	AXIS_TEST_ADD_DB_CASE("/requests/follow/movie", Fixture, NULL, test_follow_movie);
 	AXIS_TEST_ADD_DB_CASE("/requests/follow/asked-twice", Fixture, NULL, test_follow_race);
 	AXIS_TEST_ADD_DB_CASE("/requests/follow/seasons-left-out", Fixture, NULL, test_follow_seasons);
@@ -1921,9 +2383,13 @@ main(int argc, char **argv)
 	AXIS_TEST_ADD_DB_CASE("/requests/withdraw/follower-takes-over", Fixture, NULL, test_follower_takes_over);
 	AXIS_TEST_ADD_DB_CASE("/requests/state/movie", Fixture, NULL, test_movie_states);
 	AXIS_TEST_ADD_DB_CASE("/requests/state/series-partly", Fixture, NULL, test_series_partly);
+	AXIS_TEST_ADD_DB_CASE("/requests/state/series-removed", Fixture, NULL, test_series_removed);
 	AXIS_TEST_ADD_DB_CASE("/requests/read/lists", Fixture, NULL, test_lists);
+	AXIS_TEST_ADD_DB_CASE("/requests/read/who-asked-series", Fixture, NULL, test_who_asked_series);
 	AXIS_TEST_ADD_DB_CASE("/requests/account/disabled", Fixture, NULL, test_account_gone);
 	AXIS_TEST_ADD_DB_CASE("/requests/model/title-merge", Fixture, NULL, test_title_merge);
+	AXIS_TEST_ADD_DB_CASE("/requests/model/merge-approved-wins", Fixture, NULL, test_merge_approved_wins);
+	AXIS_TEST_ADD_DB_CASE("/requests/model/merge-seasons", Fixture, NULL, test_merge_seasons);
 	AXIS_TEST_ADD_DB_CASE("/requests/state/one-query-a-page", Fixture, NULL, test_one_query_a_page);
 
 	return g_test_run();
