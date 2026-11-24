@@ -38,6 +38,7 @@
 
 #include "acquire/axis-acquire-private.h"
 
+#include <json-glib/json-glib.h>
 #include <string.h>
 
 #include "compat/axis-compat.h"
@@ -955,6 +956,153 @@ store_search(
 	return TRUE;
 }
 
+gchar *
+axis_acquire_candidates_sql(const gchar *table)
+{
+	return g_strconcat("INSERT INTO ", table, " (search_id, position, release_id, source_id,"
+		" name, protocol, size_bytes, published_at, seeders, indexer, indexer_id, info_hash, name_key, quality, match,"
+		" match_text, accepted, safety, blocklisted, rank, score, reasons) SELECT $1::bigint, x.position,"
+		" x.release_id, x.source_id, x.name, x.protocol, x.size_bytes, to_timestamp(x.published_us / 1000000.0),"
+		" x.seeders, x.indexer, x.indexer_id, x.info_hash, x.name_key, x.quality, x.match, x.match_text, x.accepted,"
+		" x.safety, x.blocklisted, x.rank, x.score, x.reasons FROM jsonb_to_recordset($2::jsonb) AS x(position integer,"
+		" release_id bigint, source_id bigint, name text, protocol text, size_bytes bigint, published_us bigint,"
+		" seeders integer, indexer text, indexer_id bigint, info_hash text, name_key text, quality text, match text,"
+		" match_text text, accepted boolean, safety boolean, blocklisted boolean, rank integer, score integer,"
+		" reasons jsonb) RETURNING id, position", NULL);
+}
+
+static void
+member_text(
+	JsonBuilder *builder,
+	const gchar *name,
+	const gchar *value
+){
+	json_builder_set_member_name(builder, name);
+	if (value != NULL)
+		json_builder_add_string_value(builder, value);
+	else
+		json_builder_add_null_value(builder);
+}
+
+static void
+member_int(
+	JsonBuilder *builder,
+	const gchar *name,
+	gint64       value
+){
+	json_builder_set_member_name(builder, name);
+	json_builder_add_int_value(builder, value);
+}
+
+static void
+member_bool(
+	JsonBuilder *builder,
+	const gchar *name,
+	gboolean     value
+){
+	json_builder_set_member_name(builder, name);
+	json_builder_add_boolean_value(builder, value);
+}
+
+/* The releases @first to @first + @n - 1 of the search, in one statement:
+ * each one's row, and its id taken back by its position. */
+static gboolean
+store_candidate_rows(
+	Search      *s,
+	AxisDbConn  *conn,
+	const gchar *search,
+	guint        first,
+	guint        n,
+	GError     **error
+){
+	g_autofree gchar *table = axis_acquire_sql(s->self, "%C");
+	g_autofree gchar *sql = axis_acquire_candidates_sql(table);
+	g_autoptr(JsonBuilder) builder = json_builder_new();
+	g_autoptr(JsonNode) root = NULL;
+	g_autoptr(AxisDbResult) inserted = NULL;
+	g_autofree gchar *rows = NULL;
+	const gchar *params[2];
+	guint i;
+
+	json_builder_begin_array(builder);
+	for (i = 0; i < n; i++) {
+		const AxisAcquireConsidered *c = g_ptr_array_index(s->considered, first + i);
+		const AxisIndexerRelease *r = c->release;
+		g_autoptr(GPtrArray) reasons = reasons_of(s, c);
+		g_autofree gchar *json = axis_acquire_reasons_to_json(reasons);
+		g_autofree gchar *match_text = axis_acquire_text_cut(c->match_text, 1000);
+		g_autofree gchar *indexer = axis_acquire_text_cut(r->indexer_name, 100);
+		JsonNode *why = json != NULL ? json_from_string(json, NULL) : NULL;
+
+		json_builder_begin_object(builder);
+		member_int(builder, "position", first + i);
+		member_int(builder, "release_id", r->id);
+		member_int(builder, "source_id", c->source_id);
+		member_text(builder, "name", r->name);
+		member_text(builder, "protocol", axis_download_protocol_to_string(r->protocol));
+		if (r->size_bytes >= 0)
+			member_int(builder, "size_bytes", r->size_bytes);
+		if (r->published_us > 0)
+			member_int(builder, "published_us", r->published_us);
+		if (r->seeders >= 0)
+			member_int(builder, "seeders", r->seeders);
+		member_text(builder, "indexer", indexer);
+		member_int(builder, "indexer_id", r->indexer_id);
+		member_text(builder, "info_hash", r->info_hash != NULL && axis_download_hash_valid(r->info_hash) ?
+			r->info_hash : NULL);
+		member_text(builder, "name_key", c->name_key);
+		member_text(builder, "quality", release_quality(c));
+		member_text(builder, "match", c->match == AXIS_RELEASE_MATCH_YES ? "match" :
+			c->match == AXIS_RELEASE_MATCH_AMBIGUOUS ? "ambiguous" : "none");
+		member_text(builder, "match_text", match_text);
+		member_bool(builder, "accepted", c->accepted);
+		member_bool(builder, "safety", c->verdict != NULL && c->verdict->safety);
+		member_bool(builder, "blocklisted", c->blocklisted);
+		member_int(builder, "rank", c->rank);
+		member_int(builder, "score", c->verdict != NULL ? c->verdict->score : 0);
+		/* (The reasons as they are: an array inside the row, not a text.) */
+		json_builder_set_member_name(builder, "reasons");
+		if (why != NULL)
+			json_builder_add_value(builder, why);
+		else
+			json_builder_add_null_value(builder);
+		json_builder_end_object(builder);
+	}
+	json_builder_end_array(builder);
+	root = json_builder_get_root(builder);
+	rows = json_to_string(root, FALSE);
+	params[0] = search;
+	params[1] = rows;
+	if (!axis_db_conn_exec(conn, sql, 2, params, &inserted, error))
+		return FALSE;
+	if (axis_db_result_get_n_rows(inserted) != n) {
+		g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED, "%u releases were to be stored and %u were",
+			n, axis_db_result_get_n_rows(inserted));
+		return FALSE;
+	}
+	for (i = 0; i < n; i++) {
+		gint64 id = 0;
+		gint64 position = -1;
+
+		axis_db_result_get_int64(inserted, i, 0, &id);
+		axis_db_result_get_int64(inserted, i, 1, &position);
+		if (position < (gint64)first || position >= (gint64)first + n) {
+			g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_FAILED,
+				"a stored release came back with a position that was not sent");
+			return FALSE;
+		}
+		((AxisAcquireConsidered *)g_ptr_array_index(s->considered, (guint)position))->candidate_id = id;
+	}
+	return TRUE;
+}
+
+/*
+ * The releases a search considered, stored AXIS_ACQUIRE_CANDIDATES_A_STATEMENT
+ * rows a statement (one INSERT a row was a round trip a release, and took
+ * several times as long for a thousand releases), in the search's
+ * transaction.  A row that cannot be stored fails its statement and with it
+ * the transaction, as a single row's INSERT did.
+ */
 static gboolean
 store_candidates(
 	Search      *s,
@@ -962,68 +1110,23 @@ store_candidates(
 	GError     **error
 ){
 	g_autofree gchar *search = axis_acquire_int_text(s->search_id);
-	g_autofree gchar *sql = axis_acquire_sql(s->self, "INSERT INTO %C (search_id, position, release_id, source_id,"
-		" name, protocol, size_bytes, published_at, seeders, indexer, indexer_id, info_hash, name_key, quality, match,"
-		" match_text, accepted, safety, blocklisted, rank, score, reasons) VALUES ($1::bigint, $2::integer,"
-		" $3::bigint, $4::bigint, $5, $6, $7::bigint, to_timestamp($8::bigint / 1000000.0), $9::integer, $10,"
-		" $11::bigint, $12, $13, $14, $15, $16, $17::boolean, $18::boolean, $19::boolean, $20::integer,"
-		" $21::integer, $22::jsonb) RETURNING id");
 	g_autofree gchar *count_sql = axis_acquire_sql(s->self, "UPDATE %S SET n_accepted = $2::integer"
 		" WHERE id = $1::bigint");
 	guint accepted = 0;
 	guint i;
 
+	for (i = 0; i < s->considered->len; i += AXIS_ACQUIRE_CANDIDATES_A_STATEMENT) {
+		if (!store_candidate_rows(s, conn, search, i, MIN(s->considered->len - i,
+		        (guint)AXIS_ACQUIRE_CANDIDATES_A_STATEMENT), error))
+			return FALSE;
+	}
 	for (i = 0; i < s->considered->len; i++) {
-		AxisAcquireConsidered *c = g_ptr_array_index(s->considered, i);
-		const AxisIndexerRelease *r = c->release;
-		g_autoptr(GPtrArray) reasons = reasons_of(s, c);
-		g_autoptr(AxisDbResult) inserted = NULL;
-		g_autofree gchar *position = axis_acquire_int_text(i);
-		g_autofree gchar *release = axis_acquire_int_text(r->id);
-		g_autofree gchar *source = axis_acquire_int_text(c->source_id);
-		g_autofree gchar *size = r->size_bytes >= 0 ? axis_acquire_int_text(r->size_bytes) : NULL;
-		g_autofree gchar *published = r->published_us > 0 ? axis_acquire_int_text(r->published_us) : NULL;
-		g_autofree gchar *seeders = r->seeders >= 0 ? axis_acquire_int_text(r->seeders) : NULL;
-		g_autofree gchar *indexer_id = axis_acquire_int_text(r->indexer_id);
-		g_autofree gchar *rank = axis_acquire_int_text(c->rank);
-		g_autofree gchar *score = axis_acquire_int_text(c->verdict != NULL ? c->verdict->score : 0);
-		g_autofree gchar *json = axis_acquire_reasons_to_json(reasons);
-		g_autofree gchar *match_text = axis_acquire_text_cut(c->match_text, 1000);
-		g_autofree gchar *indexer = axis_acquire_text_cut(r->indexer_name, 100);
-		const gchar *params[22];
-
-		params[0] = search;
-		params[1] = position;
-		params[2] = release;
-		params[3] = source;
-		params[4] = r->name;
-		params[5] = axis_download_protocol_to_string(r->protocol);
-		params[6] = size;
-		params[7] = published;
-		params[8] = seeders;
-		params[9] = indexer;
-		params[10] = indexer_id;
-		params[11] = r->info_hash != NULL && axis_download_hash_valid(r->info_hash) ? r->info_hash : NULL;
-		params[12] = c->name_key;
-		params[13] = release_quality(c);
-		params[14] = c->match == AXIS_RELEASE_MATCH_YES ? "match" :
-			c->match == AXIS_RELEASE_MATCH_AMBIGUOUS ? "ambiguous" : "none";
-		params[15] = match_text;
-		params[16] = c->accepted ? "true" : "false";
-		params[17] = c->verdict != NULL && c->verdict->safety ? "true" : "false";
-		params[18] = c->blocklisted ? "true" : "false";
-		params[19] = rank;
-		params[20] = score;
-		params[21] = json;
-		if (!axis_db_conn_exec(conn, sql, 22, params, &inserted, error))
-			return FALSE;
-		axis_db_result_get_int64(inserted, 0, 0, &c->candidate_id);
-		if (s->self->info->candidate_stored != NULL &&
-		    !s->self->info->candidate_stored(s->self->data, conn, s->want, c, c->candidate_id, error))
-			return FALSE;
-		if (c->accepted)
+		if (((const AxisAcquireConsidered *)g_ptr_array_index(s->considered, i))->accepted)
 			accepted++;
 	}
+	if (s->considered->len > 0 && s->self->info->candidates_stored != NULL &&
+	    !s->self->info->candidates_stored(s->self->data, conn, s->want, s->search_id, s->considered, error))
+		return FALSE;
 	{
 		g_autofree gchar *n = axis_acquire_int_text(accepted);
 		const gchar *params[2];

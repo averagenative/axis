@@ -82,6 +82,30 @@ G_BEGIN_DECLS
 #define AXIS_ACQUIRE_SEARCHES_KEPT   5
 #define AXIS_ACQUIRE_SEARCH_KEEP_S   (7 * 86400)
 
+/* The older searches are deleted by the follow-up, which runs every minute:
+ * no more often than this, at most AXIS_ACQUIRE_PRUNE_BATCH searches a
+ * statement (each takes its stored releases with it) and
+ * AXIS_ACQUIRE_PRUNE_BATCHES statements a time.  What is left waits for the
+ * next time: a backlog, after a long stop, goes in pieces. */
+#define AXIS_ACQUIRE_PRUNE_EVERY_S   3600
+#define AXIS_ACQUIRE_PRUNE_BATCH     1000
+#define AXIS_ACQUIRE_PRUNE_BATCHES   10
+
+/* The releases a search considered are stored this many rows a statement:
+ * a search of a few hundred releases is one statement, and no statement
+ * carries more than a megabyte or so. */
+#define AXIS_ACQUIRE_CANDIDATES_A_STATEMENT 1000
+
+/* The INSERT of stored releases into @table (a module's candidate table):
+ * $1 is the search, $2 the rows as one JSON array of objects (position,
+ * release_id, source_id, name, protocol, size_bytes, published_us, seeders,
+ * indexer, indexer_id, info_hash, name_key, quality, match, match_text,
+ * accepted, safety, blocklisted, rank, score, reasons; a member left out is
+ * NULL).  It returns each row's id and position.  The search sends it; the
+ * scale test measures it as it is sent. */
+gchar *
+axis_acquire_candidates_sql(const gchar *table);
+
 /* ── Small helpers ──────────────────────────────────────────────── */
 
 /* "%" G_GINT64_FORMAT */
@@ -475,7 +499,7 @@ axis_acquire_disk_set(
  * @reject_code and @reject_text (not wanted: the profile's kind of reason,
  * which an administrator may override by grabbing it), @reject_phrase (the
  * summary's words for either), @data (what the release holds, for
- * claim_check(), claimed() and candidate_stored()) and, with decide_each,
+ * claim_check(), claimed() and candidates_stored()) and, with decide_each,
  * @disk, @runtime_minutes and @noun (what the release is decided against).
  * The rest is the shared code's.
  */
@@ -854,9 +878,12 @@ G_DEFINE_AUTOPTR_CLEANUP_FUNC(AxisAcquireHandPreview, axis_acquire_hand_preview_
  *   "metadata_missing").
  * @judge: (nullable) a release the matcher says is titles[0]: what it is
  *   for (see AxisAcquireConsidered)
- * @search_stored, @candidate_stored: (nullable) after the search's and each
- *   candidate's row is written, in the same transaction: the module's own
- *   columns
+ * @search_stored, @candidates_stored: (nullable) after the search's row is
+ *   written, and after all of its candidates' rows are (each one's
+ *   candidate_id is set by then), in the same transaction: the module's own
+ *   columns.  The candidates come at once (element-type
+ *   AxisAcquireConsidered) so that a search of a thousand releases is a
+ *   statement or two for the module as well, not some for each release
  * @claim_check: in the claim's transaction, the owner's row locked:
  *   *@gone when the owner was removed, *@in_flight when anything the grab is
  *   for is in flight
@@ -905,8 +932,8 @@ typedef struct
 	void     (*judge)(gpointer data, AxisAcquireWant *want, AxisAcquireConsidered *considered);
 	gboolean (*search_stored)(gpointer data, AxisDbConn *conn, AxisAcquireWant *want, gint64 search_id,
 	                          GError **error);
-	gboolean (*candidate_stored)(gpointer data, AxisDbConn *conn, AxisAcquireWant *want,
-	                             const AxisAcquireConsidered *considered, gint64 candidate_id, GError **error);
+	gboolean (*candidates_stored)(gpointer data, AxisDbConn *conn, AxisAcquireWant *want, gint64 search_id,
+	                              const GPtrArray *considered, GError **error);
 	gboolean (*claim_check)(gpointer data, AxisDbConn *conn, AxisAcquireWant *want,
 	                        const AxisAcquireGrabSpec *grab, gboolean *gone, gboolean *in_flight, GError **error);
 	gboolean (*claimed)(gpointer data, AxisDbConn *conn, AxisAcquireWant *want, const AxisAcquireGrabSpec *grab,
@@ -1597,14 +1624,35 @@ axis_acquire_handle_failure(
  * failed, claims never handed over settled (the download sent for one
  * adopted, else closed), failed, stalled, gone and removed downloads dealt
  * with, failed removals tried again, completions recorded, follow_more(),
- * then old searches pruned.  It works from facts alone: a restart or two
- * runs at once change nothing.
+ * then, once an hour, old searches pruned (axis_acquire_prune_searches()).
+ * It works from facts alone: a restart or two runs at once change nothing.
  */
 gboolean
 axis_acquire_run_follow(
 	AxisAcquire              *self,
 	AxisAcquireFollowReport  *report,
 	GError                  **error
+);
+
+/**
+ * axis_acquire_prune_searches:
+ * @now: whatever the time of the last one (the tests'); else only when
+ *   AXIS_ACQUIRE_PRUNE_EVERY_S have passed since, or none was done since the
+ *   start
+ * @deleted: (out) (optional): how many searches went
+ *
+ * Deletes the searches that ended more than AXIS_ACQUIRE_SEARCH_KEEP_S ago
+ * and are not among their owner's latest AXIS_ACQUIRE_SEARCHES_KEPT (the
+ * manual ones counted apart), with the releases they stored: at most
+ * AXIS_ACQUIRE_PRUNE_BATCH a statement and AXIS_ACQUIRE_PRUNE_BATCHES
+ * statements, each its own transaction.
+ */
+gboolean
+axis_acquire_prune_searches(
+	AxisAcquire  *self,
+	gboolean      now,
+	guint        *deleted,
+	GError      **error
 );
 
 /* ── Pacing ─────────────────────────────────────────────────────── */

@@ -41,6 +41,8 @@ struct _AxisAcquire
 	gpointer                    claim_hook_data;
 	AxisAcquireClaimHook        replace_hook;	/* (hook_lock) */
 	gpointer                    replace_hook_data;
+	/* No prune of old searches before this (monotonic; 0: none yet). */
+	gint64                      prune_after_us;	/* (hook_lock) */
 };
 
 /* An SQL statement with the module's table and column names put in:

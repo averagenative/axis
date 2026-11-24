@@ -1724,6 +1724,56 @@ test_prune(Fixture *fx, gconstpointer data)
 	assert_q(fx, "6", "SELECT count(*) FROM movie_candidate");
 }
 
+/* Not at every follow-up, and not all at once: once an hour (and at the
+ * first follow-up after a start), a bounded number of searches a time. */
+static void
+test_prune_paced(Fixture *fx, gconstpointer data)
+{
+	g_autoptr(GError) error = NULL;
+	gint64 movie = add_film(fx, "101");
+	guint all = AXIS_ACQUIRE_PRUNE_BATCH * AXIS_ACQUIRE_PRUNE_BATCHES;
+	guint deleted = 99;
+
+	/* The first follow-up after a start prunes; there is nothing yet. */
+	follow(fx);
+	exec(fx, "INSERT INTO movie_search (movie_id, cause, started_at, finished_at, outcome) SELECT %" G_GINT64_FORMAT
+		", 'scheduled', now() - interval '10 days', now() - interval '10 days', 'nothing_found'"
+		" FROM generate_series(1, 8)", movie);
+	/* The next ones, within the hour, do not. */
+	follow(fx);
+	follow(fx);
+	assert_qf(fx, "8", "SELECT count(*) FROM movie_search WHERE movie_id = %" G_GINT64_FORMAT, movie);
+	/* At its time: the latest five stay. */
+	g_assert_true(axis_movies_prune_searches(fx->movies, &deleted, &error));
+	g_assert_no_error(error);
+	g_assert_cmpuint(deleted, ==, 3);
+	assert_qf(fx, "5", "SELECT count(*) FROM movie_search WHERE movie_id = %" G_GINT64_FORMAT, movie);
+	g_assert_true(axis_movies_prune_searches(fx->movies, &deleted, &error));
+	g_assert_cmpuint(deleted, ==, 0);
+
+	/* More old searches than one time takes (a long stop): its batches go,
+	 * the rest waits for the next time, and the latest five stay. */
+	exec(fx, "INSERT INTO movie_search (movie_id, cause, started_at, finished_at, outcome) SELECT %" G_GINT64_FORMAT
+		", 'scheduled', now() - interval '10 days', now() - interval '10 days', 'nothing_found'"
+		" FROM generate_series(1, %u)", movie, all + 300);
+	exec(fx, "INSERT INTO movie_candidate (search_id, position, release_id, source_id, name, protocol, name_key,"
+		" quality, match, accepted, safety) SELECT id, 0, 1, 1, 'x', 'usenet', 'x', 'unknown', 'none', false, false"
+		" FROM movie_search");
+	g_assert_true(axis_movies_prune_searches(fx->movies, &deleted, &error));
+	g_assert_no_error(error);
+	g_assert_cmpuint(deleted, ==, all);
+	assert_qf(fx, "305", "SELECT count(*) FROM movie_search WHERE movie_id = %" G_GINT64_FORMAT, movie);
+	assert_q(fx, "305", "SELECT count(*) FROM movie_candidate");
+	g_assert_true(axis_movies_prune_searches(fx->movies, &deleted, &error));
+	g_assert_no_error(error);
+	g_assert_cmpuint(deleted, ==, 300);
+	assert_qf(fx, "5", "SELECT count(*) FROM movie_search WHERE movie_id = %" G_GINT64_FORMAT, movie);
+	/* The five that stay are the latest. */
+	assert_qf(fx, "5", "SELECT count(*) FROM movie_search WHERE id > (SELECT max(id) - 5 FROM movie_search)"
+		" AND movie_id = %" G_GINT64_FORMAT, movie);
+	assert_q(fx, "5", "SELECT count(*) FROM movie_candidate");
+}
+
 /* ── A title merge ──────────────────────────────────────────────── */
 
 static void
@@ -2438,6 +2488,7 @@ main(int argc, char **argv)
 	ADD("/movies/actions-logged", test_actions_logged);
 	ADD("/movies/uncertain", test_uncertain);
 	ADD("/movies/prune", test_prune);
+	ADD("/movies/prune-paced", test_prune_paced);
 	ADD("/movies/title-merge", test_title_merge);
 	ADD("/movies/on-disk", test_on_disk);
 #undef ADD
