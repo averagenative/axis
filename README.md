@@ -249,7 +249,9 @@ make container && make check-examples
 
 - `src/`: the daemon, `axisd`, one directory for each layer (the source
   layout is listed in `openspec/project.md`). `clients/worker/`:
-  `axis-worker`. `tests/`: tests, fixtures and fuzz targets. `deploy/`: the
+  `axis-worker`. `clients/portal/`: `axis-portal`, the request portal (built,
+  not yet reviewed for the internet and not yet in the image). `tests/`:
+  tests, fixtures and fuzz targets. `deploy/`: the
   image and the examples. `docs/`: the user guide.
 - [`openspec/specs/`](openspec/specs/): what Axis does, one requirement
   specification for each capability.

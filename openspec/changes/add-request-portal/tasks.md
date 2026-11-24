@@ -212,50 +212,54 @@ Gate:
 
 Build:
 
-- [ ] 3.1 Split from `src/web/` what the portal reuses and that must not pull in the database: the security headers, the CSRF and cookie helpers, the throttle, the limits.
-- [ ] 3.2 `clients/portal/`: configuration (file and `AXIS_PORTAL_*`, the token from a file, unknown keys refused), the client of the eleven operations with a bounded reader for each answer, the pages, the poster cache, the log, `--healthcheck`.
-- [ ] 3.3 `make` builds `axis-portal` without libpq; `tests/check-portal-link.sh` beside the worker's.
-- [ ] 3.4 Fuzz targets: `tests/fuzz/fuzz-portal-answer.c` (the daemon's answers as the portal reads them) and `tests/fuzz/fuzz-portal-form.c` (the forms).
-- [ ] 3.5 The "not reviewed for the internet" line at start.
-- [ ] 3.6 The known limits of this slice in `openspec/project.md`.
+- [x] 3.1 Split from `src/web/` what the portal reuses and that must not pull in the database: the security headers (`axis-web-headers.[ch]`, out of `axis-web.c`), the secrets (`axis-secret.[ch]`, out of `axis-password.c`: random tokens, derived tokens, the constant-time comparison), the limits (`axis-web-limits.c` asks whose proxies are trusted and which requests are a worker's through two functions the shell sets, and includes nothing of accounts). The throttle, the checks on what a client sends (`axis-web-auth-input.c`) and the trusted-proxy list with its resolver were free of the database already. The cookie and CSRF code of `axis-web-auth.c` is tied to the engine's sessions and was not split: the portal has its own few lines, on the shared helpers.
+- [x] 3.2 `clients/portal/`: configuration (`axis-portal-config.c`: a key file and `AXIS_PORTAL_*`, the token from a file, unknown keys and unknown `AXIS_PORTAL_*` variables refused), the client of the eleven operations (`axis-portal-client.c`), the writer of their bodies and a bounded, strict reader for each answer (`axis-portal-wire.c`), the readers of what a browser sends (`axis-portal-form.c`), the pages (`axis-portal-view.c`), the one function that answers every request with the limits, the poster cache and the log (`axis-portal-app.c`), `--healthcheck` (`main.c`).
+- [x] 3.3 `make` builds `axis-portal` without libpq; `tests/check-portal-link.sh` beside the worker's, run by `make test`. `make install` and the image do not install it yet (4.1); the image's build compiles and tests it, because it runs `make test`.
+- [x] 3.4 Fuzz targets: `tests/fuzz/fuzz-portal-answer.c` (the daemon's answers as the portal reads them, and the pages written from them) and `tests/fuzz/fuzz-portal-form.c` (a path, a query, a form; and that what goes on to the daemon is a body the daemon's own reader takes). Compiled, and each run for 30 seconds by the author; `make fuzz` was not run.
+- [x] 3.5 The "not reviewed for the internet" line at start (a warning in the log; asserted in `/portal/process/restart`).
+- [x] 3.6 The known limits of this slice in `openspec/project.md` ("The request portal").
+
+The test paths below are the plan's. `tests/test-portal.c` has 26 cases and `tests/test-portal-process.c` has 6; where a scenario's test has another path, the task names it.
 
 Tests, `portal` specification:
 
-- [ ] 3.10 `tests/check-portal-link.sh`: Not linked with the database client.
-- [ ] 3.11 `/portal/config/unknown-key`: An unknown key.
-- [ ] 3.12 `/portal/config/plain-http-refused`: Plain HTTP refused.
-- [ ] 3.13 `/portal/process/nothing-writable`: Nothing writable (the real binary, every directory read-only).
-- [ ] 3.14 `/portal/pages/daemon-away`: The daemon is away.
-- [ ] 3.15 `/portal/pages/without-session`: Without a session (every route of the portal's table but login and the static files; the stand-in daemon counts no call).
-- [ ] 3.16 `/portal/pages/probe-loopback-only`: The probe.
-- [ ] 3.17 `/portal/pages/headers`: Headers (compared with the engine interface's own).
-- [ ] 3.18 `/portal/pages/state-and-form`: A title's state and the form.
-- [ ] 3.19 `/portal/pages/provider-text`: Provider text.
-- [ ] 3.20 `/portal/pages/failure-plain-words`: A failure in plain words.
-- [ ] 3.21 `/portal/pages/engine-paths`: The engine's paths.
-- [ ] 3.22 `/portal/pages/headers-not-passed-on`: Headers are not passed on.
-- [ ] 3.23 `/portal/session/cookie`: The cookie.
-- [ ] 3.24 `/portal/session/post-without-token`: A post without the token.
-- [ ] 3.25 `/portal/session/nothing-secret-in-an-address`: Nothing secret in an address.
-- [ ] 3.26 `/portal/session/open-redirect`: An open redirect.
-- [ ] 3.27 `/portal/session/plain-http`: Plain HTTP.
-- [ ] 3.28 `/portal/session/forwarded-from-elsewhere`: Forwarded headers from elsewhere.
-- [ ] 3.29 `/portal/process/restart`: A restart (the real binary and a real daemon).
-- [ ] 3.30 `/portal/process/disabled-while-logged-in`: Disabled while logged in.
-- [ ] 3.31 `/portal/process/role-change`: A role change.
-- [ ] 3.32 `/portal/process/logout`: Logout.
-- [ ] 3.33 `/portal/limits/login-flood`: A flood of logins from one address.
-- [ ] 3.34 `/portal/limits/search-flood`: A flood of searches.
-- [ ] 3.35 `/portal/limits/large-body`: A large body.
-- [ ] 3.36 `/portal/process/owner-gets-in`: The owner still gets in (through the portal's cookie).
-- [ ] 3.37 `/portal/process/altered-device`: An altered device value.
-- [ ] 3.38 `/portal/log/secrets-absent`: Secrets absent from the log.
-- [ ] 3.39 `/portal/log/password-as-username`: A password typed as a username.
-- [ ] 3.40 `/portal/pages/two-session-cookies`: a request with two session cookies is treated as no session.
+- [x] 3.10 `tests/check-portal-link.sh`: Not linked with the database client.
+- [x] 3.11 `/portal/config/unknown-key`: An unknown key (also `/portal/process/refuses-to-start`, with the real program).
+- [x] 3.12 `/portal/config/plain-http-refused`: Plain HTTP refused (also `/portal/process/refuses-to-start`).
+- [x] 3.13 `/portal/process/nothing-writable`: Nothing writable. The real binary, in a directory it cannot write to, with every write to every file system denied by Landlock: people log in, search and ask, a request is made and withdrawn at the real daemon, and nothing was created. A container with a read-only root is 4.10's.
+- [x] 3.14 `/portal/pages/daemon-away`: The daemon is away (also twelve ways for the daemon to fail, each on each operation: none of its words reaches a page).
+- [x] 3.15 `/portal/pages/without-session`: Without a session (every route of the portal's table but login, the stylesheet and the probe; the stand-in daemon counts no call).
+- [x] 3.16 `/portal/pages/probe-loopback-only`: The probe. No test connects from an address that is not loopback: a request that a proxy on this machine forwards for someone else stands in for one, and is answered 404.
+- [x] 3.17 `/portal/pages/headers`: Headers (against the list both interfaces take them from; compared with what the real daemon sends in `/portal/process/restart`).
+- [x] 3.18 `/portal/pages/state-and-form`: A title's state and the form.
+- [x] 3.19 `/portal/pages/provider-text`: Provider text (in element text, in an attribute, in a link; a decline's reason; what was typed into the search box).
+- [x] 3.20 `/portal/pages/failure-plain-words`: A failure in plain words.
+- [x] 3.21 `/portal/pages/engine-paths`: The engine's paths (and other spellings of the portal's own).
+- [x] 3.22 `/portal/pages/headers-not-passed-on`: Headers are not passed on (every request the stand-in received: its method, path, headers and body; a `Host` of the browser's choosing is not tried).
+- [x] 3.23 `/portal/session/cookie`: The cookie.
+- [x] 3.24 `/portal/session/post-without-token`: A post without the token (also the login form's token).
+- [x] 3.25 `/portal/session/nothing-secret-in-an-address`: Nothing secret in an address.
+- [x] 3.26 `/portal/session/open-redirect`: An open redirect.
+- [x] 3.27 `/portal/session/plain-http`: Plain HTTP.
+- [x] 3.28 `/portal/session/forwarded-from-elsewhere`: Forwarded headers from elsewhere (`X-Forwarded-Proto` in `/portal/session/plain-http`; `X-Forwarded-For` in this case, which runs with the test-only override).
+- [x] 3.29 `/portal/process/restart`: A restart (the real binary and a real daemon).
+- [x] 3.30 `/portal/process/disabled-while-logged-in`: Disabled while logged in (the real binary and a real daemon; with the stand-in in `/portal/pages/session-ended`).
+- [x] 3.31 `/portal/process/role-change`: A role change (in `/portal/process/disabled-while-logged-in`).
+- [x] 3.32 `/portal/process/logout`: Logout.
+- [x] 3.33 `/portal/limits/login-flood`: A flood of logins from one address (also a flood of session cookies the daemon does not know).
+- [x] 3.34 `/portal/limits/search-flood`: A flood of searches (and of request posts).
+- [x] 3.35 `/portal/limits/large-body`: A large body.
+- [x] 3.36 `/portal/process/owner-gets-in`: The owner still gets in (through the portal's cookie; the real binary and a real daemon).
+- [x] 3.37 `/portal/process/altered-device`: An altered device value (in `/portal/process/owner-gets-in`).
+- [x] 3.38 `/portal/log/secrets-absent`: Secrets absent from the log (also the real program's log, in the process cases).
+- [x] 3.39 `/portal/log/password-as-username`: A password typed as a username (in `/portal/log/secrets-absent`).
+- [x] 3.40 `/portal/pages/two-session-cookies`: a request with two session cookies is treated as no session.
+
+Tests beyond the plan: `/portal/wire/bodies` (the operations' names are the daemon's list; every body the portal writes is one the daemon's reader takes whole; what the writer refuses), `/portal/wire/answers` (an answer with a member its operation does not define, a wrong type, a word that is not one of the fixed ones, is refused whole), `/portal/form/reader` (paths and forms).
 
 Gate:
 
-- [ ] 3.90 Independent review of P3: what the portal passes on, its cookies and CSRF, its readers of the daemon's answers. Record it in `design.md`; fix each finding with a test.
+- [ ] 3.90 Independent review of P3: what the portal passes on, its cookies and CSRF, its readers of the daemon's answers. Record it in `design.md`; fix each finding with a test. Not arranged by the author. The four gates (`make check`, `make fuzz`, `make check-container`, `make check-examples`) were not run by the author either; only the test programs the slice touches were, under both sanitizers.
 
 ## 4. P4: limits, lockout, hardening and the deployment examples
 
