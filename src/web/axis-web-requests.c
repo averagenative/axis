@@ -1173,6 +1173,8 @@ add_admin_notes(
 	/* The engine's own reason: an administrator's alone. */
 	if (info->decision == AXIS_REQUEST_APPROVED && info->add_error != NULL && info->added_us == 0)
 		ADD(td, text("request-add-error", info->add_error));
+	else if (info->state == AXIS_REQUEST_STATE_FAILED && info->cause == AXIS_REQUEST_CAUSE_NOT_ADDED)
+		ADD(td, text("request-add-error", "It was approved, and Axis stopped before its title was added."));
 }
 
 static HtmxNode *
@@ -1914,8 +1916,11 @@ not_added_source(
 	gint64 count = 0;
 	gint64 newest = 0;
 
+	/* With the engine's reason, or left unplaced by a daemon that stopped
+	 * between the decision and the adding (a placing takes seconds). */
 	if (!axis_db_pool_query_bounded(self->pool, "SELECT count(*), coalesce(max(id), 0) FROM request"
-	        " WHERE decision = 'approved' AND add_error IS NOT NULL AND added_at IS NULL", reading->deadline_ms, &result,
+	        " WHERE decision = 'approved' AND added_at IS NULL"
+	        " AND (add_error IS NOT NULL OR decided_at < now() - interval '2 minutes')", reading->deadline_ms, &result,
 	        error))
 		return FALSE;
 	axis_db_result_get_int64(result, 0, 0, &count);

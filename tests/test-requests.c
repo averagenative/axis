@@ -580,22 +580,46 @@ racer_main(gpointer data)
 	return NULL;
 }
 
+/*
+ * Lets the racers go, and makes sure they really meet: the test's own
+ * connection first holds a lock on the request table that lets every racer
+ * read and lock rows but lets none write.  Each racer then runs until it
+ * waits, either for that lock (it has made its checks and is about to write)
+ * or for a lock of the layer's own, held by a racer that is.  Only when all
+ * of them wait is the table let go.  Code that took no lock of its own would
+ * have every racer past its checks at that moment, and all of them would
+ * write.  No timing decides the outcome.
+ */
 static void
 race(
-	Racer *racers,
-	guint  n
+	Fixture *fx,
+	Racer   *racers,
+	guint    n
 ){
 	g_autofree GThread **threads = g_new0(GThread *, n);
+	gint64 waiting = 0;
 	gint go = 0;
+	guint tries;
 	guint i;
 
+	axis_test_db_exec(fx->r->t->db, "BEGIN");
+	axis_test_db_exec(fx->r->t->db, "LOCK TABLE request IN SHARE MODE");
 	for (i = 0; i < n; i++) {
 		racers[i].go = &go;
 		threads[i] = g_thread_new("racer", racer_main, &racers[i]);
 	}
 	g_atomic_int_set(&go, 1);
+	for (tries = 0; tries < 6000 && waiting < n; tries++) {
+		waiting = N("SELECT count(*) FROM pg_locks WHERE NOT granted AND database = (SELECT oid FROM pg_database"
+			" WHERE datname = current_database())");
+		if (waiting < n)
+			g_usleep(10 * 1000);
+	}
+	axis_test_db_exec(fx->r->t->db, "COMMIT");
 	for (i = 0; i < n; i++)
 		g_thread_join(threads[i]);
+	/* Every racer was held at a lock before any wrote. */
+	g_assert_cmpint(waiting, ==, n);
 }
 
 /* Scenario: Two decisions at once. */
@@ -620,7 +644,7 @@ test_two_at_once(Fixture *fx, gconstpointer data)
 		racers[0].public_id = racers[1].public_id = id;
 		racers[0].what = 0;
 		racers[1].what = 1;
-		race(racers, 2);
+		race(fx, racers, 2);
 		/* Exactly one took effect; the other was told it was decided. */
 		g_assert_cmpint(racers[0].ok + racers[1].ok, ==, 1);
 		lost = racers[0].ok ? racers[1].error : racers[0].error;
@@ -969,7 +993,7 @@ test_quota_race(Fixture *fx, gconstpointer data)
 		racers[i].user = fx->r->robin;
 		racers[i].title = film(fx, films[i]);
 	}
-	race(racers, G_N_ELEMENTS(racers));
+	race(fx, racers, G_N_ELEMENTS(racers));
 	for (i = 0; i < G_N_ELEMENTS(racers); i++) {
 		if (racers[i].ok) {
 			made++;
@@ -1047,7 +1071,7 @@ test_follow_race(Fixture *fx, gconstpointer data)
 	racers[2].user = fx->r->robin;
 	racers[3].user = fx->r->sam;
 	racers[2].title = racers[3].title = ledger;
-	race(racers, 4);
+	race(fx, racers, 4);
 	for (i = 0; i < 4; i++) {
 		g_assert_no_error(racers[i].error);
 		g_assert_true(racers[i].ok);
@@ -1307,7 +1331,7 @@ test_withdraw_race(Fixture *fx, gconstpointer data)
 		racers[0].what = 0;
 		racers[1].what = 2;
 		racers[1].user = fx->r->robin;
-		race(racers, 2);
+		race(fx, racers, 2);
 		g_assert_cmpint(racers[0].ok + racers[1].ok, ==, 1);
 		lost = racers[0].ok ? racers[1].error : racers[0].error;
 		g_assert_error(lost, AXIS_REQUESTS_ERROR, AXIS_REQUESTS_ERROR_DECIDED);
@@ -1545,6 +1569,41 @@ test_could_not_be_added(Fixture *fx, gconstpointer data)
 		g_assert_false(axis_requests_try_again(fx->r->requests, waiting, "root", fx->r->films_root, 0, &added, &error));
 		g_assert_error(error, AXIS_REQUESTS_ERROR, AXIS_REQUESTS_ERROR_DECIDED);
 	}
+}
+
+/* A daemon that stopped between a decision and the placing of its title
+ * leaves an approved request with no title and no reason: it reads as not
+ * added once the placing has had its time, and "Try again" completes it. */
+static void
+test_stopped_before_placing(Fixture *fx, gconstpointer data)
+{
+	gint64 orchard = film(fx, AXIS_TEST_REQUESTS_ORCHARD);
+	g_autofree gchar *id = must_ask_movie(fx, fx->r->robin, orchard);
+	g_autoptr(AxisRequestInfo) fresh = NULL;
+	g_autoptr(AxisRequestInfo) stuck = NULL;
+	g_autoptr(AxisRequestInfo) done = NULL;
+	g_autoptr(GError) error = NULL;
+	gboolean added = FALSE;
+
+	axis_test_requests_set_defaults(fx->r);
+	/* The decision as the approval's transaction commits it, and no placing. */
+	N("UPDATE request SET decision = 'approved', approved_how = 'admin', decided_by = 'root',"
+		" decided_at = 'epoch'::timestamptz + %" G_GINT64_FORMAT " * interval '1 microsecond', root_id = %"
+		G_GINT64_FORMAT ", quality_profile_id = %" G_GINT64_FORMAT " WHERE public_id = '%s' RETURNING id",
+		AXIS_TEST_REQUESTS_NOW_US, fx->r->films_root, fx->r->profile_id, id);
+	fresh = info_of(fx, id);
+	g_assert_cmpint(fresh->state, ==, AXIS_REQUEST_STATE_APPROVED);
+	axis_requests_set_clock(fx->r->requests, AXIS_TEST_REQUESTS_NOW_US + 3 * G_TIME_SPAN_MINUTE);
+	stuck = info_of(fx, id);
+	g_assert_cmpint(stuck->state, ==, AXIS_REQUEST_STATE_FAILED);
+	g_assert_cmpint(stuck->cause, ==, AXIS_REQUEST_CAUSE_NOT_ADDED);
+	g_assert_cmpint(N("SELECT count(*) FROM movie"), ==, 0);
+	g_assert_true(axis_requests_try_again(fx->r->requests, id, "root", 0, 0, &added, &error));
+	g_assert_no_error(error);
+	g_assert_true(added);
+	done = info_of(fx, id);
+	g_assert_cmpint(done->state, ==, AXIS_REQUEST_STATE_APPROVED);
+	g_assert_cmpint(N("SELECT count(*) FROM movie WHERE title_id = %" G_GINT64_FORMAT, orchard), ==, 1);
 }
 
 /* ── Lists, who may read, accounts ──────────────────────────────── */
@@ -1844,6 +1903,7 @@ main(int argc, char **argv)
 	AXIS_TEST_ADD_DB_CASE("/requests/decide/decline-has-reason", Fixture, NULL, test_decline_has_reason);
 	AXIS_TEST_ADD_DB_CASE("/requests/decide/two-at-once", Fixture, NULL, test_two_at_once);
 	AXIS_TEST_ADD_DB_CASE("/requests/decide/folder-gone", Fixture, NULL, test_could_not_be_added);
+	AXIS_TEST_ADD_DB_CASE("/requests/decide/stopped-before-placing", Fixture, NULL, test_stopped_before_placing);
 	AXIS_TEST_ADD_DB_CASE("/requests/auto/movie", Fixture, NULL, test_auto);
 	AXIS_TEST_ADD_DB_CASE("/requests/auto/too-many-seasons", Fixture, NULL, test_auto_seasons);
 	AXIS_TEST_ADD_DB_CASE("/requests/auto/defaults-gone", Fixture, NULL, test_auto_defaults_gone);

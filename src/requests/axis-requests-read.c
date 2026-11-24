@@ -282,11 +282,21 @@ axis_requests_facts_load(
 
 /* ── A request's state ──────────────────────────────────────────── */
 
+/* An approved request whose title was never added is "not added" once the
+ * engine gave a reason, or once the placing has had this long: a daemon that
+ * stopped between the decision and the placing leaves no reason, and the
+ * request must not read as looked for when nothing looks. */
+#define PLACING_GRACE_US (2 * G_TIME_SPAN_MINUTE)
+
 static void
 derive_info(
 	AxisRequestInfo         *info,
-	const AxisRequestsFacts *facts
+	const AxisRequestsFacts *facts,
+	gint64                   now_us
 ){
+	gboolean not_placed = info->added_us == 0 && (info->add_error != NULL || info->decided_us == 0 ||
+		now_us - info->decided_us > PLACING_GRACE_US);
+
 	info->cause = AXIS_REQUEST_CAUSE_NONE;
 	switch (info->decision) {
 	case AXIS_REQUEST_WAITING:
@@ -315,8 +325,8 @@ derive_info(
 			info->state = AXIS_REQUEST_STATE_AVAILABLE;
 		} else if (info->added_us == 0) {
 			/* Approved, and its title was never added: with the engine's
-			 * reason, or not placed yet. */
-			if (info->add_error != NULL) {
+			 * reason, or being placed this moment. */
+			if (not_placed) {
 				info->state = AXIS_REQUEST_STATE_FAILED;
 				info->cause = AXIS_REQUEST_CAUSE_NOT_ADDED;
 			}
@@ -367,7 +377,7 @@ derive_info(
 		if (info->aired > 0 && info->have >= info->aired) {
 			info->state = AXIS_REQUEST_STATE_AVAILABLE;
 		} else if (info->added_us == 0) {
-			if (info->add_error != NULL) {
+			if (not_placed) {
 				info->state = AXIS_REQUEST_STATE_FAILED;
 				info->cause = AXIS_REQUEST_CAUSE_NOT_ADDED;
 			}
@@ -562,7 +572,7 @@ read_infos(
 	if (!axis_requests_facts_load(self, films, series, &facts, error))
 		return FALSE;
 	for (i = 0; i < infos->len; i++)
-		derive_info(g_ptr_array_index(infos, i), &facts);
+		derive_info(g_ptr_array_index(infos, i), &facts, axis_requests_now(self));
 	axis_requests_facts_clear(&facts);
 	if (!count_would_look_for(self, infos, error))
 		return FALSE;

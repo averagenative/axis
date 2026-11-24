@@ -94,8 +94,9 @@ CREATE INDEX request_title ON request (title_id);
 CREATE INDEX request_person ON request (requested_by, counted_at);
 -- The waiting list and its notice: the few that wait, the oldest first.
 CREATE INDEX request_waiting_list ON request (created_at, id) WHERE decision = 'waiting';
--- The notice of approved requests whose title could not be added.
-CREATE INDEX request_not_added ON request (id) WHERE decision = 'approved' AND add_error IS NOT NULL;
+-- The notice of approved requests whose title was not added: the engine gave
+-- a reason, or the daemon stopped between the decision and the adding.
+CREATE INDEX request_not_added ON request (id) WHERE decision = 'approved' AND added_at IS NULL;
 CREATE INDEX request_movie ON request (movie_id) WHERE movie_id IS NOT NULL;
 CREATE INDEX request_series ON request (series_id) WHERE series_id IS NOT NULL;
 
