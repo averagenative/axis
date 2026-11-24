@@ -1903,6 +1903,202 @@ test_pack_threshold(Fixture *fx, gconstpointer data)
 	g_assert_cmpstr(queued, ==, "season:2");
 }
 
+/* ── The scheduler reads what can be due, a page at a time ──────── */
+
+/* @n series made by the database, of one season of four episodes that aired
+ * long ago, monitored, in the root and of the profile "balanced" (which
+ * upgrades): "Generated Series 1" and on.  The first one's id. */
+static gint64
+generate_series(
+	Fixture *fx,
+	guint    n
+){
+	exec(fx, "WITH t AS (INSERT INTO meta_title (kind, title, year, status, provider, provider_id)"
+		" SELECT 'series', 'Generated Series ' || i, 2019, 'ended', 'fixture', 'z' || i FROM generate_series(1, %u) i"
+		" RETURNING id), s AS (INSERT INTO series (title_id, quality_profile_id, root_id, synced_at) SELECT id,"
+		" (SELECT id FROM quality_profile WHERE slug = 'balanced'), %" G_GINT64_FORMAT ", now() FROM t RETURNING id),"
+		" n AS (INSERT INTO series_season (series_id, number, monitored) SELECT s.id, 1, true FROM s RETURNING 1)"
+		" INSERT INTO series_episode (series_id, season_number, number, title, air_date, monitored)"
+		" SELECT s.id, 1, e, 'Part ' || e, DATE '2019-03-04' + e, true FROM s, generate_series(1, 4) e", n, fx->root_id);
+	return qi(fx, "SELECT min(s.id) FROM series s JOIN meta_title t ON t.id = s.title_id WHERE t.provider_id LIKE 'z%%'");
+}
+
+/* A file of @quality (SQL: a literal or NULL) for every episode of @series. */
+static void
+generate_files(
+	Fixture     *fx,
+	gint64       series,
+	const gchar *quality
+){
+	exec(fx, "WITH lf AS (INSERT INTO library_file (root_id, volume_id, rel_path, kind, size, mtime_sec, mtime_nsec,"
+		" ctime_sec, ctime_nsec, inode, nlink, pinned, pinned_links, pinned_downloads, first_seen_generation,"
+		" last_seen_generation, changed_generation) SELECT %" G_GINT64_FORMAT ", (SELECT volume_id FROM library_root"
+		" WHERE id = %" G_GINT64_FORMAT "), 'generated/' || e.id || '.mkv', 'video', 700000000 + e.id, 1, 0, 1, 0,"
+		" 5000000 + e.id, 1, false, false, false, 1, 1, 1 FROM series_episode e WHERE e.series_id = %" G_GINT64_FORMAT
+		" RETURNING id, rel_path),"
+		" m AS (SELECT lf.id AS file_id, split_part(split_part(lf.rel_path, '/', 2), '.', 1)::bigint AS episode_id FROM lf),"
+		" sf AS (INSERT INTO series_file (file_id, series_id, quality, release_name) SELECT m.file_id, %"
+		G_GINT64_FORMAT ", %s, 'Generated.Series.S01E01.1080p.WEB-DL-GRP' FROM m RETURNING file_id)"
+		" INSERT INTO series_file_episode (file_id, episode_id) SELECT m.file_id, m.episode_id FROM m", fx->root_id,
+		fx->root_id, series, series, quality);
+}
+
+/* The searches queued, "series:what" by series and what, "," between. */
+static gchar *
+all_queued(Fixture *fx)
+{
+	return q(fx, "SELECT string_agg(substr(dedupe_key, length('tv.search:') + 1), ',' ORDER BY dedupe_key) FROM job"
+		" WHERE kind = 'tv.search'");
+}
+
+/*
+ * The database names the series with an episode that can be due and the
+ * scheduler reads those only: not one whose episodes wait for their next
+ * search, are in the library at a quality the profile does not upgrade from,
+ * are not monitored or have not aired.  A file that the database cannot
+ * settle (of no known quality, or a conversion's) has its series read, and
+ * the rule decides as before.  What is queued does not depend on how many
+ * series a page holds.
+ */
+static void
+test_schedule_reads_what_can_be_due(Fixture *fx, gconstpointer data)
+{
+	g_autofree gchar *top = g_strdup_printf("'%s'", axis_quality_name(AXIS_QUALITY_DISC));
+	g_autofree gchar *by_one = NULL;
+	g_autofree gchar *by_many = NULL;
+	g_autofree gchar *expected = NULL;
+	gint64 first = generate_series(fx, 9);
+	AxisTvScheduleReport report;
+
+	set(fx, AXIS_TV_SETTING_PER_RUN, "50");
+	/* first: nothing of it in the library, everything due: read, one season
+	 * search.  first + 1: the same, every episode waiting for its time. */
+	exec(fx, "UPDATE series_episode SET next_search_at = to_timestamp(%" G_GINT64_FORMAT ") + interval '1 hour'"
+		" WHERE series_id = %" G_GINT64_FORMAT, NOW_US / G_USEC_PER_SEC, first + 1);
+	/* first + 2: in the library at the top of the ladder: settled. */
+	generate_files(fx, first + 2, top);
+	/* first + 3: in the library below the cutoff: wanted for an upgrade. */
+	generate_files(fx, first + 3, "'hdtv_720p'");
+	/* first + 4: not monitored.  first + 5: not aired. */
+	exec(fx, "UPDATE series_episode SET monitored = false WHERE series_id = %" G_GINT64_FORMAT, first + 4);
+	exec(fx, "UPDATE series_episode SET air_date = DATE '2030-01-01' WHERE series_id = %" G_GINT64_FORMAT, first + 5);
+	/* first + 6: files of no known quality: read, and the rule leaves them
+	 * (nothing says a release would be better). */
+	generate_files(fx, first + 6, "NULL");
+	/* first + 7: at the top of the ladder, one of them made by a conversion
+	 * (it counts as its source's quality, which the database does not
+	 * judge): read. */
+	generate_files(fx, first + 7, top);
+	exec(fx, "INSERT INTO conversion (file_id, volume_id, root_id, root_path, rel_path, new_rel_path, container,"
+		" revision_id, outcome, state, requested_by, verdict, src_size, src_mtime_sec, src_mtime_nsec, src_ctime_sec,"
+		" src_ctime_nsec, src_inode, src_nlink, output_inode, output_size, output_mtime_sec, output_mtime_nsec,"
+		" source_quality, finished_at) SELECT f.id, f.volume_id, f.root_id, 'series', f.rel_path, f.rel_path, 'mkv',"
+		" (SELECT current_revision_id FROM conversion_profile ORDER BY id LIMIT 1), 'replace', 'done', 'root', 'safe',"
+		" f.size * 3, f.mtime_sec, f.mtime_nsec, f.ctime_sec, f.ctime_nsec, f.inode + 100000, 1, f.inode, f.size,"
+		" f.mtime_sec, f.mtime_nsec, 'hdtv_720p', now() FROM library_file f JOIN series_file sf ON sf.file_id = f.id"
+		" WHERE sf.series_id = %" G_GINT64_FORMAT " ORDER BY f.id LIMIT 1", first + 7);
+	/* first + 8: gone from the metadata. */
+	exec(fx, "UPDATE series_episode SET gone_at = now() WHERE series_id = %" G_GINT64_FORMAT, first + 8);
+
+	axis_tv_set_schedule_page(fx->tv, 1);
+	report = schedule(fx);
+	g_assert_cmpuint(report.series_read, ==, 4);
+	/* Four without a file, four below the cutoff, and the one whose file a
+	 * conversion made from a source below it. */
+	g_assert_cmpuint(report.due, ==, 9);
+	g_assert_cmpuint(report.considered, ==, 9);
+	by_one = all_queued(fx);
+	expected = g_strdup_printf("%" G_GINT64_FORMAT ":season:1,%" G_GINT64_FORMAT ":season:1,%" G_GINT64_FORMAT
+		":episode:%" G_GINT64_FORMAT, first, first + 3, first + 7, episode_id(fx, first + 7, 1, 1));
+	g_assert_cmpstr(by_one, ==, expected);
+
+	exec(fx, "DELETE FROM job WHERE kind = 'tv.search'");
+	axis_tv_set_schedule_page(fx->tv, 0);
+	report = schedule(fx);
+	g_assert_cmpuint(report.series_read, ==, 4);
+	g_assert_cmpuint(report.due, ==, 9);
+	by_many = all_queued(fx);
+	g_assert_cmpstr(by_many, ==, by_one);
+
+	/* The one that waited is read once its time has come. */
+	exec(fx, "DELETE FROM job WHERE kind = 'tv.search'");
+	exec(fx, "UPDATE series_episode SET next_search_at = to_timestamp(%" G_GINT64_FORMAT ") WHERE series_id = %"
+		G_GINT64_FORMAT, NOW_US / G_USEC_PER_SEC, first + 1);
+	report = schedule(fx);
+	g_assert_cmpuint(report.series_read, ==, 5);
+	g_assert_cmpuint(report.due, ==, 13);
+}
+
+/*
+ * More is planned than a run queues, in more pages than one: the run queues
+ * the same searches as if it had kept every plan (the least recently
+ * searched first), and holds no more of them than it can queue.
+ */
+static void
+test_schedule_keeps_the_best(Fixture *fx, gconstpointer data)
+{
+	g_autofree gchar *queued = NULL;
+	g_autofree gchar *expected = NULL;
+	gint64 first = generate_series(fx, 60);
+	AxisTvScheduleReport report;
+
+	/* Series k was searched k hours ago: the last two were searched longest
+	 * ago. */
+	exec(fx, "UPDATE series_episode SET last_search_at = to_timestamp(%" G_GINT64_FORMAT ") - (series_id - %"
+		G_GINT64_FORMAT " + 1) * interval '1 hour' WHERE series_id >= %" G_GINT64_FORMAT, NOW_US / G_USEC_PER_SEC,
+		first, first);
+	set(fx, AXIS_TV_SETTING_PER_RUN, "2");
+	axis_tv_set_schedule_page(fx->tv, 7);
+	report = schedule(fx);
+	g_assert_cmpuint(report.series_read, ==, 60);
+	g_assert_cmpuint(report.due, ==, 240);
+	g_assert_cmpuint(report.queued, ==, 2);
+	g_assert_cmpuint(report.seasons, ==, 2);
+	queued = all_queued(fx);
+	expected = g_strdup_printf("%" G_GINT64_FORMAT ":season:1,%" G_GINT64_FORMAT ":season:1", first + 58, first + 59);
+	g_assert_cmpstr(queued, ==, expected);
+}
+
+/* The series that follow the metadata each run: as many as go round all of
+ * them in six hours, at least five, never more than the most. */
+static void
+test_sync_batch(void)
+{
+	g_assert_cmpuint(axis_tv_sync_batch(0), ==, AXIS_TV_SYNC_MIN);
+	g_assert_cmpuint(axis_tv_sync_batch(100), ==, 5);
+	g_assert_cmpuint(axis_tv_sync_batch(120), ==, 5);
+	g_assert_cmpuint(axis_tv_sync_batch(121), ==, 6);
+	g_assert_cmpuint(axis_tv_sync_batch(5000), ==, 209);
+	g_assert_cmpuint(axis_tv_sync_batch(12000), ==, 500);
+	g_assert_cmpuint(axis_tv_sync_batch(1000000), ==, AXIS_TV_SYNC_MAX);
+	/* Every series is reached within the cycle, up to the most a run takes. */
+	g_assert_cmpuint(axis_tv_sync_batch(5000) * (AXIS_TV_SYNC_CYCLE_S / AXIS_TV_SCHEDULE_INTERVAL_S), >=, 5000);
+}
+
+/* Every series behind the metadata, after a start: a run takes its share,
+ * the longest behind first, and the next run the next. */
+static void
+test_sync_paced(Fixture *fx, gconstpointer data)
+{
+	gint64 first = generate_series(fx, 12);
+	AxisTvScheduleReport report;
+
+	exec(fx, "UPDATE series SET synced_at = now() - (20 - (id - %" G_GINT64_FORMAT ")) * interval '1 hour'", first);
+	report = schedule(fx);
+	g_assert_cmpuint(report.synced, ==, AXIS_TV_SYNC_MIN);
+	assert_qf(fx, "5", "SELECT count(*) FROM series WHERE synced_at > now() - interval '1 minute'");
+	/* The five longest behind are the first five. */
+	assert_qf(fx, "5", "SELECT count(*) FROM series WHERE synced_at > now() - interval '1 minute' AND id < %"
+		G_GINT64_FORMAT, first + 5);
+	report = schedule(fx);
+	g_assert_cmpuint(report.synced, ==, AXIS_TV_SYNC_MIN);
+	assert_qf(fx, "10", "SELECT count(*) FROM series WHERE synced_at > now() - interval '1 minute'");
+	report = schedule(fx);
+	g_assert_cmpuint(report.synced, ==, 2);
+	report = schedule(fx);
+	g_assert_cmpuint(report.synced, ==, 0);
+}
+
 /* ── 6.3, 6.5 A double episode; overlapping releases ────────────── */
 
 #define HIGH_WATER_1   "Harbour.Lights.S01E03.1080p.WEB-DL.DDP5.1.H.264-NTb"
@@ -6069,6 +6265,10 @@ main(int argc, char **argv)
 	ADD("/tv/season-pack", test_season_pack);
 	ADD("/tv/pack-fits", test_pack_fits);
 	ADD("/tv/pack-threshold", test_pack_threshold);
+	ADD("/tv/schedule/reads-what-can-be-due", test_schedule_reads_what_can_be_due);
+	ADD("/tv/schedule/keeps-the-best", test_schedule_keeps_the_best);
+	g_test_add_func("/tv/schedule/sync-batch", test_sync_batch);
+	ADD("/tv/schedule/sync-paced", test_sync_paced);
 	ADD("/tv/double-episode", test_double_episode);
 	ADD("/tv/race", test_race);
 	ADD("/tv/mismatch", test_mismatch);

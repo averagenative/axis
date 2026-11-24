@@ -41,6 +41,8 @@ struct _AxisTv
 	AxisIdentify      *identify;	/* (nullable) borrowed: outlives the module */
 	AxisAcquire       *acquire;	/* owned */
 	gint64             clock_us;	/* tests: the time (0: real) */
+	/* The scheduler's page (axis_tv_set_schedule_page()), atomic. */
+	gint               schedule_page;
 
 	guint              pending;	/* (main loop) */
 	gboolean           stopping;	/* (main loop) */
@@ -148,6 +150,18 @@ axis_tv_store_episodes(
 	gboolean      with_gone,
 	GPtrArray   **episodes,
 	GError      **error
+);
+
+/* The series with an episode that can be due for a search at @rules' time,
+ * by their ids (gint64), in their order: more of them than have something
+ * due, never fewer (the statement says how it tells).  The scheduler reads
+ * the episodes of these and of no other series. */
+gboolean
+axis_tv_store_schedule_series(
+	AxisDbConn         *conn,
+	const AxisTvRules  *rules,
+	GArray            **ids,
+	GError            **error
 );
 
 typedef enum
