@@ -11,16 +11,11 @@
 
 #include <string.h>
 
+#include "api/axis-worker-proto.h"
 #include "axis-version.h"
 
 #define REQUEST_KEY    "axis-web"
 #define KEEP_CACHE_KEY "axis-web-keep-cache-policy"
-
-/*
- * No inline script or style is ever allowed (the pages need neither), and
- * nothing may be loaded from anywhere but the daemon itself.
- */
-#define CSP "default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
 
 /*
  * One registered route: enough to tell 404 from 405, and what the router
@@ -664,27 +659,12 @@ axis_web_delete(AxisWeb *self, const gchar *pattern, HtmxRouteCallback callback,
 	axis_web_route(self, HTMX_METHOD_DELETE, pattern, callback, user_data);
 }
 
-/* ── Security headers ───────────────────────────────────────────── */
-
-static const struct
-{
-	const gchar *name;
-	const gchar *value;
-} security_headers[] = {
-	{ "Content-Security-Policy", CSP },
-	{ "X-Content-Type-Options", "nosniff" },
-	{ "X-Frame-Options", "DENY" },
-	{ "Referrer-Policy", "same-origin" },
-	{ NULL, NULL }
-};
+/* ── Security headers (the list is in axis-web-headers.c) ───────── */
 
 static void
 apply_headers(HtmxResponse *response)
 {
-	guint i;
-
-	for (i = 0; security_headers[i].name != NULL; i++)
-		htmx_response_add_header(response, security_headers[i].name, security_headers[i].value);
+	axis_web_add_security_headers(response);
 
 	/* Only the static assets have a cache policy of their own. */
 	if (g_object_get_data(G_OBJECT(response), KEEP_CACHE_KEY) == NULL)
@@ -701,16 +681,6 @@ on_deferred_complete(
 	/* @user_data: the shell, when the request was a person's action. */
 	if (user_data != NULL)
 		axis_web_attention_changed(user_data);
-}
-
-void
-axis_web_replace_security_headers(SoupMessageHeaders *headers)
-{
-	guint i;
-
-	for (i = 0; security_headers[i].name != NULL; i++)
-		soup_message_headers_replace(headers, security_headers[i].name, security_headers[i].value);
-	soup_message_headers_replace(headers, "Cache-Control", "no-store");
 }
 
 /* A streaming response has written its own message; so do the headers. */
@@ -847,6 +817,28 @@ web_middleware(
 
 /* ── Lifetime ───────────────────────────────────────────────────── */
 
+/* What the request limits (axis-web-limits.h) ask of the auth: whose
+ * proxies are trusted, and whether a request is a worker's with its valid
+ * token (only on the worker API's paths, where it is the credential).  The
+ * limits themselves know nothing of accounts. */
+G_STATIC_ASSERT(sizeof(AXIS_WEB_LIMITS_WORKER_PATH) == sizeof(AXIS_WORKER_API_PREFIX) - 1);
+G_STATIC_ASSERT(AXIS_WEB_LIMITS_WORKER_BODY == AXIS_WORKER_MAX_REQUEST_BYTES);
+
+static AxisProxyList *
+limits_trusted(gpointer user_data)
+{
+	return axis_web_auth_get_trusted(user_data);
+}
+
+static gboolean
+limits_exempt(
+	const gchar *path,
+	const gchar *authorization,
+	gpointer     user_data
+){
+	return axis_web_auth_is_worker_path(path) && axis_web_auth_is_worker_token(user_data, authorization);
+}
+
 AxisWeb *
 axis_web_new(
 	HtmxServer         *server,
@@ -877,7 +869,7 @@ axis_web_new(
 	 * on they judge proxies by the auth's list, whose names are looked up,
 	 * and know its workers' tokens. */
 	self->limits = axis_web_limits_ref(axis_web_limits_install(server, NULL));
-	axis_web_limits_set_auth(self->limits, auth);
+	axis_web_limits_set_sources(self->limits, limits_trusted, limits_exempt, auth);
 
 	/* The shell's own routes first: the router takes the first match, so
 	 * no module route can shadow the static assets or the login pages. */
@@ -1015,7 +1007,7 @@ axis_web_free(AxisWeb *self)
 		return;
 
 	/* The auth's list goes with the auth. */
-	axis_web_limits_set_auth(self->limits, NULL);
+	axis_web_limits_set_sources(self->limits, NULL, NULL, NULL);
 	axis_web_limits_unref(self->limits);
 	axis_web_dashboard_parts_free(self->dashboard);
 	axis_web_attention_free(self->attention);

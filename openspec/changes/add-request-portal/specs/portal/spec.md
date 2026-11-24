@@ -238,7 +238,7 @@ The daemon SHALL enforce, on the portal API and whatever the portal does itself:
 - **THEN** the call beyond the budget is refused with 429 and the time to wait, and another person or another token is answered as before
 
 ### Requirement: The portal is a separate program that holds nothing but its token
-The project SHALL provide a program, `axis-portal`, that serves the request pages and talks to the daemon only through the portal API. It SHALL NOT be linked with the database client library, SHALL have no setting for a database, a media path, an indexer, a download client or a details provider, and SHALL refuse a configuration key it does not know. It SHALL take its token from a file or the environment, never from the command line. It SHALL verify the daemon's certificate by default and SHALL refuse to send its token over unencrypted HTTP to an address that is not loopback unless explicitly configured to. It SHALL write no file: it SHALL run with a read-only root filesystem, no volume and no writable directory.
+The project SHALL provide a program, `axis-portal`, that serves the request pages and talks to the daemon only through the portal API. It SHALL NOT be linked with the database client library, SHALL have no setting for a database, a media path, an indexer, a download client or a details provider, and SHALL refuse a configuration key it does not know, naming it; the variables that Kubernetes adds for a Service called `axis-portal` SHALL be left aside and named in the log, not refused. It SHALL take its token from a file or the environment, never from the command line. It SHALL verify the daemon's certificate by default and SHALL refuse to send its token over unencrypted HTTP to an address that is not loopback unless explicitly configured to. It SHALL write no file: it SHALL run with a read-only root filesystem, no volume and no writable directory.
 
 #### Scenario: Not linked with the database client
 - **WHEN** the built `axis-portal` is examined
@@ -247,6 +247,10 @@ The project SHALL provide a program, `axis-portal`, that serves the request page
 #### Scenario: An unknown key
 - **WHEN** `axis-portal` is given a configuration with `database_url`
 - **THEN** it refuses to start and names the key
+
+#### Scenario: A Service called axis-portal
+- **WHEN** the environment holds `AXIS_PORTAL_SERVICE_HOST`, `AXIS_PORTAL_PORT_7802_TCP` and the other variables Kubernetes adds for a Service called `axis-portal`
+- **THEN** the portal starts and names them in one line of its log, and a variable of another name that it does not know still stops it, by its name
 
 #### Scenario: Plain HTTP refused
 - **WHEN** `axis-portal` is configured with an unencrypted address that is not loopback and no override
@@ -261,7 +265,7 @@ The project SHALL provide a program, `axis-portal`, that serves the request page
 - **THEN** the portal's pages say that requests are not available now, with 503, and the portal keeps running
 
 ### Requirement: The portal's pages
-`axis-portal` SHALL serve these pages and no others: `/login`, `/logout`, `/` (the lists to browse), `/search`, `/title/<id>`, `/requests` (my requests), the posts that ask for a title and that withdraw a request, `/art/<title id>` and its static files. Every page and post except `/login` and the static files SHALL require a session, and a request without one SHALL be sent to `/login`; a health probe SHALL be answered only to a loopback address and SHALL say nothing but that the program runs. The pages SHALL be rendered on the server, SHALL send the same security headers and content security policy as the engine's interface, and SHALL load nothing from a third party. Every title SHALL show its state, a request form SHALL offer for a series the whole series, the first season, the latest season or picked seasons, and the page SHALL show what is left of the quota. Text from the provider SHALL never be markup.
+`axis-portal` SHALL serve these pages and no others: `/login`, `/logout`, `/` (the lists to browse), `/search`, `/title/<id>`, `/requests` (my requests), the posts that ask for a title and that withdraw a request, `/art/<title id>` and its static files. Every page and post except `/login` and the static files SHALL require a session, and a request without one SHALL be sent to `/login`; a health probe SHALL be answered only to a loopback address that forwards for nobody and SHALL say nothing but that the program runs. The pages SHALL be rendered on the server, SHALL send the same security headers as the engine's interface with a content security policy that allows no script and nothing but the portal's own stylesheet, pictures and forms, SHALL send Strict-Transport-Security to a visit that came over HTTPS, and SHALL load nothing from a third party. Every title SHALL show its state, a request form SHALL offer for a series the whole series, the first season, the latest season or picked seasons, and the page SHALL show what is left of the quota. Text from the provider SHALL never be markup.
 
 #### Scenario: Without a session
 - **WHEN** a client without a session requests `/`, `/search`, `/title/7`, `/requests` or `/art/7`, or posts a request
@@ -272,8 +276,8 @@ The project SHALL provide a program, `axis-portal`, that serves the request page
 - **THEN** it is answered 404
 
 #### Scenario: Headers
-- **WHEN** any page of the portal is served
-- **THEN** it carries the engine interface's content security policy and security headers, and refers to no address but the portal's own
+- **WHEN** any page of the portal is served over HTTPS
+- **THEN** it carries the engine interface's security headers, the portal's own content security policy and Strict-Transport-Security, and refers to no address but the portal's own
 
 #### Scenario: A title's state and the form
 - **WHEN** a logged-in requester opens a series that is partly available
@@ -299,11 +303,15 @@ The project SHALL provide a program, `axis-portal`, that serves the request page
 - **THEN** no request to the daemon carries any of them, and the daemon's address is the configured one
 
 ### Requirement: The portal's sessions, cookies and forms
-After a login the portal SHALL set a session cookie that holds the session proof, with `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/` and the `__Host-` prefix, and SHALL never put the proof, or any secret, in an address. It SHALL reject any request other than GET and HEAD that does not carry the CSRF token derived from that cookie, or that the browser reports as cross-site; the login form SHALL carry a token bound to a short-lived cookie set before login. A `next` value that is not a path of the portal SHALL be ignored. The portal SHALL serve the login form and accept a login only over HTTPS, as its own listener or a listed trusted proxy reports it, unless explicitly configured otherwise for a test.
+After a login the portal SHALL set a session cookie that holds the session proof and a seal of it (a keyed hash under a key derived from the portal's token, never the token itself), with `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/` and the `__Host-` prefix, and SHALL never put the proof, or any secret, in an address. A session cookie whose seal is not right SHALL be treated as no session, before the daemon is asked anything. It SHALL reject any request other than GET and HEAD that does not carry the CSRF token derived from that cookie, or that the browser reports as cross-site; the login form SHALL carry a token bound to a short-lived cookie set before login. A `next` value that is not a path of the portal SHALL be ignored. The portal SHALL serve the login form and accept a login only over HTTPS, as its own listener or a listed trusted proxy reports it, unless explicitly configured otherwise for a test.
 
 #### Scenario: The cookie
 - **WHEN** a login succeeds
 - **THEN** the cookie is named with the `__Host-` prefix and has `HttpOnly`, `Secure`, `SameSite=Lax` and `Path=/`
+
+#### Scenario: A made-up cookie
+- **WHEN** requests arrive with session cookies that the portal did not seal, or sealed under another token
+- **THEN** each is sent to `/login`, the daemon is asked nothing, and the address is not counted for them
 
 #### Scenario: A post without the token
 - **WHEN** a logged-in person's request post arrives without the CSRF token, with another session's token, or with an `Origin` of another site
@@ -326,7 +334,7 @@ After a login the portal SHALL set a session cookie that holds the session proof
 - **THEN** both are ignored
 
 ### Requirement: The portal keeps nothing, and a change at the daemon takes effect at once
-`axis-portal` SHALL keep no session and no account of its own: every page that shows or changes something of a person SHALL present that person's proof to the daemon, and the daemon's answer SHALL decide. The portal MAY keep in memory, for at most 30 seconds, what `whoami` said, to draw a page's header, and SHALL drop it at a 401. A restart of the portal SHALL log nobody out. What the portal holds in memory SHALL be only: its token, its throttle counts, the key of its pre-login forms, answers of `whoami` for at most 30 seconds, and posters up to a fixed size.
+`axis-portal` SHALL keep no session and no account of its own: every page that shows or changes something of a person SHALL present that person's proof to the daemon, and the daemon's answer SHALL decide. The portal MAY keep in memory, for at most 30 seconds, what `whoami` said, to draw a page's header, and SHALL drop it at a 401. A restart of the portal SHALL log nobody out; a new token for the portal logs everyone out of it. What the portal holds in memory SHALL be only: its token and the key derived from it, its throttle counts, the key of its pre-login forms, answers of `whoami` for at most 30 seconds, which sessions the daemon confirmed in the last 15 minutes, and posters up to a fixed size.
 
 #### Scenario: A restart
 - **WHEN** a person is logged in and the portal restarts
@@ -345,7 +353,7 @@ After a login the portal SHALL set a session cookie that holds the session proof
 - **THEN** it is treated as no session, by the portal and by the daemon
 
 ### Requirement: The portal refuses cheaply before it asks the daemon
-`axis-portal` SHALL keep limits of its own, in memory, so that a flood is refused without a request to the daemon: failed logins for each client address (an IPv6 address by its `/64`) with the delays of the engine's throttle; at most 10 searches a minute and 10 request posts a minute for each session; and the engine interface's limits on connections, request heads and bodies, with a body of at most 64 KiB. A refusal SHALL be 429 with the time to wait. These limits SHALL add to the daemon's and SHALL NOT replace them.
+`axis-portal` SHALL keep limits of its own, in memory, so that a flood is refused without a request to the daemon: failed logins, and session cookies the daemon did not know, for each client address (an IPv6 address by its `/64`) with the delays of the engine's throttle, a full table dropping no address that has failures; at most 10 searches a minute and 10 request posts a minute for each session; at most 120 calls a minute, from every address together, for logins and for sessions the daemon has not confirmed in the last 15 minutes; and the engine interface's limits on connections, request heads and bodies, with a body of at most 64 KiB. A session the daemon confirmed in the last 15 minutes SHALL NOT be held to its address's count of unknown cookies. A refusal SHALL be 429 with the time to wait. These limits SHALL add to the daemon's and SHALL NOT replace them.
 
 #### Scenario: A flood of logins from one address
 - **WHEN** a hundred wrong logins arrive from one address
@@ -359,6 +367,14 @@ After a login the portal SHALL set a session cookie that holds the session proof
 - **WHEN** a post of 65 KiB arrives
 - **THEN** it is answered 413 and not read
 
+#### Scenario: Strangers at many addresses
+- **WHEN** sealed session cookies that the daemon does not know arrive from 180 addresses within a minute
+- **THEN** the daemon is asked at most 120 times, a session the daemon confirmed is still served, and a login is refused with the time to wait before the daemon is asked
+
+#### Scenario: One device behind an address
+- **WHEN** one device at an address has its cookies delayed because the daemon did not know them
+- **THEN** a session the daemon confirmed at that address is served
+
 ### Requirement: A remembered browser is not locked out by a stranger
 A successful `login` SHALL answer with a device value, signed by the daemon as the engine interface's device cookie is, that the portal sets as a cookie (`HttpOnly`, `Secure`, `SameSite=Strict`) and sends back with that browser's later logins. A login that presents a valid device value of the account SHALL be throttled on that device's own count and on the count shared by the account's devices, as at the engine's own login, and not on the username's count. The portal SHALL treat the value as opaque.
 
@@ -371,7 +387,7 @@ A successful `login` SHALL answer with a device value, signed by the daemon as t
 - **THEN** it is refused with the same time to wait
 
 ### Requirement: What the portal logs
-`axis-portal` SHALL log to standard error, optionally as JSON: its start with its settings and without its token; each successful login with the username and the client address; each failed login with the client address and without the username that was typed; each request made or withdrawn with the username and the title's identifier; each refusal by a limit; and each failure to reach the daemon. No log line, at any level, SHALL hold a password, the portal token, a session proof, a device value, a CSRF token or a cookie.
+`axis-portal` SHALL log to standard error, optionally as JSON: its start with its settings and without its token; each successful login with the username and the client address; each failed login with the client address and without the username that was typed; each request made or withdrawn with the username and the title's identifier; each refusal by a limit; and each failure to reach the daemon. Of each kind of refusal, of failed logins and of each kind of failure, at most ten lines SHALL be written in a minute; the others SHALL be counted, and one line SHALL say how many there were when the minute has ended or the portal stops. No log line, at any level, SHALL hold a password, the portal token, a session proof, a device value, a CSRF token or a cookie.
 
 #### Scenario: Secrets absent from the log
 - **WHEN** people log in, fail to log in, search and ask with debug logging on
@@ -380,3 +396,7 @@ A successful `login` SHALL answer with a device value, signed by the daemon as t
 #### Scenario: A password typed as a username
 - **WHEN** a login fails with a username field that holds what looks like a password
 - **THEN** the log line for it holds the client address and not that text
+
+#### Scenario: A flood of refusals
+- **WHEN** one address is refused for the same reason more than ten times within a minute
+- **THEN** ten lines say so, and one line, once the minute has ended, says how many more there were

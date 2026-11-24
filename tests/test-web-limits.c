@@ -334,6 +334,26 @@ test_defaults(void)
 }
 
 /*
+ * Found by the review of add-request-portal P3 (M14): the limits and the
+ * auth say the worker API's path in words of their own, and the build
+ * compared only the lengths, so a prefix renamed to another of the same
+ * length would pass and the worker API would lose its body limit and its
+ * exemption.  The texts are compared here, and what each file decides of a
+ * path is asked of it.
+ */
+static void
+test_worker_path(void)
+{
+	g_assert_true(g_str_has_prefix(AXIS_WORKER_API_PREFIX, AXIS_WEB_LIMITS_WORKER_PATH));
+	g_assert_cmpuint(strlen(AXIS_WORKER_API_PREFIX), ==, strlen(AXIS_WEB_LIMITS_WORKER_PATH) + 1);
+	g_assert_cmpint(AXIS_WORKER_API_PREFIX[strlen(AXIS_WEB_LIMITS_WORKER_PATH)], ==, '/');
+	g_assert_true(axis_web_auth_is_worker_path(AXIS_WORKER_API_PREFIX "claim"));
+	g_assert_true(axis_web_auth_is_worker_path(AXIS_WEB_LIMITS_WORKER_PATH));
+	g_assert_false(axis_web_auth_is_worker_path("/api/v1/workers"));
+	g_assert_false(axis_web_auth_is_worker_path("/api/v1/portal/hello"));
+}
+
+/*
  * Found by the stage 2 hunt of the web layer (W-3): a request that sends
  * part of its head and then nothing was held for as long as the client
  * liked.  It is closed once the head deadline passes, and a connection that
@@ -963,6 +983,7 @@ main(int argc, char **argv)
 	g_test_init(&argc, &argv, NULL);
 
 	g_test_add_func("/web-limits/defaults", test_defaults);
+	g_test_add_func("/web-limits/worker-path", test_worker_path);
 	ADD("head/slow-head-closed", 0, test_slow_head_closed);
 	ADD("head/in-time-answered", 0, test_head_in_time_answered);
 	ADD("body/slow-body-closed", 0, test_slow_body_closed);

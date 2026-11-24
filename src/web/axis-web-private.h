@@ -8,6 +8,7 @@
 
 #include "web/axis-web.h"
 #include "web/axis-web-attention.h"
+#include "web/axis-web-headers.h"
 #include "web/axis-web-limits.h"
 
 G_BEGIN_DECLS
@@ -259,12 +260,6 @@ axis_web_keep_cache_policy(HtmxResponse *response);
 /* The server's request limits (web/axis-web-limits.h), borrowed. */
 AxisWebLimits *
 axis_web_get_limits(AxisWeb *self);
-
-/* Puts the shell's security headers and "no-store" on a message's response
- * headers (an answer written without the shell: a streaming one, or a
- * refusal of axis-web-limits.c). */
-void
-axis_web_replace_security_headers(SoupMessageHeaders *headers);
 
 /* The static asset route handler. */
 HtmxResponse *

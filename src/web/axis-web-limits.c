@@ -19,13 +19,11 @@
  */
 
 #include "web/axis-web-limits.h"
-#include "web/axis-web-auth-private.h"
-#include "web/axis-web-hub.h"
-#include "web/axis-web-private.h"
 
+#include <libsoup/soup.h>
 #include <string.h>
 
-#include "api/axis-worker-proto.h"
+#include "web/axis-web-headers.h"
 
 #define LIMITS_KEY    "axis-web-limits"
 #define IN_FLIGHT_KEY "axis-web-limits-in-flight"
@@ -83,8 +81,11 @@ struct _AxisWebLimits
 	gboolean       local_is_public;	/* tests: loopback held to the per-address cap */
 	goffset        max_body;	/* 0: the shell's limits */
 	gchar         *too_large_json;	/* the body of a 413, or NULL for none */
+	gchar         *csp;		/* the refusals' Content-Security-Policy, or NULL for the shell's */
 	AxisProxyList *own_trusted;
-	AxisWebAuth   *auth;		/* borrowed: its trusted proxies and workers */
+	AxisWebLimitsTrustedFunc trusted;	/* whose proxies, or NULL for own_trusted */
+	AxisWebLimitsExemptFunc  exempt;	/* which requests the caps are not for, or NULL */
+	gpointer       sources_data;	/* borrowed */
 	GHashTable    *conns;		/* GSocket* -> Conn* */
 	guint          n_normal;	/* of them, not over a cap */
 	guint          n_overflow;
@@ -102,7 +103,19 @@ struct _AxisWebLimits
 static AxisProxyList *
 trusted_of(AxisWebLimits *self)
 {
-	return self->auth != NULL ? axis_web_auth_get_trusted(self->auth) : self->own_trusted;
+	AxisProxyList *list = self->trusted != NULL ? self->trusted(self->sources_data) : NULL;
+
+	return list != NULL ? list : self->own_trusted;
+}
+
+/* "/api/v1/worker" itself, or anything below it. */
+static gboolean
+is_worker_path(const gchar *path)
+{
+	static const gchar bare[] = AXIS_WEB_LIMITS_WORKER_PATH;
+
+	return path != NULL && strncmp(path, bare, sizeof(bare) - 1) == 0 &&
+		(path[sizeof(bare) - 1] == '\0' || path[sizeof(bare) - 1] == '/');
 }
 
 static gboolean
@@ -353,8 +366,21 @@ on_linger_readable(
  * is dropped.  Falls back to libsoup's own refusal if the connection cannot
  * be taken.
  */
+/* The shell's security headers, with the listener's own policy if it has
+ * one, and "no-store". */
+static void
+security_headers(
+	AxisWebLimits      *self,
+	SoupMessageHeaders *headers
+){
+	axis_web_replace_security_headers(headers);
+	if (self->csp != NULL)
+		soup_message_headers_replace(headers, "Content-Security-Policy", self->csp);
+}
+
 static void
 answer_now(
+	AxisWebLimits     *self,
 	SoupServerMessage *message,
 	guint              status,
 	const gchar       *retry_after,
@@ -377,14 +403,14 @@ answer_now(
 
 		soup_message_body_set_accumulate(soup_server_message_get_request_body(message), FALSE);
 		soup_server_message_set_status(message, status, NULL);
-		axis_web_replace_security_headers(response);
+		security_headers(self, response);
 		soup_message_headers_replace(response, "Connection", "close");
 		if (retry_after != NULL)
 			soup_message_headers_replace(response, "Retry-After", retry_after);
 		return;
 	}
 
-	axis_web_replace_security_headers(headers);
+	security_headers(self, headers);
 	soup_message_headers_replace(headers, "Content-Type", "text/plain; charset=utf-8");
 	soup_message_headers_replace(headers, "Connection", "close");
 	if (retry_after != NULL)
@@ -438,6 +464,7 @@ in_flight_free(gpointer data)
 /* A refusal libsoup writes: the body is read and dropped first. */
 static void
 refuse(
+	AxisWebLimits     *self,
 	SoupServerMessage *message,
 	guint              status
 ){
@@ -445,7 +472,7 @@ refuse(
 
 	soup_message_body_set_accumulate(soup_server_message_get_request_body(message), FALSE);
 	soup_server_message_set_status(message, status, NULL);
-	axis_web_replace_security_headers(headers);
+	security_headers(self, headers);
 	soup_message_headers_replace(headers, "Connection", "close");
 }
 
@@ -463,8 +490,8 @@ from_worker(
 	const gchar        *path,
 	SoupMessageHeaders *headers
 ){
-	return self->auth != NULL && axis_web_auth_is_worker_path(path) &&
-	       axis_web_auth_is_worker_token(self->auth, soup_message_headers_get_list(headers, "Authorization"));
+	return self->exempt != NULL && path != NULL &&
+	       self->exempt(path, soup_message_headers_get_list(headers, "Authorization"), self->sources_data);
 }
 
 /*
@@ -517,7 +544,8 @@ on_got_headers(
 				return;
 			}
 			note_refused(self, conn->peer, conn->waiting, "a request");
-			answer_now(message, 503, "5", "Axis has too many connections open right now. Try again in a few seconds.\n");
+			answer_now(self, message, 503, "5", "Axis has too many connections open right now. Try again in a few "
+				"seconds.\n");
 			return;
 		}
 	}
@@ -528,18 +556,18 @@ on_got_headers(
 	if (has_body && !g_atomic_int_get(&self->bodies)) {
 		const gchar *text = self->refusal != NULL ? self->refusal(self->refusal_data) : NULL;
 
-		answer_now(message, 503, "5", text != NULL ? text : "Axis is not ready for this request. Try again in a few "
-			"seconds.\n");
+		answer_now(self, message, 503, "5", text != NULL ? text : "Axis is not ready for this request. Try again in a "
+			"few seconds.\n");
 		return;
 	}
 
 	/* The worker API takes less than a form may be; a listener with a limit
 	 * of its own (the portal API's) takes that. */
 	limit = self->max_body > 0 ? self->max_body :
-		path != NULL && axis_web_auth_is_worker_path(path) ? AXIS_WORKER_MAX_REQUEST_BYTES : AXIS_WEB_MAX_REQUEST_BODY;
+		is_worker_path(path) ? AXIS_WEB_LIMITS_WORKER_BODY : AXIS_WEB_MAX_REQUEST_BODY;
 	if (has_body && (encoding != SOUP_ENCODING_CONTENT_LENGTH ||
 	                 soup_message_headers_get_content_length(headers) > limit)) {
-		refuse(message, 413);
+		refuse(self, message, 413);
 		if (self->too_large_json != NULL)
 			soup_server_message_set_response(message, "application/json", SOUP_MEMORY_COPY, self->too_large_json,
 				strlen(self->too_large_json));
@@ -549,7 +577,7 @@ on_got_headers(
 	/* Behind a trusted proxy: what one client it forwards has in flight.
 	 * An event stream is held by the hub's own limits, and a worker by
 	 * none of these. */
-	if (conn != NULL && conn->via_proxy && !worker && g_strcmp0(path, AXIS_WEB_HUB_EVENTS_PATH) != 0) {
+	if (conn != NULL && conn->via_proxy && !worker && g_strcmp0(path, AXIS_WEB_LIMITS_STREAM_PATH) != 0) {
 		g_autofree gchar *client = NULL;
 		InFlight *flight;
 		gboolean https;
@@ -563,7 +591,7 @@ on_got_headers(
 				"(server.max_connections_per_address)", "a request");
 			g_free(flight->client);
 			g_free(flight);
-			answer_now(message, 429, "5", "Too many requests from your address at once. Try again in a few "
+			answer_now(self, message, 429, "5", "Too many requests from your address at once. Try again in a few "
 				"seconds.\n");
 			return;
 		}
@@ -730,7 +758,9 @@ limits_detach(gpointer data)
 	g_hash_table_remove_all(self->per_peer);
 	self->n_normal = 0;
 	self->n_overflow = 0;
-	self->auth = NULL;
+	self->trusted = NULL;
+	self->exempt = NULL;
+	self->sources_data = NULL;
 	axis_web_limits_unref(self);
 }
 
@@ -772,7 +802,8 @@ axis_web_limits_install(
 	self->local_is_public = options->local_is_public;
 	self->max_body = (goffset)options->max_body_bytes;
 	self->too_large_json = g_strdup(options->too_large_json);
-	self->own_trusted = axis_proxy_list_parse(options->trusted_proxies != NULL ? options->trusted_proxies : "", NULL);
+	self->csp = g_strdup(options->content_security_policy);
+	self->own_trusted =axis_proxy_list_parse(options->trusted_proxies != NULL ? options->trusted_proxies : "", NULL);
 	if (self->own_trusted == NULL)
 		self->own_trusted = axis_proxy_list_parse("", NULL);
 	self->conns = g_hash_table_new_full(g_direct_hash, g_direct_equal, NULL, (GDestroyNotify)conn_free);
@@ -817,6 +848,7 @@ axis_web_limits_unref(AxisWebLimits *self)
 	axis_proxy_list_free(self->own_trusted);
 	g_free(self->refused_peer);
 	g_free(self->too_large_json);
+	g_free(self->csp);
 	g_free(self);
 }
 
@@ -843,13 +875,17 @@ axis_web_limits_set_refusal(
 }
 
 void
-axis_web_limits_set_auth(
-	AxisWebLimits *self,
-	AxisWebAuth   *auth
+axis_web_limits_set_sources(
+	AxisWebLimits            *self,
+	AxisWebLimitsTrustedFunc  trusted,
+	AxisWebLimitsExemptFunc   exempt,
+	gpointer                  user_data
 ){
 	g_return_if_fail(self != NULL);
 
-	self->auth = auth;
+	self->trusted = trusted;
+	self->exempt = exempt;
+	self->sources_data = user_data;
 }
 
 gchar *

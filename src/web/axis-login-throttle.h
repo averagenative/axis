@@ -9,7 +9,9 @@
  * is forgotten.  At most a fixed number of keys are tracked: when the
  * table is full, forgotten keys are dropped first, then the key whose last
  * failure is oldest (never one with attempts in flight or still in its
- * delay: then the table grows by one instead).
+ * delay: then the table grows by one instead).  A throttle told
+ * axis_login_throttle_share_when_full() drops no key that has failures
+ * instead: see there.
  *
  * An attempt whose password is checked off the main loop is admitted with
  * axis_login_throttle_begin() and ended with axis_login_throttle_end().
@@ -53,6 +55,27 @@ void
 axis_login_throttle_free(AxisLoginThrottle *self);
 
 G_DEFINE_AUTOPTR_CLEANUP_FUNC(AxisLoginThrottle, axis_login_throttle_free)
+
+/**
+ * axis_login_throttle_share_when_full:
+ * @self: a throttle
+ * @shared_forget_us: the shared count is forgotten after this long
+ *   without a failure
+ *
+ * From now on a full table makes room only by dropping keys that are
+ * forgotten.  A key that is not in a full table is counted, with every
+ * other such key, on one count of the throttle's own (its failures, its
+ * delay, its attempts in flight), until room is made.  A sender who
+ * changes keys (an address that is one of many) then cannot make the table
+ * forget the keys it used and start each of them again: while the table is
+ * full, every new key it brings shares one count.  The table never grows
+ * past its bound.  (add-request-portal: axis-portal's throttles.)
+ */
+void
+axis_login_throttle_share_when_full(
+	AxisLoginThrottle *self,
+	gint64             shared_forget_us
+);
 
 /**
  * axis_login_throttle_check:

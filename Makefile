@@ -183,6 +183,31 @@ WORKER_SOURCES := $(sort $(wildcard $(WORKER_DIR)/*.c))
 WORKER_OBJECTS := $(patsubst %.c,$(OBJDIR)/%.o,$(WORKER_SOURCES))
 AXIS_WORKER    := $(OUTDIR)/axis-worker
 
+# axis-portal, the request portal (add-request-portal): clients/portal/, and
+# the few files of src/ it shares with the daemon.  Those are objects of
+# libaxis.a too (the daemon uses them), but they are compiled without
+# libpq's include paths (PORTAL_SHARED_CFLAGS), and axis-portal is linked
+# with them by name and with nothing else of the daemon, without libpq: a
+# file here that reached for the database would not link into the portal.
+# A file joins the list here, by name.  Everything of clients/portal/ but
+# main.c is libaxis-portal.a, so that the tests run the portal's own code.
+PORTAL_SHARED_SOURCES := \
+	$(SRCDIR)/core/axis-proxy.c \
+	$(SRCDIR)/core/axis-proxy-resolver.c \
+	$(SRCDIR)/web/axis-login-throttle.c \
+	$(SRCDIR)/web/axis-secret.c \
+	$(SRCDIR)/web/axis-web-auth-input.c \
+	$(SRCDIR)/web/axis-web-headers.c \
+	$(SRCDIR)/web/axis-web-limits.c
+PORTAL_SHARED_OBJECTS := $(patsubst $(SRCDIR)/%.c,$(OBJDIR)/%.o,$(PORTAL_SHARED_SOURCES))
+PORTAL_DIR         := clients/portal
+PORTAL_SOURCES     := $(sort $(wildcard $(PORTAL_DIR)/*.c))
+PORTAL_OBJECTS     := $(patsubst %.c,$(OBJDIR)/%.o,$(PORTAL_SOURCES))
+PORTAL_MAIN_OBJECT := $(OBJDIR)/$(PORTAL_DIR)/main.o
+PORTAL_LIB_OBJECTS := $(filter-out $(PORTAL_MAIN_OBJECT),$(PORTAL_OBJECTS))
+PORTAL_STATIC      := $(OUTDIR)/libaxis-portal.a
+AXIS_PORTAL        := $(OUTDIR)/axis-portal
+
 # tests/test-*.c are programs; any other tests/*.c is support code linked
 # into every one of them.
 TEST_SOURCES         := $(sort $(wildcard $(TESTDIR)/test-*.c))
@@ -254,8 +279,11 @@ FUZZ_LIB_SOURCES := $(SRCDIR)/db/axis-db-migrate-parse.c $(SRCDIR)/web/axis-web-
                     $(SRCDIR)/quality/axis-quality-decide.c $(SRCDIR)/import/axis-import-name.c \
                     $(SRCDIR)/identify/axis-identify-ids.c $(SRCDIR)/identify/axis-identify-rules.c \
                     $(SRCDIR)/arr/axis-arr-parse.c \
-                    $(SRCDIR)/youtube/axis-youtube-address.c $(SRCDIR)/youtube/axis-youtube-output.c
-FUZZ_HEADERS    := $(shell find $(SRCDIR) -name '*.h' | sort) $(TESTDIR)/axis-test-meta-fixture-parse.h
+                    $(SRCDIR)/youtube/axis-youtube-address.c $(SRCDIR)/youtube/axis-youtube-output.c \
+                    $(PORTAL_DIR)/axis-portal-wire.c $(PORTAL_DIR)/axis-portal-form.c \
+                    $(PORTAL_DIR)/axis-portal-view.c
+FUZZ_HEADERS    := $(shell find $(SRCDIR) -name '*.h' | sort) $(TESTDIR)/axis-test-meta-fixture-parse.h \
+                   $(sort $(wildcard $(PORTAL_DIR)/*.h))
 
 # Developer tools: tests/tools/*.c, one program each, built with the tests
 # (so they always compile) but neither run by them nor installed.
@@ -268,7 +296,7 @@ GENERATED    := $(OUTDIR)/axis-version.h $(MIGRATION_H) $(WEB_H) $(WEB_VERSION_H
 include rules.mk
 
 .PHONY: all
-all: $(AXISD) $(AXIS_WORKER)
+all: $(AXISD) $(AXIS_WORKER) $(AXIS_PORTAL)
 
 # htmx-glib: recursive make, static library only.  The submodule must be
 # checked out; say so plainly instead of failing inside it.
@@ -280,6 +308,7 @@ $(HTMX_LIB):
 
 $(LIB_OBJECTS) $(AXISD_OBJECTS) $(MIGRATION_OBJECT) $(WEB_OBJECT) $(DEFINITION_OBJECT): $(GENERATED) | $(HTMX_LIB)
 $(CORE_OBJECTS) $(WORKER_OBJECTS): $(GENERATED)
+$(PORTAL_OBJECTS): $(GENERATED) | $(HTMX_LIB)
 
 $(LIB_STATIC): $(LIB_OBJECTS) $(MIGRATION_OBJECT) $(WEB_OBJECT) $(DEFINITION_OBJECT)
 	$(ECHO) "  AR      $@"
@@ -298,6 +327,16 @@ $(AXISD): $(AXISD_OBJECTS) $(LIB_STATIC) $(CORE_STATIC) $(HTMX_LIB)
 $(AXIS_WORKER): $(WORKER_OBJECTS) $(CORE_STATIC)
 	$(ECHO) "  LD      $@"
 	$(Q)$(CC) -o $@ $(WORKER_OBJECTS) $(CORE_STATIC) $(WORKER_LDFLAGS)
+
+$(PORTAL_STATIC): $(PORTAL_LIB_OBJECTS)
+	$(ECHO) "  AR      $@"
+	$(Q)rm -f $@
+	$(Q)$(AR) rcs $@ $(PORTAL_LIB_OBJECTS)
+
+$(AXIS_PORTAL): $(PORTAL_MAIN_OBJECT) $(PORTAL_STATIC) $(PORTAL_SHARED_OBJECTS) $(CORE_STATIC) $(HTMX_LIB)
+	$(ECHO) "  LD      $@"
+	$(Q)$(CC) -o $@ $(PORTAL_MAIN_OBJECT) $(PORTAL_STATIC) $(PORTAL_SHARED_OBJECTS) $(CORE_STATIC) $(HTMX_LIB) \
+		$(PORTAL_LDFLAGS)
 
 # Release: the hardened build, with its symbols split off.  Each program
 # stays the unstripped link output (the tests run it); <program>-stripped
@@ -410,16 +449,18 @@ TEST_ALL_OBJECTS := $(TEST_OBJECTS) $(TEST_SUPPORT_OBJECTS) \
 	$(patsubst $(TESTDIR)/%.c,$(OBJDIR)/tests/%.o,$(SCALE_SOURCES) $(LIVE_SOURCES) $(TOOL_SOURCES))
 $(TEST_ALL_OBJECTS): $(GENERATED) | $(HTMX_LIB)
 
-$(OUTDIR)/tests/%: $(OBJDIR)/tests/%.o $(TEST_SUPPORT_OBJECTS) $(LIB_STATIC) $(CORE_STATIC) $(HTMX_LIB)
+# (libaxis-portal.a: the portal's own code, for the tests of it; a test that
+# names nothing of it links nothing of it.)
+$(OUTDIR)/tests/%: $(OBJDIR)/tests/%.o $(TEST_SUPPORT_OBJECTS) $(PORTAL_STATIC) $(LIB_STATIC) $(CORE_STATIC) $(HTMX_LIB)
 	@mkdir -p $(dir $@)
 	$(ECHO) "  LD      $@"
-	$(Q)$(CC) -o $@ $< $(TEST_SUPPORT_OBJECTS) $(LIB_STATIC) $(CORE_STATIC) $(HTMX_LIB) $(LDFLAGS)
+	$(Q)$(CC) -o $@ $< $(TEST_SUPPORT_OBJECTS) $(PORTAL_STATIC) $(LIB_STATIC) $(CORE_STATIC) $(HTMX_LIB) $(LDFLAGS)
 
 .PRECIOUS: $(OBJDIR)/tests/%.o
 
 # Everything `make test` runs, built and not run.
 .PHONY: test-build
-test-build: $(AXISD) $(AXIS_WORKER) $(TEST_BINS) $(TOOL_BINS)
+test-build: $(AXISD) $(AXIS_WORKER) $(AXIS_PORTAL) $(TEST_BINS) $(TOOL_BINS)
 
 # Test programs that run alone, one at a time, after all the others: a
 # program belongs here only when it cannot be made to hold on a machine
@@ -438,10 +479,12 @@ TEST_LOGDIR      := $(OUTDIR)/test-logs
 # GPU may be shared with other work): `make check-hwenc` runs them, and
 # every axis-worker a test starts is told to use software encoders only.
 # First, that axis-worker links nothing of the database, the job queue or
-# the web (tests/check-worker-link.sh).
+# the web (tests/check-worker-link.sh), and axis-portal nothing of the
+# database or of the daemon's own code (tests/check-portal-link.sh).
 .PHONY: test
 test: test-build
 	$(Q)sh $(TESTDIR)/check-worker-link.sh $(AXIS_WORKER)
+	$(Q)sh $(TESTDIR)/check-portal-link.sh $(AXIS_PORTAL)
 ifeq ($(TEST_JOBS),1)
 	$(Q)AXIS_TEST_HWENC= $(TESTDIR)/with-postgres.sh sh -c \
 		'for t in "$$@"; do echo "  TEST    $$t"; "$$t" || exit 1; done' \
@@ -563,6 +606,6 @@ distclean: clean
 
 -include $(LIB_OBJECTS:.o=.d) $(AXISD_OBJECTS:.o=.d) $(MIGRATION_OBJECT:.o=.d) $(WEB_OBJECT:.o=.d)
 -include $(DEFINITION_OBJECT:.o=.d)
--include $(CORE_OBJECTS:.o=.d) $(WORKER_OBJECTS:.o=.d)
+-include $(CORE_OBJECTS:.o=.d) $(WORKER_OBJECTS:.o=.d) $(PORTAL_OBJECTS:.o=.d)
 -include $(TEST_OBJECTS:.o=.d) $(TEST_SUPPORT_OBJECTS:.o=.d)
 -include $(patsubst $(TESTDIR)/%.c,$(OBJDIR)/tests/%.d,$(TOOL_SOURCES))
