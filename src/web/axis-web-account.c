@@ -1018,6 +1018,19 @@ user_work(
 		axis_user_store_delete(auth->pool, work->id, &work->error);
 		break;
 	}
+	/* What other parts keep for an account that went follows it. */
+	if (work->error == NULL && auth->account_gone != NULL && (work->op == USER_DISABLE || work->op == USER_DELETE))
+		auth->account_gone(work->id, auth->account_gone_data);
+}
+
+void
+axis_web_auth_set_account_gone(
+	AxisWebAuth             *self,
+	AxisAuthAccountGoneFunc  func,
+	gpointer                 user_data
+){
+	self->account_gone = func;
+	self->account_gone_data = user_data;
 }
 
 static HtmxResponse *

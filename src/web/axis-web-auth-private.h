@@ -62,6 +62,20 @@ G_BEGIN_DECLS
  * one private address while no proxy is trusted, before it is given. */
 #define AXIS_FORWARDING_HINT_REQUESTS  10
 
+/**
+ * AxisAuthAccountGoneFunc:
+ * @user_id: the account that was disabled or deleted (committed already)
+ * @user_data: (closure): as given to axis_web_auth_set_account_gone()
+ *
+ * Runs on a worker thread, after the Users page disabled or deleted an
+ * account: what another part of Axis keeps for the account follows it (its
+ * waiting requests are withdrawn).  It may block on the database.
+ */
+typedef void (*AxisAuthAccountGoneFunc)(
+	gint64   user_id,
+	gpointer user_data
+);
+
 struct _AxisWebAuth
 {
 	AxisDbPool        *pool;		/* nullable (tests) */
@@ -94,7 +108,18 @@ struct _AxisWebAuth
 	AxisWeb           *web;		/* set by axis_web_auth_install() */
 	AxisWorkerTokens  *worker_tokens;	/* borrowed; NULL: the worker API refuses all */
 	AxisLoginThrottle *by_worker_address;	/* wrong worker tokens, per client address */
+	AxisAuthAccountGoneFunc account_gone;	/* told of an account disabled or deleted; nullable */
+	gpointer           account_gone_data;
 };
+
+/* What follows an account that goes: see AxisAuthAccountGoneFunc.  Main
+ * loop, before the Users page is used; %NULL removes it. */
+void
+axis_web_auth_set_account_gone(
+	AxisWebAuth             *self,
+	AxisAuthAccountGoneFunc  func,
+	gpointer                 user_data
+);
 
 /*
  * What the middleware found out about a request, attached to it for the
