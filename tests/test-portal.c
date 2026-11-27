@@ -2418,6 +2418,12 @@ test_proxy_listed(Fixture *fx, gconstpointer data)
 	assert_status(&reply, 200);
 	assert_has(reply.body, "<form");
 	assert_has(reply.body, "name=\"password\"");
+	/* Whom the page is for, said where the password is typed; and no link
+	 * out of the portal: it does not say where Axis is. */
+	assert_has(reply.body, "This page is for people who ask for titles. Administrators log in at Axis itself, never "
+		"here.");
+	assert_lacks(reply.body, "href=\"http");
+	assert_lacks(reply.body, "//");
 	axis_test_reply_clear(&reply);
 	reply = login_from(fx, "robin", ROBIN_PASSWORD, "198.51.100.30", NULL, &cookie);
 	assert_status(&reply, 303);

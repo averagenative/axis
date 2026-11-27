@@ -274,9 +274,17 @@ axis_web_auth_portal_bars_login(
 	Bar bar = login_bar(self, peer, client, forwarded_for, &which);
 	gint64 now = axis_web_auth_now_monotonic(self);
 	g_autofree gchar *more = NULL;
+	g_autofree gchar *from = NULL;
+	g_autofree gchar *named = NULL;
 
 	if (bar == BAR_NONE)
 		return FALSE;
+
+	/* Who sent it, for the two lines whose address is one a header gave:
+	 * anyone can write a header, and the administrator must be able to tell
+	 * the portal's attempt from somebody else's made-up entry. */
+	from = peer != NULL ? address_text(peer) : g_strdup(AXIS_PROXY_UNKNOWN_CLIENT);
+	named = client != NULL ? address_text(client) : g_strdup(AXIS_PROXY_UNKNOWN_CLIENT);
 
 	self->portal_refused++;
 	self->portal_refused_at = axis_web_auth_now(self);
@@ -309,14 +317,16 @@ axis_web_auth_portal_bars_login(
 			"(server.portal_peers, AXIS_PORTAL_PEERS), and nobody logs in to Axis itself by way of those, whoever "
 			"sent the header and whatever else is in it. The browser was told what a wrong password is told. If this "
 			"was your own login, reach Axis by a way that does not pass an address in that list, or take the address "
-			"out of it and restart Axis%s", what, which, more);
+			"out of it and restart Axis. The connection itself came from %s, and the client, as the trusted proxies "
+			"name it, is %s%s", what, which, from, named, more);
 		break;
 	case BAR_LINK_LOCAL:
 		axis_web_auth_audit("%s refused: it came from or by way of %s, an IPv6 link-local address (fe80::/10). Such "
 			"an address says which link and never which machine, the request portal's container has one unless "
 			"IPv6 is switched off in it, and no list can name it: while server.portal_peers (AXIS_PORTAL_PEERS) is "
 			"set, nobody logs in to Axis itself from one. The browser was told what a wrong password is told. If "
-			"this was your own login, reach Axis by an address that is not link-local%s", what, which, more);
+			"this was your own login, reach Axis by an address that is not link-local. The connection itself came "
+			"from %s, and the client, as the trusted proxies name it, is %s%s", what, which, from, named, more);
 		break;
 	case BAR_UNRESOLVED:
 	default:
@@ -325,7 +335,9 @@ axis_web_auth_portal_bars_login(
 			"yet, or the lookup fails). That may be the proxy, and whom it forwards for cannot be checked against "
 			"the request portal's addresses (server.portal_peers, AXIS_PORTAL_PEERS). The browser was told what a "
 			"wrong password is told. Try again in a few seconds; if it lasts, see the log's lines about the trusted "
-			"proxy's name, or reach Axis directly%s", what, which, more);
+			"proxy's name, and write the proxy's address in place of its name in server.trusted_proxies "
+			"(AXIS_TRUSTED_PROXIES), then restart Axis; or reach Axis without the proxy, where that is possible%s",
+			what, which, more);
 		break;
 	}
 	self->portal_refused_told_us = now;

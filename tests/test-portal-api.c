@@ -3099,7 +3099,7 @@ test_portal_peers_forms(Fixture *fx, gconstpointer data)
 			const gchar *address;
 			gboolean     link_local;
 		} local[] = {
-			{ "fe80::1", TRUE }, { "[fe80::1]", TRUE }, { "fe80::9c2d:11ff:fe22:57e8%eth1", TRUE },
+			{ "fe80::1", TRUE }, { "[fe80::1]", TRUE }, { "fe80::2%eth1", TRUE },
 			{ "[fe80::1%eth1]", TRUE }, { "febf:ffff::1", TRUE }, { "FE80::A", TRUE }, { "fec0::1", FALSE },
 			{ "fe7f::1", FALSE }, { "fe80::1%", FALSE }, { "%eth1", FALSE }, { "fe80::1%eth1]", FALSE },
 			{ "169.254.7.7", FALSE }, { "::ffff:169.254.7.7", FALSE }, { "198.51.100.3%eth1", FALSE },
@@ -3153,7 +3153,7 @@ test_portal_peers_forwarded(Fixture *fx, gconstpointer data)
 	static const gchar *const appended[] = { "X-Forwarded-For", "198.51.100.7, 127.0.0.1", NULL };
 	static const gchar *const chain[] = { "X-Forwarded-For", "198.51.100.7, 198.51.100.20, 127.0.0.1", NULL };
 	static const gchar *const beyond[] = { "X-Forwarded-For", "198.51.100.20, 203.0.113.9, 127.0.0.1", NULL };
-	static const gchar *const link_local[] = { "X-Forwarded-For", "fe80::9c2d:11ff:fe22:57e8%eth1", NULL };
+	static const gchar *const link_local[] = { "X-Forwarded-For", "fe80::2%eth1", NULL };
 	static const gchar *const clean_chain[] = { "X-Forwarded-For", "198.51.100.7, 198.51.100.21, 127.0.0.1", NULL };
 	g_autoptr(GError) error = NULL;
 	g_autofree gchar *admin = NULL;
@@ -3239,7 +3239,8 @@ test_portal_peers_forwarded(Fixture *fx, gconstpointer data)
 	axis_test_reply_clear(&reply);
 	g_assert_cmpuint(axis_password_verify_count(), ==, hashes);
 	g_assert_cmpuint(axis_test_log_count(G_LOG_LEVEL_MESSAGE, "*audit: login refused: X-Forwarded-For names 127.0.0.1, "
-		"one of the request portal's addresses*whoever sent the header*"), ==, 1);
+		"one of the request portal's addresses*whoever sent the header*The connection itself came from 127.0.0.*, "
+		"and the client, as the trusted proxies name it, is 198.51.100.7*"), ==, 1);
 	/* The same chain with the portal elsewhere, two proxies deep, and beyond
 	 * where the walk stops: an entry in front of the first address that is
 	 * not a proxy's is read too. */
@@ -3261,7 +3262,8 @@ test_portal_peers_forwarded(Fixture *fx, gconstpointer data)
 	axis_test_reply_clear(&reply);
 	g_assert_cmpuint(axis_password_verify_count(), ==, hashes);
 	g_assert_cmpuint(axis_test_log_count(G_LOG_LEVEL_MESSAGE, "*audit: login refused: it came from or by way of "
-		"fe80::9c2d:11ff:fe22:57e8, an IPv6 link-local address*"), ==, 1);
+		"fe80::2, an IPv6 link-local address*The connection itself came from 127.0.0.*, and the client, as the "
+		"trusted proxies name it, is *"), ==, 1);
 	g_assert_cmpuint(axis_test_log_count(G_LOG_LEVEL_MESSAGE, "*eth1*"), ==, 0);
 	/* A chain that names neither: accepted. */
 	reply = engine_login_from(fx, fx->people, "root", ADMIN_PASSWORD, clean_chain);

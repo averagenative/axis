@@ -115,8 +115,8 @@ The portal's addresses SHALL be one static setting of the daemon, `server.portal
 - **THEN** it is refused as a wrong password would be
 
 #### Scenario: An IPv6 link-local address
-- **WHEN** the list is not empty and a login arrives from a trusted proxy with `X-Forwarded-For: fe80::9c2d:11ff:fe22:57e8%eth1`
-- **THEN** it is refused as a wrong password would be, the log names `fe80::9c2d:11ff:fe22:57e8` as an IPv6 link-local address, and the zone's text is not in the log
+- **WHEN** the list is not empty and a login arrives from a trusted proxy with `X-Forwarded-For: fe80::2%eth1`
+- **THEN** it is refused as a wrong password would be, the log names `fe80::2` as an IPv6 link-local address, and the zone's text is not in the log
 
 #### Scenario: A forwarded login while the proxy's name has no address
 - **WHEN** the list is not empty, `server.trusted_proxies` names a host that has not been looked up yet, and a login with an administrator's right password arrives with `X-Forwarded-For` from an address that is not trusted

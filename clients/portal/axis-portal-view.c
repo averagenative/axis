@@ -356,7 +356,10 @@ axis_portal_view_login(
 			"maxlength=\"64\" required autofocus></label>"
 			"<label>Password <input type=\"password\" name=\"password\" autocomplete=\"current-password\" "
 			"maxlength=\"1024\" required></label><button type=\"submit\">Log in</button></form>"
-			"<p class=\"hint\">The administrator of this Axis gives you your username and password.</p>");
+			"<p class=\"hint\">The administrator of this Axis gives you your username and password.</p>"
+			/* No link and no address: the portal must not say where Axis is. */
+			"<p class=\"hint\">This page is for people who ask for titles. Administrators log in at Axis "
+			"itself, never here.</p>");
 	}
 	return page_end(out);
 }
