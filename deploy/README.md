@@ -885,6 +885,15 @@ address whatever else it carries, also through a proxy that adds to the
 header instead of replacing it. The only login that an invented address can
 stop is the sender's own.
 
+The rule reads `X-Forwarded-For` and no other header, and in it only an
+entry that is an address by itself. An entry with a port
+(`172.30.2.3:51234`, `[2001:db8::7]:443`) says nothing to the rule, and the
+`Forwarded` header (RFC 7239) is not read at all. The proxies of the
+examples write bare addresses in `X-Forwarded-For`. If your proxy writes
+ports, or sends `Forwarded` only, the rule sees the address of the
+connection and nothing else: set the proxy to write `X-Forwarded-For` with
+bare addresses.
+
 Two more refusals belong to the same rule. Both apply only while
 `AXIS_PORTAL_PEERS` is set:
 
@@ -900,7 +909,9 @@ Two more refusals belong to the same rule. Both apply only while
   That address can be the proxy, and Axis cannot check whom it forwards
   for. After a start this lasts until the first lookup is done, usually
   less than a second. A login without the header, directly to Axis, is not
-  affected.
+  affected. If the name never gets an address, every login through the
+  proxy is refused for as long as that lasts: write the proxy's address in
+  `AXIS_TRUSTED_PROXIES` in place of its name, and restart Axis.
 
 Write the portal's own addresses, on every network that the portal has, and
 nothing wider:
@@ -1120,8 +1131,14 @@ one of these reasons, if you still have a session.
 To get back in, do one of these:
 
 - Reach Axis from an address that is not in the list, and not over a
-  link-local address. If the log names the proxy's host name, wait a few
-  seconds and try again, or reach Axis directly, without the proxy.
+  link-local address.
+- If the log names the proxy's host name, wait a few seconds and try again.
+  If the name still has no address (the service was renamed, the runtime's
+  name server fails, a headless Service has no endpoints), write the
+  proxy's address in `AXIS_TRUSTED_PROXIES` in place of its name, and
+  restart Axis. That works in every example. Where Axis publishes a port of
+  its own, you can also log in there, without the proxy. In the Traefik
+  example Axis publishes no port, so there is no such way.
 - Correct `AXIS_PORTAL_PEERS` (or `portal_peers` in the configuration file)
   so that it holds the portal's own addresses only, and restart Axis. The
   setting is in the configuration, so you never need to change the database.
@@ -1144,7 +1161,9 @@ limit of failed logins in an hour or its limit of requests in a day. The
   the daemon's main port from the portal's container, by name and by
   address. From the portal's container it also posts the administrator's
   correct password to Traefik with the host name of Axis: Traefik answers
-  403 and no session is made. A login that Traefik does forward, for an
+  403 and no session is made. It tries the same by way of the host's
+  address on each of the portal's networks, at four starts of Traefik: no
+  connection is made. A login that Traefik does forward, for an
   address that the check adds to `AXIS_PORTAL_PEERS`, is refused by Axis.
   The portal's container has no IPv6 address but loopback's, and cannot
   make an IPv6 connection to Traefik. With the portal's container stopped,
@@ -1175,8 +1194,9 @@ limit of failed logins in an hour or its limit of requests in a day. The
   Traefik's address on the portal's network, until the Traefik container
   starts again: the portal is then told that the visitor is its own proxy.
   So do not run the Traefik example's portal for other people with rootless
-  Podman and published ports. Docker and a system-wide Podman were not
-  tried.
+  Podman and published ports. A system-wide Podman was not tried. Docker 29
+  was tried once, by hand, for the portal's ways to Traefik only (the
+  Traefik example's README, "What the address rule covers").
 - The Kubernetes manifests of the portal are only rendered
   (`kubectl kustomize`). They have not been applied to a cluster, their
   NetworkPolicy has not been exercised, and the annotations that give the

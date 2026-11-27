@@ -155,7 +155,12 @@ Kubernetes counts the two settings for that among its unsafe sysctls, so
 `portal.yaml` has them commented out: a pod that asks for them starts only
 if the kubelet allows them. Without them, one rule of Axis stands in: while
 `AXIS_PORTAL_PEERS` is set, Axis takes no login that came from, or by way
-of, an IPv6 link-local address.
+of, an IPv6 link-local address. That rule is about logins only. The portal's
+pod keeps its link-local address, and whatever answers on the node's side
+of the pod's interface over IPv6 can be reached from it under an address
+that no policy and no range names: an ingress controller on the host
+network, or the kubelet's ports. Requests to Axis that are not logins are
+not refused on that path.
 
 If your network plugin can do neither, the portal has no address that you
 can name ahead of time, and this example does not fit your cluster as it
@@ -171,10 +176,23 @@ What holds on a cluster that does not enforce NetworkPolicy:
   still needs its password, which the portal does not have.
 - Axis still refuses a login from the portal's range. It compares the
   address of the connection, the client that the ingress controller names,
-  and every address in `X-Forwarded-For`. So a login is refused directly
-  and through the controller, also when the portal's pod sends forwarding
+  and every address in `X-Forwarded-For`. So a login is refused directly.
+  Through the controller it is refused only where the controller sees the
+  portal pod's own address, also when the portal's pod sends forwarding
   headers of its own and the controller adds to them instead of replacing
   them.
+- Where source NAT stands between the portal's pod and the controller, the
+  controller sees a node's address, writes that in `X-Forwarded-For`, and
+  the rule does not apply: the login is checked as anyone's. Three cases
+  are known, and no cluster was run to find more. kube-proxy rewrites the
+  source of traffic to a Service address when the source lies outside the
+  cluster CIDR it was given, and the portal's pool as shipped
+  (`10.44.250.0/28`) lies outside `10.42.0.0/16`. A pool with outgoing NAT
+  switched on rewrites the source toward a controller on the host network.
+  A NodePort or a load balancer with `externalTrafficPolicy: Cluster`
+  rewrites it too. Before you rely on the rule, log in to Axis from a pod in
+  the portal's range through the controller, and read the address in the
+  audit line of Axis: it must be the pod's.
 - Every pod can reach the portal's port and the daemon's port 7801. The
   daemon answers port 7801 only to the portal's range.
 
