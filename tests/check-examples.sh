@@ -50,7 +50,11 @@
 #            Traefik answers it 403 for the engine's host name, so that the
 #            administrator's right password posted that way opens no
 #            session; the portal's container has no IPv6 address but
-#            loopback's and can make no IPv6 connection to Traefik; a login
+#            loopback's and can make no IPv6 connection to Traefik; by the
+#            host's own address on each of the portal's networks (the
+#            gateway) and Traefik's published port, the same password opens
+#            no session from the portal's container, as the stack stands and
+#            after each of three restarts of Traefik; a login
 #            that Traefik does forward, for an address the check lists among
 #            the portal's, is refused by the daemon; and with the portal's
 #            container stopped, Traefik still refuses the portal's address.
@@ -123,7 +127,8 @@ if [[ ! $prefix =~ ^axis-xtest[a-z0-9]{0,12}$ ]]; then
 fi
 pull_seconds=${AXIS_XTEST_PULL_SECONDS:-420}
 client_image=docker.io/library/python:3.12-slim
-traefik_image=docker.io/library/traefik:v3.3
+# The image the Traefik example names (a check below holds the two together).
+traefik_image=docker.io/library/traefik:v3.6
 puid=$(id -u)
 pgid=$(id -g)
 # The image's own user; what the examples run Axis as unless told otherwise.
@@ -915,6 +920,9 @@ part_traefik() {
 	forged_ip=$net.78
 	cp -R "$repo/deploy/examples/traefik" "$dir" || { fail "traefik: copy"; return; }
 	cd "$dir" || return
+	grep -q "^    image: $traefik_image\$" compose.yaml &&
+		pass "traefik: the image this check pulled is the one the example names ($traefik_image)" ||
+		fail "traefik: the image this check pulled is the one the example names ($traefik_image)"
 	make_secrets
 	mkdir -p media/disk1
 	put_film media/disk1/Movies
@@ -928,7 +936,7 @@ part_traefik() {
 		-e "s|172\.30\.0\.|$net.|g" \
 		-e "s|name: axis-proxy|name: $network|" \
 		-e "s|--providers.docker.network=axis-proxy|--providers.docker.network=$network|" \
-		-e 's|^\( *\)- --certificatesresolvers.letsencrypt.acme.email=.*$|&\n\1- --certificatesresolvers.letsencrypt.acme.caserver=https://127.0.0.1:9/dir\n\1- --log.level=DEBUG|'
+		-e 's|^\( *\)- --certificatesresolvers.letsencrypt.acme.email=.*$|&\n\1- --certificatesresolvers.letsencrypt.acme.caserver=https://127.0.0.1:9/dir\n\1- --log.level=DEBUG\n\1- --accesslog=true|'
 	selinux_edit compose.yaml
 	if [ "$(getenforce 2>/dev/null)" = Enforcing ]; then
 		# The two commented lines the file offers for Traefik and the socket.
@@ -1145,9 +1153,13 @@ portal_no_ipv6() {
 
 # proxy_name_resolved CONTAINER: the daemon in CONTAINER has said that the
 # name of its trusted proxy has an address (its own line, written when a
-# lookup first finds one and whenever the addresses change).
+# lookup first finds one and whenever the addresses change).  Only the log
+# since the container last started is read: after a restart in place, the
+# line of the start before would answer for this one.
 proxy_name_resolved() {
-	podman logs "$1" 2>&1 | grep -q 'trusted proxy name traefik resolves to '
+	local since
+	since=$(podman inspect --format '{{.State.StartedAt.Format "2006-01-02T15:04:05Z07:00"}}' "$1" 2>/dev/null)
+	podman logs ${since:+--since "$since"} "$1" 2>&1 | grep -q 'trusted proxy name traefik resolves to '
 }
 
 # portal_page NETWORK IP BASE: the portal's login page as a container of its
@@ -1163,6 +1175,58 @@ portal_page() {
 
 portal_page_is() {
 	portal_page "$1" "$2" "$3" | grep -qF -- "$4"
+}
+
+# gateway_tries PORTAL AXIS TRAEFIK ADMIN-PASSWORD NETWORK NET HOST:PORT...:
+# the engine's login with the administrator's right password, from inside the
+# portal's container, at https://HOST:PORT for each (the gateway addresses of
+# the portal's networks with Traefik's published port, and the like), as the
+# stack stands and after each of three restarts of Traefik.  A place that
+# takes no connection is said and not asked further.  Prints what each came
+# to, what Traefik's access log has as the client of each login it was asked
+# for, and the daemon's lines about logins; asserts that no attempt opened a
+# session and that the daemon took no login of the administrator's meanwhile.
+gateway_tries() {
+	local portal=$1 axis=$2 proxy=$3 admin=$4 network=$5 net=$6 round place out reach before after opened= answered=0
+	shift 6
+	before=$(podman logs "$axis" 2>&1 | grep -c 'audit: login: user=admin')
+	for round in 0 1 2 3; do
+		if [ "$round" -gt 0 ]; then
+			podman restart -t 5 "$proxy" >/dev/null 2>&1
+			if ! wait_for 120 portal_page_is "$network" "$net.82" "https://$net.2" status=200; then
+				fail "traefik: Traefik routes again after its restart number $round"
+				return
+			fi
+		fi
+		for place in "$@"; do
+			reach=$(reach_from "$portal" "${place%:*}" "${place##*:}")
+			if [ "$reach" != open ]; then
+				say info "start $round: from the portal's container, $place takes no connection (${reach:-no answer})"
+				continue
+			fi
+			out=$(podman exec -i "$portal" python3 - engine-login "https://$place" axis.example.com admin "$admin" \
+				< "$repo/tests/check-portal-client.py" 2>&1 | tr '\n' ' ')
+			say info "start $round: from the portal's container, the engine's login at $place: $out"
+			answered=$((answered + 1))
+			case $out in
+			*login=303* | *session=yes*) opened="$opened $place(start $round)" ;;
+			esac
+		done
+	done
+	say info "Traefik's access log, logins by client, status and router: $(podman logs "$proxy" 2>&1 |
+		awk '$7 == "/login" { print $1, $6 "\"", $9, $(NF - 2) }' | sort | uniq -c | tr -s ' ' | tr '\n' ';')"
+	podman logs "$axis" 2>&1 | grep 'audit: login' | tail -n 6 | cut -c 1-260 | sed 's/^/           axis: /'
+	after=$(podman logs "$axis" 2>&1 | grep -c 'audit: login: user=admin')
+	if [ "$answered" = 0 ]; then
+		answered="none of the places took a connection"
+	else
+		answered="$answered tries were answered, each with a refusal; the others took no connection"
+	fi
+	if [ -z "$opened" ] && [ "$after" = "$before" ]; then
+		pass "traefik: from the portal's container, by the gateway addresses of its networks and Traefik's published port, the administrator's right password opens no session, over four starts of Traefik ($answered)"
+	else
+		fail "traefik: from the portal's container, by the gateway addresses of its networks and Traefik's published port, the administrator's right password opens no session (opened at:${opened:- none}; logins of the administrator's taken: $before before, $after after)"
+	fi
 }
 
 # portal_hardened PART CONTAINER: the portal's container as the examples run
@@ -1319,9 +1383,9 @@ traefik_portal() {
 		pass "traefik: the token's file is readable by its owner alone, as the README makes it" ||
 		fail "traefik: the token's file is readable by its owner alone (mode $(stat -c %a secrets/axis_portal_token))"
 	podman unshare chown "$axis_uid:$axis_uid" secrets/axis_portal_token
-	podman logs "$axis" 2>&1 | grep -q "portal's addresses: $pnet.3, $xnet.3" &&
-		pass "traefik: the daemon was told the portal's addresses on both of the portal's networks ($pnet.3, $xnet.3)" ||
-		fail "traefik: the daemon was told the portal's addresses on both of the portal's networks"
+	podman logs "$axis" 2>&1 | grep -q "portal's addresses: $pnet.3, $xnet.3, $pnet.1, $xnet.1" &&
+		pass "traefik: the daemon was told the portal's addresses on both of the portal's networks, and the host's on each ($pnet.3, $xnet.3, $pnet.1, $xnet.1)" ||
+		fail "traefik: the daemon was told the portal's addresses on both of the portal's networks, and the host's on each"
 	requester=$(random_hex 12)
 	code=$(web_post "$base" "$base" "$jar" /admin/users "$work/traefik-requester" \
 		"username=robin" "password=$requester" "role=requester")
@@ -1445,6 +1509,11 @@ traefik_portal() {
 	[ "$(podman inspect --format "{{(index .NetworkSettings.Networks \"$prefix-portal\").IPAddress}} {{(index .NetworkSettings.Networks \"$prefix-portal-proxy\").IPAddress}}" "$portal" 2>/dev/null)" = "$pnet.3 $xnet.3" ] &&
 		pass "traefik: the portal has its fixed address on each of its two networks ($pnet.3, $xnet.3)" ||
 		fail "traefik: the portal has its fixed address on each of its two networks ($pnet.3, $xnet.3)"
+	# And the host's own address on each of them, which the file names too.
+	out="$(podman network inspect --format '{{range .Subnets}}{{.Gateway}}{{end}}' "$prefix-portal" 2>/dev/null) $(podman network inspect --format '{{range .Subnets}}{{.Gateway}}{{end}}' "$prefix-portal-proxy" 2>/dev/null)"
+	[ "$out" = "$pnet.1 $xnet.1" ] &&
+		pass "traefik: the host's address on each of the portal's two networks is the one the file names ($pnet.1, $xnet.1)" ||
+		fail "traefik: the host's address on each of the portal's two networks is the one the file names ($pnet.1, $xnet.1; found: $out)"
 	# The way round: Traefik shares a network with the portal, and routes to
 	# Axis by host name.  First that the question is a real one: the same
 	# client, from a container on Traefik's other network, does log in with
@@ -1461,9 +1530,12 @@ traefik_portal() {
 	esac
 	# From the portal's own container, the same request to Traefik, with the
 	# engine's host name and the administrator's right password.  The daemon
-	# writes an audit line for every login it is asked for, taken or refused,
-	# under whatever address: they are counted before and after.
-	audits=$(podman logs "$axis" 2>&1 | grep -c 'audit:')
+	# writes an audit line for every login it takes and for every wrong
+	# password, under whatever address, and for the first login in a minute
+	# that it refuses by the portal's addresses (later ones in that minute
+	# are counted in the next such line, not written).  Its lines about
+	# logins are counted before and after: a login that was taken shows.
+	audits=$(podman logs "$axis" 2>&1 | grep -c 'audit: login')
 	[ "$(reach_from "$portal" "$xnet.2" 443)" = open ] &&
 		pass "traefik: (the portal's container can open a connection to Traefik)" ||
 		fail "traefik: (the portal's container can open a connection to Traefik)"
@@ -1489,13 +1561,13 @@ traefik_portal() {
 	# $xnet.3 to Traefik nor a listed address to Axis.
 	portal_no_ipv6 traefik "$portal" https 443 axis.example.com "$admin" "$(container_of "$proj" traefik)" "$axis" Traefik
 	# What this proves: no login the portal's container sent, over IPv4 or
-	# IPv6, was put to the daemon at all, under any address.  (Not that no
-	# request of another kind reached it: the daemon does not log those; the
-	# 403 answers above are Traefik's.)
-	line=$(podman logs "$axis" 2>&1 | grep -c 'audit:')
+	# IPv6, was taken by the daemon under any address, and none was the first
+	# it refused.  (Not that no request of another kind reached it: the daemon
+	# does not log those; the 403 answers above are Traefik's.)
+	line=$(podman logs "$axis" 2>&1 | grep -c 'audit: login')
 	[ "$line" = "$audits" ] &&
-		pass "traefik: the daemon was asked for no login while the portal's container tried (its audit lines: $audits before, $line after)" ||
-		fail "traefik: the daemon was asked for no login while the portal's container tried (its audit lines: $audits before, $line after)"
+		pass "traefik: the daemon took no login, and first refused none, while the portal's container tried (its lines about logins: $audits before, $line after)" ||
+		fail "traefik: the daemon took no login, and first refused none, while the portal's container tried (its lines about logins: $audits before, $line after)"
 	# The daemon's own rule, should a login from one of the portal's addresses
 	# reach it through Traefik after all: a container at an address this check
 	# listed among the portal's ($net.81), through Traefik, with the right
@@ -1510,6 +1582,21 @@ traefik_portal() {
 	podman logs "$axis" 2>&1 | grep -q "audit: login refused: the client $net.81, as a trusted proxy names it, is one of the request portal's addresses" &&
 		pass "traefik: and the daemon's log says why, naming the address and the setting" ||
 		fail "traefik: and the daemon's log says why, naming the address and the setting"
+	# The way round by the host.  An internal network has no way out, but the
+	# host's own end of its bridge (the gateway address, .1) is on it, and
+	# Traefik's published port answers on every address of the host.  A
+	# connection from the portal's container to a gateway address and the
+	# published port is sent on to Traefik by the runtime, which may rewrite
+	# where it comes from to that gateway address: Traefik then sees a client
+	# that is not the portal's address.  So the gateway addresses of the
+	# portal's two networks are among those Traefik refuses and the daemon
+	# takes no login from (compose.portal.yaml).  Tried here at each gateway,
+	# on the published port and on 443, as the stack stands and after each of
+	# three restarts of Traefik (the runtime writes its forwarding rules again
+	# at each start, and their order decides which network's rule is taken).
+	# Asserted: no session, and no login of the administrator's taken.
+	gateway_tries "$portal" "$axis" "$(container_of "$proj" traefik)" "$admin" "$network" "$net" \
+		"$xnet.1:$https_port" "$pnet.1:$https_port" "$xnet.1:443" "$pnet.1:443" "host.containers.internal:$https_port"
 	out=$(reach_from "$portal" postgres 5432)
 	[ "$out" = unresolved ] && pass "traefik: from the portal, the name postgres does not resolve" ||
 		fail "traefik: from the portal, the name postgres does not resolve (${out:-no answer})"
