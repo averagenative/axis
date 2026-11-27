@@ -129,6 +129,18 @@ struct _AxisWebAuth
 	gint64             portal_admitted_us;	/* when a login was last admitted over the hourly ceiling */
 	GQueue             portal_waiting;	/* logins waiting for the one hashing place */
 	gboolean           portal_hashing;	/* one is being checked */
+	void             (*portal_ceiling)(gpointer user_data);	/* told when the hour's failures reach the ceiling; nullable */
+	gpointer           portal_ceiling_data;
+	gint64             portal_ceiling_told_us;	/* when it was last told (monotonic); 0: never */
+	/* server.portal_peers: the portal's addresses, as the administrator
+	 * wrote them (never NULL; set before anything is served, and not changed
+	 * after).  The portal listener answers them alone, and no login at the
+	 * engine's own interface is taken from one of them. */
+	AxisProxyList     *portal_peers;
+	guint              portal_refused;	/* logins refused for that since the daemon started */
+	gint64             portal_refused_at;	/* when last (wall clock); 0: never */
+	gint64             portal_refused_told_us;	/* when the log last said so (monotonic); 0: never */
+	guint              portal_refused_untold;	/* refusals since, which the next line counts */
 };
 
 /* Made and freed with the auth; and, as it stops, every login that still
@@ -160,6 +172,8 @@ axis_web_auth_set_account_gone(
 typedef struct
 {
 	gchar        *client_address;
+	gchar        *peer_address;	/* the connection's own address, whatever it forwards; NULL if unknown */
+	gchar        *forwarded_for;	/* X-Forwarded-For as it arrived, believed or not; NULL without one */
 	gchar        *forwarded_host;	/* the public host a trusted proxy reports, or NULL */
 	gboolean      https;		/* the client's request was HTTPS */
 	gboolean      secure;		/* cookies get Secure */

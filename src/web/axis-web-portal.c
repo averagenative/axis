@@ -22,6 +22,7 @@
 #include "api/axis-portal-proto.h"
 #include "api/axis-portal-tokens.h"
 #include "web/axis-password.h"
+#include "web/axis-web-auth-portal.h"
 #include "web/axis-web-auth-private.h"
 #include "web/axis-web-place.h"
 #include "web/axis-web-private.h"
@@ -74,6 +75,8 @@ typedef struct
 	gchar        *done;	/* the page's message key */
 	/* Out. */
 	GPtrArray    *rows;	/* TokenRow */
+	gint64        today;	/* what the portal's requests count today */
+	gint64        ceiling;	/* of requests.portal_per_day */
 	gchar        *token;	/* secret: shown once */
 	gboolean      changed;
 	GError       *error;
@@ -111,6 +114,8 @@ load_rows(Work *work)
 	g_autoptr(AxisDbResult) result = NULL;
 	guint i;
 
+	if (!axis_requests_portal_today(work->owner, &work->today, &work->ceiling, &work->error))
+		return;
 	if (!axis_db_pool_exec(work->owner->pool, "SELECT id, (extract(epoch FROM created_at) * 1000000)::bigint, created_by,"
 	        " (extract(epoch FROM revoked_at) * 1000000)::bigint, revoked_by,"
 	        " (extract(epoch FROM last_used_at) * 1000000)::bigint, last_address"
@@ -220,6 +225,7 @@ page_response(Work *work)
 	};
 	HtmxNode *listener = card("The portal's listener", "portal-listener");
 	HtmxNode *tokens = card("Tokens", "portal-tokens");
+	HtmxNode *limits = card("Limits", "portal-limits");
 	HtmxNode *table = axis_web_table_new("portal-tokens", columns);
 	HtmxTbody *body = htmx_tbody_new();
 	const gchar *message;
@@ -247,9 +253,84 @@ page_response(Work *work)
 			"portal_listen_port in the [server] section of the configuration file, or AXIS_PORTAL_LISTEN_PORT in the "
 			"environment, to a port of its own, and restart Axis. Allow only the portal to reach that port."));
 	}
-	axis_web_auth_add(listener, paragraph("The request portal program itself is not part of this version, and this "
-		"API has not been reviewed for use from the internet."));
+	axis_web_auth_add(listener, paragraph("The request portal (axis-portal) and this API have not been reviewed for "
+		"exposure to the internet. Until the documents of Axis say that the review has passed, let the portal be "
+		"reached only from a network you trust."));
+	/* The portal's addresses: what they are, what they mean, and what an
+	 * administrator who was refused at the login needs to find out why. */
+	{
+		g_autofree gchar *peers = axis_web_auth_portal_peers_text(self->auth);
+		g_autofree gchar *peer = NULL;
+		g_autofree gchar *proxy = NULL;
+		gint64 last_us = 0;
+		guint barred = axis_web_auth_portal_logins_barred(self->auth, &last_us);
+
+		if (peers[0] == '\0' && self->portal_port != 0) {
+			axis_web_auth_add(listener, axis_web_auth_notice(TRUE, "The portal's addresses are not set, so the portal "
+				"API answers nobody: every request to it gets 503. Set portal_peers in the [server] section of the "
+				"configuration file, or AXIS_PORTAL_PEERS in the environment, to the address the portal connects from "
+				"and every other address the portal has, and restart Axis."));
+		} else if (peers[0] == '\0') {
+			axis_web_auth_add(listener, paragraph("The portal's addresses (portal_peers in the configuration file, "
+				"AXIS_PORTAL_PEERS in the environment) are not set. The portal API answers only the addresses in that "
+				"list."));
+		} else {
+			g_autofree gchar *text = g_strdup_printf("The portal's addresses (portal_peers in the configuration file, "
+				"AXIS_PORTAL_PEERS in the environment): %s. The portal API answers these addresses and no other. Nobody "
+				"logs in to Axis itself from one of them: such a login is refused as a wrong password would be, "
+				"whether the connection comes from the address or a trusted proxy names it as the client. Never type "
+				"an administrator's password into the portal.", peers);
+
+			axis_web_auth_add(listener, paragraph(text));
+		}
+		if (axis_web_auth_portal_peers_overlap(self->auth, &peer, &proxy)) {
+			g_autofree gchar *text = g_strdup_printf("%s is among the portal's addresses and %s among the trusted "
+				"proxies: they share an address. A login to Axis that arrives from an address in both is refused, "
+				"whoever it is forwarded for: if the reverse proxy you reach Axis through is at such an address, nobody "
+				"can log in through it. List only the proxy's own addresses in trusted_proxies and only the portal's "
+				"own in portal_peers, then restart Axis.", peer, proxy);
+
+			axis_web_auth_add(listener, axis_web_auth_notice(TRUE, text));
+		}
+		if (barred > 0) {
+			g_autofree gchar *when = axis_web_format_time(last_us, "-");
+			g_autofree gchar *text = g_strdup_printf("A login to Axis from one of the portal's addresses was last "
+				"refused %s (%u since Axis started). The log has a line for it that names the address. If it was your "
+				"own login, your browser reaches Axis from an address in the list above: reach Axis from another "
+				"address, or correct portal_peers and restart Axis.", when, barred);
+
+			axis_web_auth_add(listener, paragraph(text));
+		} else if (peers[0] != '\0') {
+			axis_web_auth_add(listener, paragraph("No login to Axis was refused for coming from one of these addresses "
+				"since Axis started."));
+		}
+	}
 	axis_web_auth_add(content, listener);
+
+	/* The ceilings over all people: where today stands, and how often each
+	 * was reached.  No account is named. */
+	{
+		guint day = axis_requests_portal_limit_count(self, AXIS_REQUESTS_PORTAL_LIMIT_DAY, NULL);
+		guint logins = axis_requests_portal_limit_count(self, AXIS_REQUESTS_PORTAL_LIMIT_LOGINS, NULL);
+		guint failures = self->auth != NULL ? axis_web_auth_portal_failures(self->auth) : 0;
+		g_autofree gchar *today = g_strdup_printf("Requests made through the portal today count %" G_GINT64_FORMAT
+			" of %" G_GINT64_FORMAT ", withdrawn ones included (the setting requests.portal_per_day). One person's "
+			"share of the day is %" G_GINT64_FORMAT ".", work->today, work->ceiling,
+			(gint64)AXIS_REQUESTS_PORTAL_SHARE_OF(work->ceiling));
+		g_autofree gchar *hour = g_strdup_printf("Failed logins through the portal in the last hour: %u of %d. At %d, "
+			"a login from a browser that Axis does not remember is admitted once a minute until the hour has passed.",
+			failures, AXIS_PORTAL_LOGIN_FAILURES_AN_HOUR, AXIS_PORTAL_LOGIN_FAILURES_AN_HOUR);
+		g_autofree gchar *reached = day == 0 && logins == 0 ?
+			g_strdup("Neither limit was reached in the last 24 hours, or since Axis started if that is less.") :
+			g_strdup_printf("Reached in the last 24 hours, or since Axis started if that is less: the day's limit of "
+				"requests %u %s, the hour's limit of failed logins %u %s.", day, day == 1 ? "time" : "times", logins,
+				logins == 1 ? "time" : "times");
+
+		axis_web_auth_add(limits, paragraph(today));
+		axis_web_auth_add(limits, paragraph(hour));
+		axis_web_auth_add(limits, paragraph(reached));
+		axis_web_auth_add(content, limits);
+	}
 
 	for (i = 0; work->rows != NULL && i < work->rows->len; i++) {
 		const TokenRow *row = g_ptr_array_index(work->rows, i);
@@ -442,6 +523,7 @@ axis_web_portal_register(
 	AxisRequests *self,
 	AxisWeb      *web
 ){
+	self->auth = axis_web_get_auth(web);
 	axis_web_route_full(web, HTMX_METHOD_GET, PAGE_PATH, AXIS_WEB_ROUTE_ADMIN, handle_page, self);
 	axis_web_route_full(web, HTMX_METHOD_POST, PAGE_PATH "/tokens", AXIS_WEB_ROUTE_ADMIN, handle_create, self);
 	axis_web_route_full(web, HTMX_METHOD_POST, PAGE_PATH "/tokens/:id/revoke", AXIS_WEB_ROUTE_ADMIN, handle_revoke,

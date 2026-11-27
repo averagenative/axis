@@ -1,0 +1,50 @@
+# portal-axisd.yaml - gives the daemon its portal listener (a patch)
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Applied by kustomization.yaml with portal.yaml, when you switch the request
+# portal on: the daemon then answers the portal API on port 7801, a listener
+# of its own that answers nothing else.  Without this patch the daemon has no
+# portal listener.
+#
+# AXIS_PORTAL_PEERS is the range the portal's pods have their addresses in,
+# and it means two things: the portal API answers those addresses alone, and
+# nobody logs in to Axis itself from one of them, whether the connection
+# comes from it or X-Forwarded-For names it anywhere (so also behind an
+# ingress controller that adds to that header instead of replacing it).  The
+# second holds whether or not the cluster enforces NetworkPolicy.  So the
+# range must hold the portal's pods and nothing else: above all not the
+# ingress controller's pods, or no administrator can log in (the daemon warns
+# at start when the range and AXIS_TRUSTED_PROXIES share an address).
+#
+# Kubernetes gives a pod whatever address is free, so the portal's pods need
+# a range of their own from the network plugin: an address pool for them, or
+# a fixed address (portal.yaml has the lines for two plugins; README.md, "The
+# request portal", says what to do where the plugin has neither).  The value
+# below is a pool outside the pod network that axisd.yaml trusts as shipped
+# (10.42.0.0/16), so the two do not share an address; keep it so when you
+# change either.  Until the value is the range your portal's pods really are
+# in, the portal API answers them 403, so the portal serves nobody, and the
+# daemon's log names the address that was refused.
+#
+# IPv6: list the portal's IPv6 range too on a dual-stack cluster.  An IPv6
+# link-local address (fe80::/10) cannot be listed; while AXIS_PORTAL_PEERS is
+# set, the daemon takes no login that came from or by way of one.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: axisd
+spec:
+  template:
+    spec:
+      containers:
+        - name: axisd
+          ports:
+            - name: portal-api
+              containerPort: 7801
+          env:
+            - name: AXIS_PORTAL_LISTEN_PORT
+              value: "7801"
+            # EDIT: the range of the portal's pods, and of no other pod; never
+            # inside AXIS_TRUSTED_PROXIES (axisd.yaml).
+            - name: AXIS_PORTAL_PEERS
+              value: 10.44.250.0/28

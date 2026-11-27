@@ -135,6 +135,148 @@ axis_web_auth_portal_logout(
 	const gchar *proof
 );
 
+/*
+ * (add-request-portal, slice P4, after its review.)  The portal's addresses:
+ * server.portal_peers (AXIS_PORTAL_PEERS), a list of addresses and ranges
+ * that the administrator writes.  It means two things at once:
+ *
+ *  - the portal listener answers a connection whose own address (the socket's
+ *    peer; that listener reads no forwarding header) is in the list, and no
+ *    other: any other peer is refused before its token is looked at, and
+ *    counts for nothing.  While the list is empty, it answers nobody;
+ *  - no login at the engine's own interface (and no first setup) is taken
+ *    when the connection's own address, the client's address as the trusted
+ *    proxies resolve it, or any address in X-Forwarded-For is in the list
+ *    (axis_web_auth_portal_bars_login() has the whole rule, with what it
+ *    does about IPv6 link-local addresses and about a trusted proxy's name
+ *    that has no address yet).  The answer is that of a wrong password, no
+ *    password is checked and no count is touched.  A session that exists is
+ *    not affected.
+ *
+ * Nothing is learnt and nothing expires: what a portal does, or a restart of
+ * the daemon, changes none of it.  A range is as wide as it is written (an
+ * IPv6 address is not widened to its /64); an IPv4-mapped IPv6 address is
+ * its IPv4 address.  So a password typed into a portal that is in the wrong
+ * hands cannot be used from the portal's own place in the network.
+ */
+
+/**
+ * axis_web_auth_set_portal_peers:
+ * @peers: (nullable): server.portal_peers, as the configuration holds it
+ *
+ * Before anything is served; main loop.  A host name is refused.
+ *
+ * Returns: %FALSE with @error set when @peers is not such a list (the list
+ *   then stays as it was)
+ */
+gboolean
+axis_web_auth_set_portal_peers(
+	AxisWebAuth  *self,
+	const gchar  *peers,
+	GError      **error
+);
+
+/* Whether the list is empty: nobody is the portal.  Any thread. */
+gboolean
+axis_web_auth_portal_peers_none(AxisWebAuth *self);
+
+/* The list as written, "" when it is empty (transfer full).  Any thread. */
+gchar *
+axis_web_auth_portal_peers_text(AxisWebAuth *self);
+
+/* Whether @address (text; nullable) is one of the portal's.  Any thread. */
+gboolean
+axis_web_auth_portal_peer_listed(
+	AxisWebAuth *self,
+	const gchar *address
+);
+
+/**
+ * axis_web_auth_portal_peers_overlap:
+ * @peer: (out) (transfer full) (optional): the entry of the portal's
+ *   addresses
+ * @proxy: (out) (transfer full) (optional): the entry of the trusted proxies
+ *
+ * Whether an address is both a portal's and a trusted proxy's.  Then the
+ * proxy administrators come through is refused at the login as the portal
+ * is, whoever it forwards: worth a warning.  Any thread.
+ */
+gboolean
+axis_web_auth_portal_peers_overlap(
+	AxisWebAuth  *self,
+	gchar       **peer,
+	gchar       **proxy
+);
+
+/**
+ * axis_web_auth_portal_bars_login:
+ * @peer: (nullable): the connection's own address
+ * @client: (nullable): the client's address as the trusted proxies resolve it
+ * @forwarded_for: (nullable): the request's X-Forwarded-For as it arrived,
+ *   whoever sent it
+ * @what: "login" or "setup", for the log
+ *
+ * Whether a login is refused for where it comes from.  With no portal
+ * address configured, never.  Otherwise it is refused when
+ *
+ *  - @peer, @client or any address in @forwarded_for is one of the portal's
+ *    addresses.  Every entry of the header is read, from a trusted sender or
+ *    not: a sender can put entries in front of the one its proxy writes and
+ *    can remove none, so a login the portal's container sends through a
+ *    proxy carries the portal's address whatever else it carries, and a
+ *    made-up entry can only stop its sender's own login;
+ *  - one of those is an IPv6 link-local address (fe80::/10, with or without
+ *    a zone): no list can name such an address, the portal's container has
+ *    one unless IPv6 is switched off in it, and it is never an
+ *    administrator's browser coming through a proxy;
+ *  - the request carries X-Forwarded-For, @peer is not a trusted proxy, and
+ *    a host name among the trusted proxies stands for no address (not looked
+ *    up yet, or failing past its grace): that peer may be the proxy, and
+ *    whom it forwards for cannot be checked.
+ *
+ * When it is refused, the refusal is counted and the log says so, naming the
+ * setting: at once the first time, then once a minute at most, with how many
+ * more there were.  Main loop only.
+ */
+gboolean
+axis_web_auth_portal_bars_login(
+	AxisWebAuth *self,
+	const gchar *peer,
+	const gchar *client,
+	const gchar *forwarded_for,
+	const gchar *what
+);
+
+/* How many logins were refused for that since the daemon started, and when
+ * the last one was (@last_us: (out) (optional), microseconds since 1970; 0
+ * when never).  Main loop only. */
+guint
+axis_web_auth_portal_logins_barred(
+	AxisWebAuth *self,
+	gint64      *last_us
+);
+
+/**
+ * axis_web_auth_portal_set_ceiling_func:
+ * @func: (nullable): called on the main loop when the failed logins of the
+ *   last hour are at %AXIS_PORTAL_LOGIN_FAILURES_AN_HOUR or over it, once an
+ *   hour at most
+ *
+ * Who is told that the hourly ceiling was reached (the notice and the page
+ * "Request portal").
+ */
+void
+axis_web_auth_portal_set_ceiling_func(
+	AxisWebAuth *self,
+	void       (*func)(gpointer user_data),
+	gpointer     user_data
+);
+
+/* How many failed logins through the portal API the last hour holds, for the
+ * page "Request portal".  Main loop only. */
+guint
+axis_web_auth_portal_failures(AxisWebAuth *self);
+
 /* How many logins wait for the hashing place now, and whether one is being
  * checked: for tests. */
 guint

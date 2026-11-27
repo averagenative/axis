@@ -407,6 +407,67 @@ axis_requests_set_portal(
 	guint             port
 );
 
+/**
+ * AxisRequestsPortalLimit:
+ * @AXIS_REQUESTS_PORTAL_LIMIT_DAY: requests.portal_per_day, what all requests
+ *   made through the portal API count in one day
+ * @AXIS_REQUESTS_PORTAL_LIMIT_LOGINS: the failed logins of an hour through
+ *   the portal API (web/axis-web-auth-portal.h)
+ *
+ * (add-request-portal, slice P4.)  The portal API's two ceilings over all
+ * people.  That one was reached is worth an administrator's look: it is what
+ * a portal in the wrong hands, or a stranger who guesses passwords, runs
+ * into.  A person's own quota or share is not among them.
+ */
+typedef enum
+{
+	AXIS_REQUESTS_PORTAL_LIMIT_DAY,
+	AXIS_REQUESTS_PORTAL_LIMIT_LOGINS
+} AxisRequestsPortalLimit;
+
+#define AXIS_REQUESTS_PORTAL_LIMITS     2
+/* This many times are remembered for each (more than a day can hold: the
+ * day's ceiling is reached once a day, the hour's at most once an hour). */
+#define AXIS_REQUESTS_PORTAL_LIMIT_KEPT 32
+
+/**
+ * axis_requests_portal_limit_reached:
+ * @not_again_since_us: 0, or a time (microseconds since 1970): when the
+ *   limit was already recorded as reached at or after it, nothing is recorded
+ *
+ * Records that a ceiling of the portal API was reached now.  The day's
+ * ceiling is reached by the first request it refuses on a calendar day (the
+ * ask passes the day's start); the hour's by the failed login that fills the
+ * hour.  Kept in memory, with no account's name: a restart forgets it.  Any
+ * thread.
+ */
+void
+axis_requests_portal_limit_reached(
+	AxisRequests            *self,
+	AxisRequestsPortalLimit  which,
+	gint64                   not_again_since_us
+);
+
+/* How often @which was reached in the last 24 hours, and when last
+ * (@last_us: (out) (optional); 0 when never).  Any thread. */
+guint
+axis_requests_portal_limit_count(
+	AxisRequests            *self,
+	AxisRequestsPortalLimit  which,
+	gint64                  *last_us
+);
+
+/* What the requests made through the portal API count on this calendar day
+ * (@counted) against requests.portal_per_day (@ceiling), as the ask counts
+ * them.  One statement; not on the main loop. */
+gboolean
+axis_requests_portal_today(
+	AxisRequests  *self,
+	gint64        *counted,
+	gint64        *ceiling,
+	GError       **error
+);
+
 /* Whether @kind can be asked for now (its module given and switched on). */
 gboolean
 axis_requests_kind_on(

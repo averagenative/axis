@@ -62,6 +62,8 @@ axis_web_auth_portal_init(AxisWebAuth *self)
 		AXIS_AUTH_THROTTLE_MAX_US, AXIS_AUTH_THROTTLE_FORGET_US, AXIS_AUTH_THROTTLE_MAX_KEYS);
 	g_queue_init(&self->portal_failures);
 	g_queue_init(&self->portal_waiting);
+	/* Nobody's, until the configuration says whose. */
+	self->portal_peers = axis_proxy_list_parse("", NULL);
 }
 
 void
@@ -73,6 +75,296 @@ axis_web_auth_portal_clear(AxisWebAuth *self)
 	axis_login_throttle_free(self->portal_by_owner);
 	g_queue_clear_full(&self->portal_failures, g_free);
 	g_queue_clear_full(&self->portal_waiting, (GDestroyNotify)login_free);
+	g_clear_pointer(&self->portal_peers, axis_proxy_list_free);
+}
+
+/* ── The portal's addresses ─────────────────────────────────────── */
+
+gboolean
+axis_web_auth_set_portal_peers(
+	AxisWebAuth  *self,
+	const gchar  *peers,
+	GError      **error
+){
+	AxisProxyList *list;
+
+	g_return_val_if_fail(self != NULL, FALSE);
+
+	list = axis_proxy_list_parse(peers != NULL ? peers : "", error);
+	if (list == NULL)
+		return FALSE;
+	if (axis_proxy_list_has_names(list)) {
+		g_set_error_literal(error, AXIS_PROXY_ERROR, AXIS_PROXY_ERROR_INVALID,
+			"the portal's addresses are IP addresses and CIDR ranges only, never a host name");
+		axis_proxy_list_free(list);
+		return FALSE;
+	}
+	axis_proxy_list_free(self->portal_peers);
+	self->portal_peers = list;
+	return TRUE;
+}
+
+gboolean
+axis_web_auth_portal_peers_none(AxisWebAuth *self)
+{
+	g_return_val_if_fail(self != NULL, TRUE);
+
+	return axis_proxy_list_get_length(self->portal_peers) == 0;
+}
+
+gchar *
+axis_web_auth_portal_peers_text(AxisWebAuth *self)
+{
+	g_return_val_if_fail(self != NULL, NULL);
+
+	return axis_proxy_list_to_string(self->portal_peers);
+}
+
+gboolean
+axis_web_auth_portal_peer_listed(
+	AxisWebAuth *self,
+	const gchar *address
+){
+	AxisIpAddress parsed;
+
+	g_return_val_if_fail(self != NULL, FALSE);
+
+	/* (The parser folds an IPv4-mapped IPv6 address to its IPv4 address,
+	 * and the list was read by the same parser.) */
+	return address != NULL && axis_ip_address_parse(address, &parsed) &&
+		axis_proxy_list_contains(self->portal_peers, &parsed);
+}
+
+gboolean
+axis_web_auth_portal_peers_overlap(
+	AxisWebAuth  *self,
+	gchar       **peer,
+	gchar       **proxy
+){
+	g_return_val_if_fail(self != NULL, FALSE);
+
+	return axis_proxy_lists_overlap(self->portal_peers, self->trusted, peer, proxy);
+}
+
+/* Why a login is not taken. */
+typedef enum
+{
+	BAR_NONE,
+	BAR_PEER,		/* the connection's own address is listed */
+	BAR_CLIENT,		/* the client the trusted proxies name is listed */
+	BAR_FORWARDED,		/* an address in X-Forwarded-For is listed */
+	BAR_LINK_LOCAL,		/* one of them is an IPv6 link-local address */
+	BAR_UNRESOLVED		/* forwarded, while a trusted proxy's name stands for no address */
+} Bar;
+
+/* Whether @text is an address of the kind @link_local asks for: a listed
+ * one, or an IPv6 link-local one.  A zone is dropped ("fe80::1%eth0"), which
+ * is how a proxy writes a client that reached it over such an address. */
+static gboolean
+address_is(
+	AxisWebAuth *self,
+	const gchar *text,
+	gboolean     link_local
+){
+	AxisIpAddress parsed;
+
+	if (!axis_ip_address_parse_zoned(text, &parsed))
+		return FALSE;
+	return link_local ? axis_ip_address_is_link_local6(&parsed) :
+		axis_proxy_list_contains(self->portal_peers, &parsed);
+}
+
+/* An address as the log shows it: read and written again, so that nothing
+ * of a header's own text (a zone is any text) reaches the log. */
+static gchar *
+address_text(const gchar *text)
+{
+	AxisIpAddress parsed;
+
+	if (!axis_ip_address_parse_zoned(text, &parsed))
+		return g_strdup(AXIS_PROXY_UNKNOWN_CLIENT);
+	return axis_ip_address_to_string(&parsed);
+}
+
+/*
+ * The rule itself.  @which is set to the address the refusal is for.
+ *
+ * Every address of X-Forwarded-For is read, from whoever sent the header and
+ * however far the trusted proxies' walk went: a sender can add entries in
+ * front of the one its proxy writes and can take none away, so the portal's
+ * address is in the header whatever the portal put before it, whether or not
+ * the proxy that wrote it is trusted (yet), and whether the walk stopped
+ * before it or stepped over it.  The only login a made-up entry can stop is
+ * its sender's own.  An entry that is no address says nothing.
+ */
+static Bar
+login_bar(
+	AxisWebAuth  *self,
+	const gchar  *peer,
+	const gchar  *client,
+	const gchar  *forwarded_for,
+	gchar       **which
+){
+	g_auto(GStrv) hops = NULL;
+	AxisIpAddress from;
+	gboolean link_local;
+	guint i;
+
+	*which = NULL;
+	/* Nobody is the portal: nothing of this applies. */
+	if (axis_proxy_list_get_length(self->portal_peers) == 0)
+		return BAR_NONE;
+
+	if (forwarded_for != NULL) {
+		hops = g_strsplit(forwarded_for, ",", -1);
+		for (i = 0; hops[i] != NULL; i++)
+			g_strstrip(hops[i]);
+	}
+
+	/* First the listed addresses, then the link-local ones: an IPv6
+	 * link-local address is one an interface gives itself, on the portal's
+	 * networks as on any other, and no list of the portal's addresses can
+	 * name it.  It is never the browser of an administrator who comes through
+	 * a proxy from elsewhere; with a portal configured it is taken for the
+	 * portal's. */
+	for (link_local = FALSE; ; link_local = TRUE) {
+		if (address_is(self, peer, link_local)) {
+			*which = address_text(peer);
+			return link_local ? BAR_LINK_LOCAL : BAR_PEER;
+		}
+		if (address_is(self, client, link_local)) {
+			*which = address_text(client);
+			return link_local ? BAR_LINK_LOCAL : BAR_CLIENT;
+		}
+		for (i = 0; hops != NULL && hops[i] != NULL; i++) {
+			if (address_is(self, hops[i], link_local)) {
+				*which = address_text(hops[i]);
+				return link_local ? BAR_LINK_LOCAL : BAR_FORWARDED;
+			}
+		}
+		if (link_local)
+			break;
+	}
+
+	/* A trusted proxy that is named (trusted_proxies: traefik) is not
+	 * believed until its name has an address, and no longer once the name has
+	 * failed past its grace.  A login that arrives with a forwarding header
+	 * from an address that is not trusted may then be that proxy's, carrying
+	 * a client nobody can check: it is not taken.  (The listed addresses in
+	 * the header were refused above already; this is for what the header does
+	 * not say.) */
+	if (forwarded_for != NULL && axis_proxy_list_has_unresolved_name(self->trusted) &&
+	    !(axis_ip_address_parse(peer, &from) && axis_proxy_list_contains(self->trusted, &from))) {
+		*which = g_strdup(peer != NULL ? peer : AXIS_PROXY_UNKNOWN_CLIENT);
+		return BAR_UNRESOLVED;
+	}
+
+	return BAR_NONE;
+}
+
+gboolean
+axis_web_auth_portal_bars_login(
+	AxisWebAuth *self,
+	const gchar *peer,
+	const gchar *client,
+	const gchar *forwarded_for,
+	const gchar *what
+){
+	g_autofree gchar *which = NULL;
+	Bar bar = login_bar(self, peer, client, forwarded_for, &which);
+	gint64 now = axis_web_auth_now_monotonic(self);
+	g_autofree gchar *more = NULL;
+	g_autofree gchar *from = NULL;
+	g_autofree gchar *named = NULL;
+
+	if (bar == BAR_NONE)
+		return FALSE;
+
+	/* Who sent it, for the two lines whose address is one a header gave:
+	 * anyone can write a header, and the administrator must be able to tell
+	 * the portal's attempt from somebody else's made-up entry. */
+	from = peer != NULL ? address_text(peer) : g_strdup(AXIS_PROXY_UNKNOWN_CLIENT);
+	named = client != NULL ? address_text(client) : g_strdup(AXIS_PROXY_UNKNOWN_CLIENT);
+
+	self->portal_refused++;
+	self->portal_refused_at = axis_web_auth_now(self);
+	/* One line, then one a minute at most: whoever holds the portal can try
+	 * as often as it likes, and the log is not its to fill.  The line names
+	 * the rule and the setting, so that an administrator who is refused from
+	 * their own desk finds out why. */
+	if (self->portal_refused_told_us != 0 && now - self->portal_refused_told_us < ADMIT_EVERY_US) {
+		self->portal_refused_untold++;
+		return TRUE;
+	}
+	more = self->portal_refused_untold > 0 ? g_strdup_printf(" (and %u more such refusals since this was last said)",
+		self->portal_refused_untold) : g_strdup("");
+	switch (bar) {
+	case BAR_PEER:
+		axis_web_auth_audit("%s refused: the connection came from %s, one of the request portal's addresses "
+			"(server.portal_peers, AXIS_PORTAL_PEERS), and nobody logs in to Axis itself from those, whatever is "
+			"forwarded. The browser was told what a wrong password is told. If this was your own login, reach Axis "
+			"from an address that is not in that list, or take the address out of it and restart Axis%s", what, which,
+			more);
+		break;
+	case BAR_CLIENT:
+		axis_web_auth_audit("%s refused: the client %s, as a trusted proxy names it, is one of the request portal's "
+			"addresses (server.portal_peers, AXIS_PORTAL_PEERS), and nobody logs in to Axis itself from those. The "
+			"browser was told what a wrong password is told. If this was your own login, reach Axis from an address "
+			"that is not in that list, or take the address out of it and restart Axis%s", what, which, more);
+		break;
+	case BAR_FORWARDED:
+		axis_web_auth_audit("%s refused: X-Forwarded-For names %s, one of the request portal's addresses "
+			"(server.portal_peers, AXIS_PORTAL_PEERS), and nobody logs in to Axis itself by way of those, whoever "
+			"sent the header and whatever else is in it. The browser was told what a wrong password is told. If this "
+			"was your own login, reach Axis by a way that does not pass an address in that list, or take the address "
+			"out of it and restart Axis. The connection itself came from %s, and the client, as the trusted proxies "
+			"name it, is %s%s", what, which, from, named, more);
+		break;
+	case BAR_LINK_LOCAL:
+		axis_web_auth_audit("%s refused: it came from or by way of %s, an IPv6 link-local address (fe80::/10). Such "
+			"an address says which link and never which machine, the request portal's container has one unless "
+			"IPv6 is switched off in it, and no list can name it: while server.portal_peers (AXIS_PORTAL_PEERS) is "
+			"set, nobody logs in to Axis itself from one. The browser was told what a wrong password is told. If "
+			"this was your own login, reach Axis by an address that is not link-local. The connection itself came "
+			"from %s, and the client, as the trusted proxies name it, is %s%s", what, which, from, named, more);
+		break;
+	case BAR_UNRESOLVED:
+	default:
+		axis_web_auth_audit("%s refused: it arrived with X-Forwarded-For from %s, which is not a trusted proxy now, "
+			"while a host name in server.trusted_proxies (AXIS_TRUSTED_PROXIES) stands for no address (not looked up "
+			"yet, or the lookup fails). That may be the proxy, and whom it forwards for cannot be checked against "
+			"the request portal's addresses (server.portal_peers, AXIS_PORTAL_PEERS). The browser was told what a "
+			"wrong password is told. Try again in a few seconds; if it lasts, see the log's lines about the trusted "
+			"proxy's name, and write the proxy's address in place of its name in server.trusted_proxies "
+			"(AXIS_TRUSTED_PROXIES), then restart Axis; or reach Axis without the proxy, where that is possible%s",
+			what, which, more);
+		break;
+	}
+	self->portal_refused_told_us = now;
+	self->portal_refused_untold = 0;
+	return TRUE;
+}
+
+guint
+axis_web_auth_portal_logins_barred(
+	AxisWebAuth *self,
+	gint64      *last_us
+){
+	g_return_val_if_fail(self != NULL, 0);
+
+	if (last_us != NULL)
+		*last_us = self->portal_refused_at;
+	return self->portal_refused;
+}
+
+void
+axis_web_auth_portal_set_ceiling_func(
+	AxisWebAuth *self,
+	void       (*func)(gpointer user_data),
+	gpointer     user_data
+){
+	self->portal_ceiling = func;
+	self->portal_ceiling_data = user_data;
 }
 
 /* ── The counts ─────────────────────────────────────────────────── */
@@ -114,11 +406,30 @@ failures_add(
 ){
 	gint64 *when = g_new(gint64, 1);
 
+	failures_trim(self, now);
 	*when = now;
 	g_queue_push_tail(&self->portal_failures, when);
+	/* The ceiling is reached by the failure that fills the hour, and is
+	 * told once an hour for as long as the hour stays full: the ones admitted
+	 * beyond it, one a minute, keep it at the ceiling or over it, and a flow
+	 * of guesses that goes on for a day is told of in each of its hours, not
+	 * in the first alone. */
+	if (g_queue_get_length(&self->portal_failures) >= AXIS_PORTAL_LOGIN_FAILURES_AN_HOUR &&
+	    (self->portal_ceiling_told_us == 0 || now - self->portal_ceiling_told_us >= HOUR_US)) {
+		self->portal_ceiling_told_us = now;
+		if (self->portal_ceiling != NULL)
+			self->portal_ceiling(self->portal_ceiling_data);
+	}
 	/* Never more than the ceiling and what could be in flight beyond it. */
 	while (g_queue_get_length(&self->portal_failures) > AXIS_PORTAL_LOGIN_FAILURES_AN_HOUR * 4)
 		g_free(g_queue_pop_head(&self->portal_failures));
+}
+
+guint
+axis_web_auth_portal_failures(AxisWebAuth *self)
+{
+	failures_trim(self, axis_web_auth_now_monotonic(self));
+	return g_queue_get_length(&self->portal_failures);
 }
 
 static gint64

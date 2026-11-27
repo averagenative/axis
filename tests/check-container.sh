@@ -8,7 +8,7 @@
 # settings of deploy/compose.example.yaml and checks, from outside and from
 # inside the containers:
 #
-#   - the image has axisd, axis-worker, ffmpeg and ffprobe, and no compiler
+#   - the image has axisd, axis-worker, axis-portal, ffmpeg and ffprobe, and no compiler
 #     and no -dev package; it is configured to run as a non-root user
 #   - TLS works in the image: it has GIO's TLS backend and a system trust
 #     store, and the image's axis-worker completes a TLS handshake (with
@@ -43,6 +43,17 @@
 #     administrator from a secret file (no setup token, the password in no
 #     log and in no container configuration), that password logs in, and it
 #     can write its data volume without anything having been chowned
+#   - the request portal (axis-portal, the same image with another
+#     entrypoint) beside that daemon, which is given a portal listener: as a
+#     user id the image does not know, read-only with no tmpfs and no volume,
+#     no capability, no new privileges, its token (made by the administrator
+#     on the page Request portal) as a secret file and nothing of the
+#     daemon's in its environment or its mounts, it starts and is healthy; a
+#     requester (made by the administrator) logs in and asks for a movie
+#     through it, from a client container that plays the reverse proxy, and
+#     the request waits in the daemon's database; from an address that is
+#     not the listed proxy the same headers get no login; the token and the
+#     password are in no log; it stops with exit status 0
 #
 # HOW THE EXAMPLE IS STARTED.  No compose front end is needed or used.  The
 # script reads the example with yq and turns what it says into `podman run`
@@ -110,7 +121,8 @@ check() {
 
 names_containers() {
 	echo "$prefix-tls-trusted" "$prefix-tls-untrusted" "$prefix-worker" "$prefix-axis" "$prefix-axis-uid" \
-		"$prefix-axis-uid-refused" "$prefix-chown" "$prefix-postgres" "$prefix-axis-any" "$prefix-postgres2"
+		"$prefix-axis-uid-refused" "$prefix-chown" "$prefix-postgres" "$prefix-axis-any" "$prefix-postgres2" \
+		"$prefix-portal" "$prefix-portal-client"
 }
 
 dump_logs() {
@@ -135,7 +147,7 @@ cleanup() {
 	"$runtime" volume rm -f "$prefix-axis-data" >/dev/null 2>&1
 	"$runtime" volume rm -f "$prefix-axis-db2" >/dev/null 2>&1
 	"$runtime" volume rm -f "$prefix-axis-data2" >/dev/null 2>&1
-	for c in axis_db_password axis_database_url axis_worker_token tls_token axis_admin_password; do
+	for c in axis_db_password axis_database_url axis_worker_token tls_token axis_admin_password axis_portal_token; do
 		"$runtime" secret rm "$prefix-$c" >/dev/null 2>&1
 	done
 	if [ -n "$tls_pid" ]; then
@@ -312,9 +324,10 @@ image_run() {
 
 [ "$("$runtime" image inspect --format '{{.Config.User}}' "$image")" = 1000:1000 ] \
 	&& pass "the image's default user is 1000:1000" || fail "the image's default user is 1000:1000"
-check "axisd, axis-worker, ffmpeg and ffprobe run" sh -c \
+check "axisd, axis-worker, axis-portal, ffmpeg and ffprobe run" sh -c \
 	"'$runtime' run --rm --entrypoint /usr/bin/axisd '$image' --version &&
 	 '$runtime' run --rm --entrypoint /usr/bin/axis-worker '$image' --version &&
+	 '$runtime' run --rm --entrypoint /usr/bin/axis-portal '$image' --version &&
 	 '$runtime' run --rm --entrypoint /usr/bin/ffmpeg '$image' -version &&
 	 '$runtime' run --rm --entrypoint /usr/bin/ffprobe '$image' -version"
 
@@ -881,10 +894,16 @@ retarget() {
 
 service_args axis "$any_user"
 retarget
+# The portal of this check (further down) has a fixed address on this
+# network, and the daemon is told it: the portal API answers that address
+# alone, and nobody logs in to Axis itself from it.
+portal_subnet=$("$runtime" network inspect --format '{{(index .Subnets 0).Subnet}}' "$prefix-private2")
+portal_ip=${portal_subnet%.*}.251
 "$runtime" run --detach --name "$any" --label "axis-check=$prefix" \
 	--publish 127.0.0.1::7800 --security-opt label=disable \
 	--secret "$prefix-axis_admin_password,target=axis_admin_password,uid=$any_uid,mode=0400" \
 	--env AXIS_ADMIN_USERNAME=admin --env AXIS_ADMIN_PASSWORD_FILE=/run/secrets/axis_admin_password \
+	--env AXIS_PORTAL_LISTEN_PORT=7801 --env "AXIS_PORTAL_PEERS=$portal_ip" \
 	"${ARGS[@]}" "$image" >/dev/null || die "cannot start axis as $any_user"
 any_port=$("$runtime" port "$any" 7800/tcp | sed -n 's/.*:\([0-9][0-9]*\)$/\1/p' | head -n 1)
 [ -n "$any_port" ] || die "the daemon as $any_user has no published port"
@@ -968,6 +987,204 @@ if [ -n "$csrf" ] && [ "$login_status" = 303 ] && grep -q 'axis_session' "$jar";
 else
 	fail "the administrator logs in with the password from the secret (status $login_status)"
 fi
+
+# ------------------------------------------------------- the request portal
+
+echo "The request portal, from the same image"
+
+# This daemon was started with AXIS_PORTAL_LISTEN_PORT=7801 (the one setting
+# here that the compose example does not have): its portal API is on.
+case $("$runtime" logs "$any" 2>&1) in
+*"portal API: listening on 0.0.0.0:7801"*) pass "the daemon answers the portal API on a port of its own (7801)" ;;
+*) fail "the daemon answers the portal API on a port of its own (7801)" ;;
+esac
+
+# admin_form PATH FIELD=VALUE...: a form of the engine's interface posted by
+# the administrator who logged in above; prints the status, and leaves the
+# answer in $work/admin-form.
+admin_form() {
+	local path=$1 token field
+	local -a data
+	shift
+	token=$(curl -sS --max-time 15 -b "$jar" -c "$jar" "http://127.0.0.1:$any_port/admin/portal" \
+		| grep -o '<input[^>]*name="_csrf"[^>]*>' | head -n 1 | sed -n 's/.* value="\([^"]*\)".*/\1/p')
+	data=(--data-urlencode "_csrf=$token")
+	for field in "$@"; do
+		data+=(--data-urlencode "$field")
+	done
+	curl -sS --max-time 30 -b "$jar" -c "$jar" -o "$work/admin-form" -w '%{http_code}' "${data[@]}" \
+		"http://127.0.0.1:$any_port$path"
+}
+
+# The token, as an administrator makes it: shown once, on the page that
+# answers its making.
+portal_token=
+[ "$(admin_form /admin/portal/tokens)" = 200 ] \
+	&& portal_token=$(grep -o '<pre class="worker-token"><code>[^<]*' "$work/admin-form" | head -n 1 | sed 's/.*<code>//')
+rm -f "$work/admin-form"
+[ -n "$portal_token" ] && pass "the administrator makes a portal token on the page Request portal" \
+	|| die "the administrator makes a portal token on the page Request portal"
+umask 077
+printf '%s' "$portal_token" > "$work/secrets/axis_portal_token"
+umask 022
+"$runtime" secret create "$prefix-axis_portal_token" "$work/secrets/axis_portal_token" >/dev/null \
+	|| die "cannot create a secret"
+requester_password=$(od -An -N18 -tx1 /dev/urandom | tr -d ' \n')
+[ "$(admin_form /admin/users "username=robin" "password=$requester_password" "role=requester")" = 303 ] \
+	&& pass "the administrator creates a requester account" || fail "the administrator creates a requester account"
+rm -f "$work/admin-form"
+# A title to ask for: there is no details provider here, so the record a
+# search would store is written as the daemon stores one.
+portal_title=$("$runtime" exec "$prefix-postgres2" psql --username axis --dbname axis --tuples-only --no-align \
+	--quiet --no-psqlrc -c "INSERT INTO meta_title (kind, title, year, overview, provider, provider_id, adult,
+	    detail_fetched_at) VALUES ('film', 'Glass Orchard', 2031, 'A made-up film.', 'tmdb', '990001', false, now())
+	    RETURNING id" 2>/dev/null | head -n 1 | tr -d '[:space:]')
+[ -n "$portal_title" ] || die "cannot write a title to ask for"
+
+# The portal: the same image with another entrypoint, as a user id the image
+# does not know (and not group 0), read-only with no tmpfs of the runtime's
+# either, no capability, no new privileges, no volume, and one secret, its
+# token, as a file.  Its environment: where the daemon's portal listener is,
+# and who its reverse proxy is.  There is no proxy here: a client container
+# at a fixed address plays it (it says https and names a client).
+portal=$prefix-portal
+portal_uid=61234
+proxy_ip=${portal_subnet%.*}.250
+"$runtime" run --detach --name "$portal" --label "axis-check=$prefix" \
+	--user "$portal_uid:$portal_uid" --read-only --read-only-tmpfs=false --cap-drop ALL \
+	--security-opt no-new-privileges --pids-limit 64 --memory 256m \
+	--sysctl net.ipv6.conf.all.disable_ipv6=1 --sysctl net.ipv6.conf.default.disable_ipv6=1 \
+	--network "$prefix-private2:alias=portal,ip=$portal_ip" \
+	--secret "$prefix-axis_portal_token,target=axis_portal_token,uid=$portal_uid,mode=0400" \
+	--env AXIS_PORTAL_URL=http://axis:7801 --env AXIS_PORTAL_ALLOW_INSECURE_HTTP=true \
+	--env AXIS_PORTAL_TOKEN_FILE=/run/secrets/axis_portal_token \
+	--env AXIS_PORTAL_WEB_LISTEN_HOST=0.0.0.0 --env "AXIS_PORTAL_TRUSTED_PROXIES=$proxy_ip" \
+	--health-cmd "/usr/bin/axis-portal --healthcheck" --health-interval 2s --health-start-period 0s \
+	--health-retries 3 --health-timeout 5s \
+	--entrypoint /usr/bin/axis-portal "$image" >/dev/null || die "cannot start the portal"
+if wait_healthy "$portal" 60; then
+	pass "the portal starts and its health check passes (axis-portal --healthcheck, which needs no token)"
+else
+	die "the portal did not become healthy"
+fi
+
+[ "$(status_field "$portal" Uid | cut -f1)" = "$portal_uid" ] && [ "$(status_field "$portal" Gid | cut -f1)" = "$portal_uid" ] \
+	&& pass "the portal runs as uid and gid $portal_uid (not in the image's passwd, not group 0)" \
+	|| fail "the portal runs as uid and gid $portal_uid"
+[ "$(status_field "$portal" CapEff)" = 0000000000000000 ] && pass "the portal has no capabilities" \
+	|| fail "the portal has no capabilities"
+[ "$(status_field "$portal" NoNewPrivs)" = 1 ] && pass "the portal cannot gain privileges" \
+	|| fail "the portal cannot gain privileges"
+[ "$("$runtime" inspect --format '{{.HostConfig.ReadonlyRootfs}}' "$portal")" = true ] \
+	&& pass "the portal's root filesystem is read-only" || fail "the portal's root filesystem is read-only"
+for dst in / /tmp /var/tmp /run /usr/share/axis; do
+	out=$("$runtime" exec "$portal" touch "$dst/axis-check" 2>&1)
+	case $out in
+	*"Read-only file system"*) pass "a write to $dst from the portal fails: read-only file system" ;;
+	*) fail "a write to $dst from the portal fails: read-only file system (got: $out)" ;;
+	esac
+done
+[ -z "$("$runtime" inspect --format '{{range .Mounts}}{{.Destination}} {{end}}' "$portal" | tr -d ' ')" ] \
+	&& pass "the portal has no volume and no mount" || fail "the portal has no volume and no mount"
+penv=$("$runtime" inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$portal")
+case $penv in
+*DATABASE*|*POSTGRES*|*PASSWORD*|*AXIS_ADMIN*|*AXIS_WORKER*|*AXIS_METRICS*)
+	fail "the portal's environment has no database address and no other secret" ;;
+*) pass "the portal's environment has no database address and no other secret" ;;
+esac
+# What is there besides the portal's own settings is what the image sets for
+# every program it runs, none of it a secret.
+echo "  info     the portal's environment, names only: $(printf '%s\n' "$penv" | cut -d= -f1 | grep -v '^$' | tr '\n' ' ')"
+case $("$runtime" logs "$portal" 2>&1) in
+*"has not been reviewed for exposure to the internet"*) pass "the portal says at start that it is not reviewed for the internet" ;;
+*) fail "the portal says at start that it is not reviewed for the internet" ;;
+esac
+
+# A requester logs in and asks, through the portal alone.  The client is a
+# container of the same image (python3 is in it), with the script on its
+# standard input.
+out=$("$runtime" run --rm -i --name "$prefix-portal-client" --label "axis-check=$prefix" \
+	--network "$prefix-private2:ip=$proxy_ip" --read-only --cap-drop ALL --security-opt no-new-privileges \
+	--entrypoint /usr/bin/python3 "$image" \
+	- ask http://portal:7802 "" robin "$requester_password" "$portal_title" 203.0.113.9 \
+	< tests/check-portal-client.py 2>&1)
+echo "$out" | sed 's/^/  info     client: /'
+case $out in
+*login=303*) pass "a requester logs in through the portal" ;;
+*) fail "a requester logs in through the portal" ;;
+esac
+case $out in
+*"cookie=__Host-axis_portal_session secure"*) pass "the portal's session cookie is Secure and __Host-" ;;
+*) fail "the portal's session cookie is Secure and __Host-" ;;
+esac
+case $out in
+*"ask=200 made"*"requests=200 listed"*) pass "the requester asks for a movie and sees it among My requests" ;;
+*) fail "the requester asks for a movie and sees it among My requests" ;;
+esac
+[ "$("$runtime" exec "$prefix-postgres2" psql --username axis --dbname axis --tuples-only --no-align --no-psqlrc \
+	-c "SELECT count(*) FROM request WHERE via = 'portal' AND decision = 'waiting' AND title_id = $portal_title" \
+	2>/dev/null)" = 1 ] && pass "the request waits in the daemon's database" || fail "the request waits in the daemon's database"
+case $("$runtime" logs "$any" 2>&1) in
+*"portal login: user=robin reported_client=203.0.113.9"*) pass "the daemon is told the client's address the proxy named" ;;
+*) fail "the daemon is told the client's address the proxy named" ;;
+esac
+# From anywhere else, forwarded headers count for nothing: no login is served.
+out=$(printf 'import urllib.request, urllib.error\ntry:\n    print(urllib.request.urlopen(urllib.request.Request("http://portal:7802/login", headers={"X-Forwarded-Proto": "https", "X-Forwarded-For": "203.0.113.9"}), timeout=10).status)\nexcept urllib.error.HTTPError as e:\n    print(e.code)\n' \
+	| "$runtime" run --rm -i --name "$prefix-portal-client" --label "axis-check=$prefix" \
+		--network "$prefix-private2" --read-only --cap-drop ALL --security-opt no-new-privileges \
+		--entrypoint /usr/bin/python3 "$image" - 2>&1)
+[ "$out" = 403 ] && pass "from an address that is not listed, the same headers get no login (403)" \
+	|| fail "from an address that is not listed, the same headers get no login (got: $out)"
+# The portal's address (AXIS_PORTAL_PEERS) is the only one the portal API
+# answers: from another container on the same network, with the portal's own
+# token, 403 before the token is looked at.
+out=$("$runtime" run --rm -i --name "$prefix-portal-client" --label "axis-check=$prefix" \
+	--network "$prefix-private2" --read-only --cap-drop ALL --security-opt no-new-privileges --security-opt label=disable \
+	--volume "$PWD/tests/check-portal-client.py:/client.py:ro" --entrypoint /usr/bin/python3 "$image" \
+	/client.py api-hello http://axis:7801 < "$work/secrets/axis_portal_token" 2>&1)
+case $out in
+"hello=403 "*not-a-portal*) pass "the portal API answers the portal's address alone: 403 from another container with the right token" ;;
+*) fail "the portal API answers the portal's address alone (got: $(echo "$out" | tail -c 120))" ;;
+esac
+# And nobody logs in to Axis itself from the portal's address: the
+# administrator's right password, posted from the portal's container to the
+# daemon's main port, opens no session, and the daemon says why.
+out=$("$runtime" exec -i "$portal" python3 - engine-login http://axis:7800 "" admin "$admin_password" \
+	< tests/check-portal-client.py 2>&1 | tr '\n' ' ')
+case $out in
+*form=200*login=401*session=no*) pass "from the portal's container, the administrator's right password is refused at the daemon's login as a wrong one is" ;;
+*) fail "from the portal's container, the administrator's right password is refused at the daemon's login (got: $out)" ;;
+esac
+case $("$runtime" logs "$any" 2>&1) in
+*"audit: login refused: the connection came from $portal_ip, one of the request portal's addresses (server.portal_peers, AXIS_PORTAL_PEERS)"*)
+	pass "and the daemon's log says why, naming the address and the setting" ;;
+*) fail "and the daemon's log says why, naming the address and the setting" ;;
+esac
+# The daemon knows the portal by its IPv4 address.  The portal's container
+# has IPv6 switched off, as the examples run it, so it has no link-local
+# address to be somebody else by: asked from inside it.
+out=$("$runtime" exec -i "$portal" python3 - v6 http 7800 axis admin "$admin_password" \
+	< tests/check-portal-client.py 2>&1 | tr '\n' ' ')
+case $out in
+"inet6=none "*) pass "the portal's container has no IPv6 address but loopback's (IPv6 is switched off in it)" ;;
+*) fail "the portal's container has no IPv6 address but loopback's (got: $out)" ;;
+esac
+case $("$runtime" logs "$portal" "$any" 2>&1) in
+*"$portal_token"*|*"$requester_password"*) fail "the portal's token and the requester's password are in no log" ;;
+*) pass "the portal's token and the requester's password are in no log" ;;
+esac
+case $("$runtime" inspect "$portal" "$any" 2>&1) in
+*"$portal_token"*) fail "the portal's token is not in the containers' configuration" ;;
+*) pass "the portal's token is not in the containers' configuration" ;;
+esac
+
+t0=$SECONDS
+"$runtime" stop -t 15 "$portal" >/dev/null 2>&1
+code=$("$runtime" inspect --format '{{.State.ExitCode}}' "$portal")
+[ "$code" = 0 ] && pass "the portal stopped with exit status 0" || fail "the portal stopped with exit status 0 (it was $code)"
+[ $((SECONDS - t0)) -lt 10 ] && pass "the portal stopped in $((SECONDS - t0)) s" || fail "the portal stopped in $((SECONDS - t0)) s"
+"$runtime" rm -f "$portal" >/dev/null 2>&1
+
 stop_clean "$any"
 "$runtime" stop -t 20 "$prefix-postgres2" >/dev/null 2>&1
 

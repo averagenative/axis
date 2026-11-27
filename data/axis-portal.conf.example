@@ -1,0 +1,60 @@
+# axis-portal.conf.example - axis-portal's configuration
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# The request portal has not been reviewed for exposure to the internet.
+# Until the documents of Axis say that the review has passed, let it be
+# reached only from a network you trust (deploy/README.md, "The request
+# portal").
+#
+# Copy it, change what is marked, and start the portal with
+#
+#   axis-portal --config /etc/axis/axis-portal.conf
+#
+# Every setting can also come from the environment (AXIS_PORTAL_URL,
+# AXIS_PORTAL_TOKEN_FILE, AXIS_PORTAL_TRUSTED_PROXIES, ...), which wins over
+# this file.  The token is never given on the command line.  A key the portal
+# does not know stops it, with the key's name: it has no setting for a
+# database, a media path, an indexer, a download client or a details
+# provider, and it writes no file.
+
+[portal]
+# The daemon's portal listener (server.portal_listen_port of axisd; 7801 in
+# the examples), not its main port.  Over a network that is not a private
+# one of these two programs alone, https: plain http is refused for any
+# address but this machine's own unless allow_insecure_http is set.
+url = http://axis:7801
+
+# The token the page "Request portal" (System) showed when it was made, in a
+# file only the portal's user can read.
+token_file = /etc/axis/portal-token
+
+# Certificates to trust instead of the system's (a private CA), for https.
+# ca_file = /etc/axis/ca.pem
+
+# Only on a network that holds the portal and the daemon alone: the token,
+# and every requester's password and session, then cross it unencrypted.
+# allow_insecure_http = false
+
+# Where the pages are served.  Behind a reverse proxy on this machine, the
+# default (127.0.0.1) is right; in a container, 0.0.0.0, and the container's
+# network decides who reaches it.
+# web_listen_host = 127.0.0.1
+# web_listen_port = 7802
+
+# The reverse proxy in front of the portal: addresses, ranges and host
+# names, with the rules of the daemon's server.trusted_proxies.  The portal
+# serves a login only to a request that a proxy listed here reports as https
+# (X-Forwarded-Proto), and takes the client's address from its
+# X-Forwarded-For.  Without it nobody can log in.  List the proxy only,
+# never a whole network.
+trusted_proxies = 127.0.0.1
+
+# Seconds the daemon has to answer.
+# request_timeout = 20
+
+# Connections open at once, and from one public address.
+# max_connections = 256
+# max_connections_per_address = 32
+
+# log_level = info
+# log_format = text

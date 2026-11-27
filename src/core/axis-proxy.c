@@ -143,6 +143,49 @@ axis_ip_address_is_private(const AxisIpAddress *address)
 	return (b[0] & 0xfe) == 0xfc || (b[0] == 0xfe && (b[1] & 0xc0) == 0x80);
 }
 
+gboolean
+axis_ip_address_is_link_local6(const AxisIpAddress *address)
+{
+	g_return_val_if_fail(address != NULL, FALSE);
+
+	return address->family == 6 && address->bytes[0] == 0xfe && (address->bytes[1] & 0xc0) == 0x80;
+}
+
+gboolean
+axis_ip_address_parse_zoned(
+	const gchar   *text,
+	AxisIpAddress *address
+){
+	gchar buffer[ADDRESS_TEXT_MAX];
+	AxisIpAddress parsed;
+	const gchar *zone;
+	const gchar *start;
+	gsize len;
+
+	if (text == NULL)
+		return FALSE;
+	zone = strchr(text, '%');
+	if (zone == NULL)
+		return axis_ip_address_parse(text, address);
+
+	/* "fe80::1%eth0" and "[fe80::1%eth0]": the address is what stands before
+	 * the zone, and a zone is something, and belongs to IPv6 alone. */
+	start = text[0] == '[' ? text + 1 : text;
+	len = (gsize)(zone - start);
+	if (zone < start || len == 0 || len >= sizeof(buffer) || zone[1] == '\0' || zone[1] == ']')
+		return FALSE;
+	if ((text[0] == '[') != (text[strlen(text) - 1] == ']'))
+		return FALSE;
+	memcpy(buffer, start, len);
+	buffer[len] = '\0';
+	if (strchr(buffer, ':') == NULL || !axis_ip_address_parse(buffer, &parsed) || parsed.family != 6)
+		return FALSE;
+
+	if (address != NULL)
+		*address = parsed;
+	return TRUE;
+}
+
 gchar *
 axis_proxy_address_key(const gchar *text)
 {
@@ -406,6 +449,30 @@ gboolean
 axis_proxy_list_has_names(const AxisProxyList *self)
 {
 	return self != NULL && self->names > 0;
+}
+
+gboolean
+axis_proxy_list_has_unresolved_name(const AxisProxyList *self)
+{
+	AxisProxyList *list = (AxisProxyList *)self;
+	gboolean found = FALSE;
+	gint64 now;
+	guint i;
+
+	if (self == NULL || self->names == 0)
+		return FALSE;
+
+	now = axis_proxy_list_now(list);
+	g_mutex_lock(&list->lock);
+	for (i = 0; !found && i < self->ranges->len; i++) {
+		const Range *range = &g_array_index(self->ranges, Range, i);
+
+		found = range->name != NULL && name_state(range, now) != AXIS_PROXY_NAME_RESOLVED &&
+			name_state(range, now) != AXIS_PROXY_NAME_KEPT;
+	}
+	g_mutex_unlock(&list->lock);
+
+	return found;
 }
 
 gchar **
@@ -681,6 +748,86 @@ axis_proxy_list_contains(
 	}
 	if (self != NULL && self->names > 0)
 		g_mutex_unlock(&list->lock);
+
+	return found;
+}
+
+/* An address or range as it is written: "192.0.2.7", "10.0.0.0/8". */
+static gchar *
+range_text(const Range *range)
+{
+	g_autofree gchar *text = axis_ip_address_to_string(&range->address);
+
+	return range->prefix != family_bits(range->address.family) ? g_strdup_printf("%s/%u", text, range->prefix) :
+		g_strdup(text);
+}
+
+gboolean
+axis_proxy_lists_overlap(
+	const AxisProxyList  *self,
+	const AxisProxyList  *other,
+	gchar               **entry,
+	gchar               **other_entry
+){
+	AxisProxyList *names = (AxisProxyList *)other;
+	gboolean found = FALSE;
+	gint64 now = 0;
+	guint i;
+
+	if (entry != NULL)
+		*entry = NULL;
+	if (other_entry != NULL)
+		*other_entry = NULL;
+	if (self == NULL || other == NULL)
+		return FALSE;
+
+	if (other->names > 0) {
+		now = axis_proxy_list_now(names);
+		g_mutex_lock(&names->lock);
+	}
+	for (i = 0; !found && i < self->ranges->len; i++) {
+		const Range *mine = &g_array_index(self->ranges, Range, i);
+		guint j;
+
+		/* A name of @self stands for nothing here: see the header. */
+		if (mine->name != NULL)
+			continue;
+		for (j = 0; !found && j < other->ranges->len; j++) {
+			const Range *theirs = &g_array_index(other->ranges, Range, j);
+			AxisIpAddress a;
+			AxisIpAddress b;
+			guint k;
+
+			if (theirs->name != NULL) {
+				if (name_state(theirs, now) != AXIS_PROXY_NAME_RESOLVED &&
+				    name_state(theirs, now) != AXIS_PROXY_NAME_KEPT)
+					continue;
+				for (k = 0; !found && k < theirs->found->len; k++) {
+					a = g_array_index(theirs->found, AxisIpAddress, k);
+					if (a.family != mine->address.family)
+						continue;
+					mask_address(&a, mine->prefix);
+					found = memcmp(a.bytes, mine->address.bytes, sizeof(a.bytes)) == 0;
+				}
+			} else if (theirs->address.family == mine->address.family) {
+				/* Two ranges share an address exactly when the wider one
+				 * holds the other's first. */
+				a = mine->address;
+				b = theirs->address;
+				mask_address(&a, MIN(mine->prefix, theirs->prefix));
+				mask_address(&b, MIN(mine->prefix, theirs->prefix));
+				found = memcmp(a.bytes, b.bytes, sizeof(a.bytes)) == 0;
+			}
+			if (found) {
+				if (entry != NULL)
+					*entry = range_text(mine);
+				if (other_entry != NULL)
+					*other_entry = theirs->name != NULL ? g_strdup(theirs->name) : range_text(theirs);
+			}
+		}
+	}
+	if (other->names > 0)
+		g_mutex_unlock(&names->lock);
 
 	return found;
 }

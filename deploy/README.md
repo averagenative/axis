@@ -11,9 +11,9 @@ you run containers, copy its directory, and change the lines marked `EDIT`.
 | [Run commands](examples/run/README.md) | `docker run` / `podman run`, no Compose | commands in the README |
 | [Compose, minimal](examples/compose/README.md) | Axis and PostgreSQL (and a worker), media read-only | `compose.yaml` |
 | [Compose, full stack](examples/compose-full/README.md) | Axis, PostgreSQL, Prowlarr, SABnzbd and Deluge on one data mount, so imports are renames, not copies | `compose.yaml` |
-| [Traefik](examples/traefik/README.md) | TLS and a host name in front of Axis, Compose or Kubernetes | `compose.yaml`, `ingressroute.yaml` |
-| [Kubernetes](examples/kubernetes/README.md) | Deployment, claims, Service, Ingress, workers with optional GPU, NetworkPolicy | `kustomization.yaml` and seven manifests |
-| [Podman Quadlet](examples/quadlet/README.md) | Containers as systemd services | five unit files |
+| [Traefik](examples/traefik/README.md) | TLS and a host name in front of Axis, Compose or Kubernetes; optionally the request portal | `compose.yaml`, `ingressroute.yaml`, `compose.portal.yaml` |
+| [Kubernetes](examples/kubernetes/README.md) | Deployment, claims, Service, Ingress, workers with optional GPU, NetworkPolicy; optionally the request portal | `kustomization.yaml` and nine manifests |
+| [Podman Quadlet](examples/quadlet/README.md) | Containers as systemd services; optionally the request portal | five unit files, and two for the portal |
 | [A worker on another machine](examples/remote-worker/README.md) | Axis on a server, the conversions on another machine (an NVIDIA GPU, an Intel or AMD GPU, or the CPU only): the worker over https, the disks through NFS, sshfs or SMB | `run`, `axis-worker.container`, `compose.yaml` |
 
 Every example keeps the same rules: Axis never runs as root, its root
@@ -25,8 +25,9 @@ The rest of this page is what the examples share.
 ## The image
 
 `ghcr.io/averagenative/axis` holds `axisd` (the entry point),
-`axis-worker`, `ffmpeg` and `ffprobe` on Debian stable, for `linux/amd64`
-and `linux/arm64`.
+`axis-worker`, `axis-portal`, `ffmpeg` and `ffprobe` on Debian stable, for
+`linux/amd64` and `linux/arm64`. `axis-portal` is in images built after
+0.1.0-rc2; see [The request portal](#the-request-portal).
 
 ### Published images
 
@@ -826,6 +827,387 @@ server that stopped under the load of a conversion from starting that load
 again by itself. Downloads, imports, and scans go on. To turn the hold off,
 set `convert.wait_after_start` to off.
 
+## The request portal
+
+The request portal (`axis-portal`) is a separate program for people who are
+not administrators. They log in to it, look for a title, ask for it, and see
+what became of the request. It is optional. An example that you start as it
+is published runs no portal, and the daemon has no portal listener.
+
+**The request portal has not been reviewed for exposure to the internet.**
+The portal, the portal API and the requester role have not had their
+independent security review. Until this page says that the review has
+passed, let the portal be reached only from a network you trust, such as
+your home network or a VPN. Do not open its host name to the internet. The
+portal logs the same warning each time it starts.
+
+[Let other people ask for titles](../docs/20-let-other-people-ask-for-titles.md#set-up-the-request-portal-administrators)
+has the steps in order, from the requester account to the login page.
+
+### What runs where
+
+| Piece | Where it runs | What it holds |
+| --- | --- | --- |
+| `axisd` | The daemon's container, as before | Everything: the accounts, the requests, the library |
+| The portal API | A second listener of `axisd`, off by default | Eleven operations for a portal, and nothing else: no page, no login form, no other API |
+| `axis-portal` | A container of its own, from the same image with another entry point | Its token. No database address, no media, no volume |
+| The reverse proxy | In front of the portal | The TLS certificate |
+
+To switch the portal API on, set these three settings of the daemon and
+restart Axis:
+
+| Setting | What it is |
+| --- | --- |
+| `AXIS_PORTAL_LISTEN_PORT` | The port of the portal API. The examples use 7801. The main port never answers the portal API. |
+| `AXIS_PORTAL_LISTEN_HOST` | The address that Axis has on the network it shares with the portal, so that nothing else reaches that port. |
+| `AXIS_PORTAL_PEERS` | The portal's addresses: IP addresses and CIDR ranges, separated by commas. Host names are not accepted. |
+
+`AXIS_PORTAL_PEERS` (`portal_peers` in the `[server]` section of the
+configuration file) means two things at the same time:
+
+- The portal API answers a connection from one of these addresses, and from
+  no other. From any other address the answer is 403, before Axis looks at
+  the token. While the list is empty, the portal API answers 503 to
+  everyone. Axis says so in its log when it starts, and the **Request
+  portal** page says so too.
+- Nobody logs in to Axis itself from one of these addresses. Axis refuses
+  the login when the connection comes from a listed address, when a trusted
+  proxy names a listed address as the client, and when `X-Forwarded-For`
+  names a listed address anywhere, whoever sent the header. The answer is
+  the one for a wrong password. See
+  [If the portal is taken over](#if-the-portal-is-taken-over).
+
+Axis reads every address in `X-Forwarded-For` for this rule, not only the
+client that its trusted proxies arrive at. A sender can add addresses in
+front of the one that its proxy writes, and can remove none. So a login
+that the portal's container sends through a proxy carries the portal's
+address whatever else it carries, also through a proxy that adds to the
+header instead of replacing it. The only login that an invented address can
+stop is the sender's own.
+
+The rule reads `X-Forwarded-For` and no other header, and in it only an
+entry that is an address by itself. An entry with a port
+(`172.30.2.3:51234`, `[2001:db8::7]:443`) says nothing to the rule, and the
+`Forwarded` header (RFC 7239) is not read at all. The proxies of the
+examples write bare addresses in `X-Forwarded-For`. If your proxy writes
+ports, or sends `Forwarded` only, the rule sees the address of the
+connection and nothing else: set the proxy to write `X-Forwarded-For` with
+bare addresses.
+
+Two more refusals belong to the same rule. Both apply only while
+`AXIS_PORTAL_PEERS` is set:
+
+- A login that came from, or by way of, an IPv6 link-local address
+  (`fe80::/10`) is refused. An interface gives itself such an address, the
+  portal's container has one unless IPv6 is switched off in it, and no list
+  can name it. A link-local address is never the browser of an
+  administrator who reaches Axis through a proxy from elsewhere. If you
+  reach Axis directly over a link-local address, use another address.
+- While a host name in `AXIS_TRUSTED_PROXIES` has no address (Axis has not
+  looked it up yet, or the lookup fails), a login that arrives with
+  `X-Forwarded-For` from an address that is not a trusted proxy is refused.
+  That address can be the proxy, and Axis cannot check whom it forwards
+  for. After a start this lasts until the first lookup is done, usually
+  less than a second. A login without the header, directly to Axis, is not
+  affected. If the name never gets an address, every login through the
+  proxy is refused for as long as that lasts: write the proxy's address in
+  `AXIS_TRUSTED_PROXIES` in place of its name, and restart Axis.
+
+Write the portal's own addresses, on every network that the portal has, and
+nothing wider:
+
+- A range is as wide as you write it. One IPv6 address is one address, not
+  its /64. An IPv4-mapped IPv6 address counts as its IPv4 address. If the
+  portal has an IPv4 and an IPv6 address, list both.
+- An IPv6 link-local address cannot be listed in a useful way, because the
+  portal gets a new one with each new interface. Switch IPv6 off in the
+  portal's container instead, as the Compose and Quadlet examples do
+  (`net.ipv6.conf.all.disable_ipv6=1` and
+  `net.ipv6.conf.default.disable_ipv6=1`), and give the portal's networks no
+  IPv6 subnet. On a dual-stack Kubernetes cluster, the portal's pods need a
+  range of their own in each family, and both ranges belong in the list.
+- Never list an address that is also in `AXIS_TRUSTED_PROXIES`. A login that
+  arrives from an address in both lists is refused, whoever it is forwarded
+  for. Axis warns about the overlap in its log when it starts, if the
+  trusted proxies are written as addresses. If they are written as host
+  names, Axis cannot know at the start, and says it under **Needs
+  attention** once the names have their addresses.
+- Nothing is learned and nothing expires. The list holds until you change
+  the setting and restart Axis.
+
+The portal's own settings all begin with `AXIS_PORTAL_`:
+
+| Setting | What it is |
+| --- | --- |
+| `AXIS_PORTAL_URL` | The daemon's portal listener, such as `http://axis:7801` |
+| `AXIS_PORTAL_TOKEN_FILE` | The file that holds the portal's token |
+| `AXIS_PORTAL_TRUSTED_PROXIES` | The reverse proxy in front of the portal |
+| `AXIS_PORTAL_WEB_LISTEN_HOST`, `AXIS_PORTAL_WEB_LISTEN_PORT` | Where the portal serves its pages (`127.0.0.1` and 7802; `0.0.0.0` in a container) |
+| `AXIS_PORTAL_ALLOW_INSECURE_HTTP` | Allows plain HTTP to a daemon that is not on the same machine |
+| `AXIS_PORTAL_CA_FILE` | Certificate authorities for an `https` daemon address |
+
+The portal refuses to start with a setting it does not know, and names it.
+`/usr/share/axis/axis-portal.conf.example` in the image lists every setting.
+`AXIS_PORTAL_LISTEN_PORT` and `AXIS_PORTAL_LISTEN_HOST` are the daemon's
+settings: the portal refuses to start when it finds them in its own
+environment. `AXIS_PORTAL_PEERS` is the daemon's setting too: give it to the
+daemon only.
+
+### The networks
+
+Each example that has the portal builds the same layout:
+
+- The reverse proxy reaches the portal and, on another network, Axis. The
+  portal is the only Axis service that the proxy for the portal's host name
+  reaches.
+- The portal and the daemon share a network that holds those two alone.
+- The portal is not on PostgreSQL's network or on any download client's
+  network, and it has no media mount.
+- In the Compose and Quadlet examples, the portal's networks are internal:
+  they have no way out. Leaving a container off a network is not enough. A
+  container on an ordinary network can reach the other networks of the same
+  host by address, even when no name resolves. With Podman, a portal on
+  ordinary networks can open PostgreSQL's port that way. Do not remove
+  `internal` from the portal's networks.
+- The daemon's main port stays where it was. It is not published through the
+  portal's host name.
+
+The portal sends its token and every requester's password to the daemon over
+plain HTTP on that shared network. That is why the network holds only those
+two. If the portal and the daemon are on different machines, give
+`AXIS_PORTAL_URL` an `https` address. The portal verifies the certificate,
+and refuses plain HTTP to another machine unless you set
+`AXIS_PORTAL_ALLOW_INSECURE_HTTP`.
+
+What the portal's container can reach differs by example:
+
+| Example | The portal reaches | How |
+| --- | --- | --- |
+| [Traefik, Compose](examples/traefik/README.md#the-request-portal) | The daemon's portal port, and Traefik's ports, where every request from the portal's address gets 403 | The portal's two networks are internal, and the portal has a fixed address on each. The portal API listens on the daemon's address on the shared network. The main port listens on the daemon's address on Traefik's network, so nothing answers it on a network that the portal is on. The portal shares a network with Traefik, and Traefik routes to Axis: a router refuses the portal's address whatever it asks for, and `AXIS_PORTAL_PEERS` holds the portal's address on both networks, so Axis refuses a login that Traefik forwards for the portal. |
+| [Kubernetes](examples/kubernetes/README.md#the-request-portal) | The daemon's portal port and the cluster's DNS only, if your network plugin enforces NetworkPolicy | A NetworkPolicy allows that port and nothing else. `AXIS_PORTAL_PEERS` is the range that the portal's pods have addresses in, which your network plugin must give them. Without enforced policies, the portal's pod reaches every pod: Axis still refuses a login from the portal's range, directly or through the ingress controller. |
+| [Podman Quadlet](examples/quadlet/README.md#the-request-portal) | The daemon's portal port and its main port | The shared network is internal, so the portal reaches the daemon and nothing else. The portal API listens on the daemon's address on that network. The main port listens on every address, so the portal's container can open the login page, the static files and the probes of Axis. `AXIS_PORTAL_PEERS` holds the portal's address, so a login from it is refused. This example cannot close the main port to the portal: see its README. |
+
+The minimal and full-stack Compose examples and the run commands have no
+reverse proxy with TLS, so they have no portal. Use the Traefik example.
+
+In every layout, check one more path: **a reverse proxy that reaches both the
+portal and Axis.** A proxy routes by host name, not by where a request comes
+from. If the portal's container can open a connection to the proxy that
+serves Axis, it can ask that proxy for the host name of Axis. Close that path
+at the proxy, as the Traefik example does, and list in `AXIS_PORTAL_PEERS`
+the address that the proxy sees the portal at. Or use a second proxy for the
+portal that has no route to Axis.
+
+### The token
+
+1. In Axis, open **System**, then **Request portal**, and select **Make a
+   token**. Axis shows the token once.
+2. Put the token in a file that only the portal's user can read, and give
+   the file to the portal as a container secret. Each example says where.
+   Never put the token in a command line, a compose file or an address.
+
+To replace a token, make a second one, restart the portal with it, and then
+select **Revoke this token** on the first. Up to four tokens can be active.
+A revoked token is refused from the portal's next request. When the portal
+starts with a new token, everyone who is logged in to the portal logs in
+again.
+
+### The proxy in front of the portal
+
+Publish the portal only through a reverse proxy that terminates TLS. The
+portal serves a login only when it knows that the request came over HTTPS.
+The proxy must do what the portal cannot:
+
+- Redirect plain HTTP to HTTPS.
+- Send HSTS (`Strict-Transport-Security`). The portal sends it too, but only
+  on answers that it gives itself.
+- Limit the size of a request before it is read. The portal takes at most
+  64 KiB.
+- Limit the time for a request's head and body. The portal cannot time a
+  slow sender.
+- Limit the connections and the requests of one address.
+- Send `X-Forwarded-For`, `X-Forwarded-Proto` and `X-Forwarded-Host`, and
+  discard the ones a client sent.
+
+Give the portal a host name of its own. Do not publish it as a path under
+the host name of Axis, and do not let the proxy decide by the path.
+
+List the proxy in `AXIS_PORTAL_TRUSTED_PROXIES`. The rules are those of
+`AXIS_TRUSTED_PROXIES` ([Behind a proxy](#behind-a-proxy)): addresses,
+ranges and host names, and never a whole network. If the proxy is not
+listed:
+
+- Nobody can log in. The portal does not know that a request came over
+  HTTPS, so it serves a page that says "This portal answers over HTTPS only"
+  and no login form.
+- Every client has the proxy's address, so all of them share one login
+  throttle.
+- The portal's log says once that forwarded headers came from an address
+  that is not trusted, and names the address. If that address is your proxy,
+  list it.
+
+### Hardening
+
+Run the portal as each example does:
+
+- A read-only root filesystem, no volume and no writable directory. The
+  portal writes no file.
+- No Linux capability, no new privileges, a user that is not root (any user
+  id works), and a limit on processes and memory.
+- One secret, the token, as a file.
+
+At start, the portal also sets no-new-privileges for itself and makes itself
+not dumpable, so it leaves no core file and another process of the same user
+cannot read its memory.
+
+The image is the same one that runs `axisd`. The portal's container
+therefore also holds `ffmpeg`, Python, Node.js and `yt-dlp`, which the
+portal never runs. There is no smaller image for the portal.
+
+### If the portal is taken over
+
+Someone who controls the portal's container holds its token and sees every
+password and session that passes through it from then on.
+
+That person can:
+
+- Act as each requester who logs in or uses the portal while it is held,
+  within that requester's limits.
+- Try passwords of requester accounts, at the daemon's pace: five free
+  failures for a username, and 30 failures an hour over all names.
+- Ask for titles for those requesters, up to each person's quota and up to
+  the daily limit for the portal (30 by default). Each request waits for an
+  administrator unless that person is approved automatically.
+- Search for titles, up to 30 searches a minute.
+- Show requesters false pages, and stop the portal.
+
+That person cannot:
+
+- Read the database, the media, the configuration or any key of an indexer,
+  a download client or a provider. None of them is in the container.
+- Act as an administrator or an ordinary user, or open any page of Axis
+  through the portal API.
+- Approve a request, choose a folder or a quality profile, or change or
+  delete a file, a title, a download, an account or a setting.
+- Act for a requester who does not use the portal while it is held. The
+  token by itself acts as no one.
+
+Two rules follow for you:
+
+- **Never type an administrator's password into the portal.** The portal's
+  login accepts requesters only.
+- **Nobody logs in to Axis from the portal's addresses.** Axis refuses a
+  login at its own login page, and the first setup, when the connection
+  comes from an address in `AXIS_PORTAL_PEERS`, or `X-Forwarded-For` names
+  such an address anywhere. It answers as it answers a wrong password,
+  checks no password, and counts no failure. A session that exists is not
+  affected. So an administrator's password that reached a portal in the
+  wrong hands cannot be used from where the portal is. The rule does not
+  depend on what the portal does, and a restart of Axis does not end it.
+
+The answer is that of a wrong password, but the portal's holder can still
+tell that the address is refused: a refused login is answered sooner than a
+checked one, because no password is checked, and a refused setup never turns
+into "Too many failed attempts" as wrong setup tokens do. Neither says
+anything about a password or a token.
+
+#### If Axis refuses your own login after you set the portal up
+
+If your browser reaches Axis from an address in `AXIS_PORTAL_PEERS`, Axis
+refuses your login too, with the message for a wrong password. This happens
+when the list is wider than the portal, or when the portal and your browser
+reach Axis from the same address, for example through one gateway. The same
+answer has two more causes, both described under
+[What runs where](#what-runs-where): your login reached Axis from or by way
+of an IPv6 link-local address, or it arrived through a reverse proxy whose
+host name in `AXIS_TRUSTED_PROXIES` has no address at the moment.
+
+To find out, look at the log of Axis for a line that begins with
+`audit: login refused:`. The line says which of these it was, and names the
+address and the setting. Axis writes one such line, and then one a minute at
+most. The **Request portal** page shows when Axis last refused a login for
+one of these reasons, if you still have a session.
+
+To get back in, do one of these:
+
+- Reach Axis from an address that is not in the list, and not over a
+  link-local address.
+- If the log names the proxy's host name, wait a few seconds and try again.
+  If the name still has no address (the service was renamed, the runtime's
+  name server fails, a headless Service has no endpoints), write the
+  proxy's address in `AXIS_TRUSTED_PROXIES` in place of its name, and
+  restart Axis. That works in every example. Where Axis publishes a port of
+  its own, you can also log in there, without the proxy. In the Traefik
+  example Axis publishes no port, so there is no such way.
+- Correct `AXIS_PORTAL_PEERS` (or `portal_peers` in the configuration file)
+  so that it holds the portal's own addresses only, and restart Axis. The
+  setting is in the configuration, so you never need to change the database.
+
+If you think the portal was taken over: revoke its token on the **Request
+portal** page, set new passwords for the requesters, and look at the
+**Requests** page for requests that nobody made.
+
+Under **Needs attention**, Axis shows a notice when the portal reached its
+limit of failed logins in an hour or its limit of requests in a day. The
+**Request portal** page shows where both limits stand.
+
+### What was run, and what was not
+
+- `make check-container` starts the portal from the image, read-only,
+  without a capability, a volume or a tmpfs, as a user id that the image
+  does not know, and logs in and asks for a title through it.
+- `make check-examples` starts the Traefik example with the portal, logs in
+  through Traefik over HTTPS, asks for a title, and tries the database and
+  the daemon's main port from the portal's container, by name and by
+  address. From the portal's container it also posts the administrator's
+  correct password to Traefik with the host name of Axis: Traefik answers
+  403 and no session is made. It tries the same by way of the host's
+  address on each of the portal's networks, at four starts of Traefik: no
+  connection is made. A login that Traefik does forward, for an
+  address that the check adds to `AXIS_PORTAL_PEERS`, is refused by Axis.
+  The portal's container has no IPv6 address but loopback's, and cannot
+  make an IPv6 connection to Traefik. With the portal's container stopped,
+  Traefik still refuses the portal's address.
+- Before IPv6 was switched off in the portal's container, the same check
+  showed the reason: over an IPv6 link-local address, from the portal's
+  container, the administrator's password opened a session through Traefik,
+  and Axis recorded Traefik's own address as the client. With IPv6 left on
+  and the other two barriers in place, Traefik answered that connection 403.
+  That the daemon refuses such a login is shown by its tests only.
+- It starts the Quadlet example with the portal too, without a reverse
+  proxy: it sends one request as the proxy would, and tries the database
+  from the portal's container. From the portal's container it posts the
+  administrator's correct password to the daemon's main port, which is open
+  there: Axis answers as for a wrong password, makes no session, and writes
+  the reason to its log. The portal's container has no IPv6 address there
+  either.
+- These checks ran with rootless Podman. With rootless Podman, a request
+  through a published port arrives in the container from one of the
+  container's own addresses, and to that same address. For a container on
+  two networks, Podman picks the address each time the container starts
+  (measured with Podman 5.8: either address, in two and three starts of
+  five), and no setting in a Compose file or a Quadlet unit chooses it. Two
+  things follow. The Quadlet example cannot bind the daemon's main port to
+  one address, because connections through the published port are then
+  reset when Podman picks the other. And in the Traefik example, the portal
+  answers 503 to every visit through the published port when Podman picks
+  Traefik's address on the portal's network, until the Traefik container
+  starts again: the portal is then told that the visitor is its own proxy.
+  So do not run the Traefik example's portal for other people with rootless
+  Podman and published ports. A system-wide Podman was not tried. Docker 29
+  was tried once, by hand, for the portal's ways to Traefik only (the
+  Traefik example's README, "What the address rule covers").
+- The Kubernetes manifests of the portal are only rendered
+  (`kubectl kustomize`). They have not been applied to a cluster, their
+  NetworkPolicy has not been exercised, and the annotations that give the
+  portal's pods a range of their own have not been tried with any network
+  plugin.
+- Docker has not been run for any example. A certificate from a real
+  certificate authority has not been used: the checks use Traefik's own
+  default certificate.
+- Nobody who did not write the portal has tried to break it. That review is
+  what this page waits for.
+
 ## Metrics
 
 Off unless `AXIS_METRICS_TOKEN_FILE` (or `AXIS_METRICS_TOKEN`) names a token
@@ -946,7 +1328,9 @@ use `:z` on whole disks (it relabels every file on them); add
   secrets from files, a restart on the same volumes, the worker, another
   user id, and an arbitrary user id with group 0 started before its
   database that becomes ready by itself and creates the first
-  administrator from a secret file. It names everything it creates
+  administrator from a secret file, and the request portal beside that
+  daemon, hardened, with a requester who logs in and asks through it. It
+  names everything it creates
   `axis-check-*` and removes it at the end. It does not run a Compose front
   end, so a mistake Compose rejects but `yq` reads would pass it: start an
   example with your own front end once before you rely on it.
@@ -956,6 +1340,8 @@ use `:z` on whole disks (it relabels every file on them); add
   each one it adds the first disk and a library folder through the web
   interface, as the examples mount the disk, and scans it. In the Compose
   example it then takes `:ro` off and checks that the marker is written.
+  In the Traefik and Quadlet examples it then adds the request portal as
+  their READMEs say ([The request portal](#the-request-portal)).
 - It pulls public images, names everything `axis-xtest-*`, removes it at the
   end, and skips with a stated reason any part whose prerequisite is missing.
   It does not run the worker of

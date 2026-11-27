@@ -400,6 +400,60 @@ test_portal_listener(void)
 	g_assert_cmpstr(axis_config_get_portal_host(refused), ==, "127.0.0.1");
 }
 
+/*
+ * The portal's addresses (server.portal_peers, AXIS_PORTAL_PEERS): none by
+ * default; addresses and ranges in canonical form (an IPv4-mapped IPv6
+ * address as its IPv4 address, a range with its host bits cleared and never
+ * wider than written), from the file or the environment; a host name, a
+ * range of every address and anything else that is no address are refused
+ * with the setting named.
+ */
+static void
+test_portal_peers(void)
+{
+	static const gchar *const bad[] = { "portal", "172.30.1.3, axis-portal", "0.0.0.0/0", "10.0.0.300", "10.0.0.1,,",
+		"2001:db8::/129", NULL };
+	g_autoptr(AxisConfig) config = axis_config_new();
+	g_autoptr(GError) error = NULL;
+	g_auto(GStrv) env = make_env("AXIS_PORTAL_PEERS", "198.51.100.8/29, 2001:db8:1:2::7", NULL);
+	g_autofree gchar *text = NULL;
+	guint i;
+
+	g_assert_cmpstr(axis_config_get_portal_peers(config), ==, "");
+	text = axis_config_describe(config);
+	g_assert_nonnull(strstr(text, "portal_peers=(none)"));
+	g_clear_pointer(&text, g_free);
+	g_assert_true(axis_config_load_data(config, "[server]\nportal_peers = 172.30.1.3 ,::ffff:172.30.2.3, 192.0.2.77/28\n",
+		&error));
+	g_assert_no_error(error);
+	g_assert_cmpstr(axis_config_get_portal_peers(config), ==, "172.30.1.3, 172.30.2.3, 192.0.2.64/28");
+	g_assert_true(axis_config_apply_environment(config, env, &error));
+	g_assert_no_error(error);
+	/* (One IPv6 address is one address: not its /64.) */
+	g_assert_cmpstr(axis_config_get_portal_peers(config), ==, "198.51.100.8/29, 2001:db8:1:2::7");
+	text = axis_config_describe(config);
+	g_assert_nonnull(strstr(text, "portal_peers=198.51.100.8/29, 2001:db8:1:2::7"));
+
+	for (i = 0; bad[i] != NULL; i++) {
+		g_autoptr(AxisConfig) refused = axis_config_new();
+		g_autofree gchar *data = g_strdup_printf("[server]\nportal_peers = %s\n", bad[i]);
+
+		if (axis_config_load_data(refused, data, &error))
+			g_error("portal_peers '%s' was accepted", bad[i]);
+		assert_config_error(error, "server.portal_peers", NULL);
+		g_clear_error(&error);
+		g_assert_cmpstr(axis_config_get_portal_peers(refused), ==, "");
+	}
+	{
+		g_autoptr(AxisConfig) refused = axis_config_new();
+		g_auto(GStrv) names = make_env("AXIS_PORTAL_PEERS", "axis-portal", NULL);
+
+		g_assert_false(axis_config_apply_environment(refused, names, &error));
+		assert_config_error(error, "AXIS_PORTAL_PEERS", "host name");
+		g_clear_error(&error);
+	}
+}
+
 #define FILE_SECRET "s3cr3t-from-a-file"
 
 /* Writes @contents to a new temporary file and returns its path. */
@@ -1199,6 +1253,7 @@ main(int argc, char **argv)
 	g_test_add_func("/config/env/invalid-value", test_env_invalid_value);
 	g_test_add_func("/config/env/empty-ignored", test_env_empty_ignored);
 	g_test_add_func("/config/server/portal-listener", test_portal_listener);
+	g_test_add_func("/config/server/portal-peers", test_portal_peers);
 	g_test_add_func("/config/env/url-file/read", test_url_file_read);
 	g_test_add_func("/config/env/url-file/wins-over-config-file", test_url_file_wins_over_config_file);
 	g_test_add_func("/config/env/url-file/both-set", test_url_file_and_url_both_set);

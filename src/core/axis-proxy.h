@@ -83,6 +83,29 @@ axis_ip_address_is_loopback(const AxisIpAddress *address);
 gboolean
 axis_ip_address_is_private(const AxisIpAddress *address);
 
+/* Whether @address is an IPv6 link-local address (fe80::/10): one an
+ * interface gives itself, which says which link and never which machine. */
+gboolean
+axis_ip_address_is_link_local6(const AxisIpAddress *address);
+
+/**
+ * axis_ip_address_parse_zoned:
+ * @text: (nullable): an address, perhaps with a zone ("fe80::1%eth0")
+ * @address: (out) (optional): the address; untouched on failure
+ *
+ * As axis_ip_address_parse(), and an IPv6 address may carry a zone, which is
+ * dropped: a proxy that was reached over a link-local address writes its
+ * client so.  For the rules that ask what kind of address something is, never
+ * for trusting one.
+ *
+ * Returns: %TRUE if @text is such an address
+ */
+gboolean
+axis_ip_address_parse_zoned(
+	const gchar   *text,
+	AxisIpAddress *address
+);
+
 /**
  * axis_proxy_address_key:
  * @text: (nullable): a client address as text
@@ -181,6 +204,28 @@ axis_proxy_list_contains(
 	const AxisIpAddress *address
 );
 
+/**
+ * axis_proxy_lists_overlap:
+ * @self: (nullable): a list of addresses and ranges (a host name in it
+ *   stands for nothing here)
+ * @other: (nullable): another list; a host name in it stands for the
+ *   addresses its last lookup found
+ * @entry: (out) (transfer full) (optional): the entry of @self that shares
+ *   an address with @other, as written; %NULL when none does
+ * @other_entry: (out) (transfer full) (optional): the entry of @other
+ *
+ * Whether any address is in both lists.  Safe from any thread.
+ *
+ * Returns: %TRUE if one is (the first pair found is given)
+ */
+gboolean
+axis_proxy_lists_overlap(
+	const AxisProxyList  *self,
+	const AxisProxyList  *other,
+	gchar               **entry,
+	gchar               **other_entry
+);
+
 /*
  * Host names.  The list only keeps what lookups found: it never looks
  * anything up itself (axis-proxy-resolver.h does that), so it stays pure
@@ -228,6 +273,11 @@ axis_proxy_list_now(AxisProxyList *self);
 /** Returns: whether any entry is a host name */
 gboolean
 axis_proxy_list_has_names(const AxisProxyList *self);
+
+/** Returns: whether a name of the list stands for no address now: not looked
+ *   up yet, or failing past its grace.  Any thread. */
+gboolean
+axis_proxy_list_has_unresolved_name(const AxisProxyList *self);
 
 /** Returns: (transfer full): the distinct names, lower case, NULL-terminated */
 gchar **

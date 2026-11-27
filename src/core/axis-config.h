@@ -64,7 +64,7 @@
  *
  * Environment overrides, applied after the file and validated the same
  * way: AXIS_LISTEN_HOST, AXIS_LISTEN_PORT, AXIS_PORTAL_LISTEN_HOST,
- * AXIS_PORTAL_LISTEN_PORT, AXIS_TRUSTED_PROXIES,
+ * AXIS_PORTAL_LISTEN_PORT, AXIS_PORTAL_PEERS, AXIS_TRUSTED_PROXIES,
  * AXIS_SECURE_COOKIES, AXIS_DATABASE_URL, AXIS_DATABASE_POOL_SIZE,
  * AXIS_DATABASE_WAIT, AXIS_LOG_LEVEL, AXIS_LOG_FORMAT, AXIS_JOBS_CONCURRENCY,
  * AXIS_JOBS_GRACE_PERIOD, AXIS_WORKER_LEASE, AXIS_DATA_DIR,
@@ -228,6 +228,20 @@ axis_config_get_portal_port(AxisConfig *self);
  * the daemon alone; without it, the main listener's (server.host). */
 const gchar *
 axis_config_get_portal_host(AxisConfig *self);
+
+/**
+ * axis_config_get_portal_peers:
+ *
+ * server.portal_peers (AXIS_PORTAL_PEERS): the request portal's addresses, a
+ * comma-separated list of IP addresses and CIDR ranges (no host name), empty
+ * by default.  It means two things at once (web/axis-web-auth-portal.h): the
+ * portal listener answers a connection from one of them and from no other
+ * address, and no login to Axis itself is taken from one of them.
+ *
+ * Returns: (transfer none): the list in canonical form; "" when it is empty
+ */
+const gchar *
+axis_config_get_portal_peers(AxisConfig *self);
 
 /**
  * axis_config_get_trusted_proxies:

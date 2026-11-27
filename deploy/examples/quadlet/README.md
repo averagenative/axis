@@ -63,6 +63,140 @@ curl -s http://127.0.0.1:7800/readyz        # {"status":"ready"}
 `/usr/libexec/podman/quadlet -dryrun -user` prints the units Quadlet makes
 from the files, and says which line it does not understand.
 
+## The request portal
+
+`axis-portal.network` and `axis-portal.container` add the request portal
+(`axis-portal`): the pages that people who are not administrators use to ask
+for a title. They are optional and not among the five files above. Without
+them no portal runs, and the daemon has no portal listener.
+
+**The request portal has not been reviewed for exposure to the internet.**
+Until [the deployment guide](../../README.md#the-request-portal) says that
+the review has passed, let the portal be reached only from a network you
+trust. Do not forward a port from the internet to it.
+
+The portal needs an image that contains `axis-portal`: a release after
+0.1.0-rc2, or `localhost/axis:latest` from `make container`.
+
+The network `axis-portal` holds the daemon and the portal, and nobody else.
+It is an internal network: it has no way out, so the portal's container
+reaches the daemon and nothing else. It cannot reach PostgreSQL on the
+network `axis`, by name or by address, and it cannot reach the internet. The
+portal's token and the requesters' passwords cross `axis-portal` over plain
+HTTP, which is why it holds only those two.
+
+The portal API listens on the daemon's address on `axis-portal` alone, and
+answers the portal's address alone: `AXIS_PORTAL_PEERS` in `axis.container`
+is `172.31.78.3`, the fixed address in `axis-portal.container`.
+
+The daemon's main port listens on every address of the container, so the
+portal's container can also open the login page, the static files and the
+probes of Axis. This example cannot close that port to the portal. With
+rootless Podman, a request through the published port `127.0.0.1:7800`
+arrives at one of the container's own addresses, and with the portal the
+daemon has two. When the main port was bound to one of them, the published
+port stopped answering. Two things answer the open port:
+
+- Nobody logs in to Axis from the portal's address. Axis refuses the login
+  as it refuses a wrong password, whatever the password is. The rule does
+  not expire, and a restart does not end it.
+- A requester cannot log in to Axis at all.
+
+The first of the two names the portal by its IPv4 address, so the portal's
+container must have no other address. `axis-portal.container` switches IPv6
+off in the container (`Sysctl=net.ipv6.conf.all.disable_ipv6=1` and
+`default`): without those lines, each of its interfaces gives itself an
+IPv6 link-local address (`fe80::...`). The container cannot switch IPv6 on
+again, because that needs a capability it does not have. Do not remove the
+two lines, and do not give the network `axis-portal` an IPv6 subnet. If the
+container had such an address after all, Axis would still take no login
+that came from it: while `AXIS_PORTAL_PEERS` is set, Axis refuses a login
+from an IPv6 link-local address.
+
+See [If the portal is taken over](../../README.md#if-the-portal-is-taken-over).
+
+This example has no reverse proxy. The portal publishes its port on
+`127.0.0.1` only, for a proxy that you run on this machine. That proxy must
+terminate TLS and do what
+[the deployment guide](../../README.md#the-proxy-in-front-of-the-portal)
+lists. The portal serves no login without it.
+
+1. In `axis.container`, uncomment the four lines under "The request
+   portal". Install the network and start the daemon again:
+
+   ```sh
+   cp axis-portal.network axis.container ~/.config/containers/systemd/
+   systemctl --user daemon-reload
+   systemctl --user restart axis.service
+   ```
+
+2. In Axis, open **System**, then **Request portal**. The page says "On: the
+   portal API is answered on port 7801", and lists the portal's address,
+   `172.31.78.3`. Select **Make a token**, and copy the token that Axis
+   shows once.
+3. Make the Podman secret. The command reads the token from your keyboard,
+   so that it is in no command line and not in your shell's history: paste
+   the token, press Enter, and then press Ctrl-D.
+
+   ```sh
+   podman secret create axis_portal_token -
+   ```
+
+4. Create a requester account: open **System**, then **Users**, and set
+   **Role** to **Requester (the request portal only)**.
+5. Install the portal and start it:
+
+   ```sh
+   cp axis-portal.container ~/.config/containers/systemd/
+   systemctl --user daemon-reload
+   systemctl --user start axis-portal.service
+   ```
+
+6. Point your reverse proxy at `http://127.0.0.1:7802`, with a host name of
+   its own for the portal. Open `https://requests.example.com/login`, with
+   your host name, and log in as the requester.
+
+Check that it worked:
+
+```sh
+systemctl --user status axis-portal.service
+podman healthcheck run axis-portal && echo healthy
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:7802/login     # 503, or 403
+```
+
+The `503` is right: without your proxy the portal serves no login. A plain
+request through the published port says nothing of who the client is, and
+the portal refuses it. From an address that is not the listed proxy's, the
+answer is `403` and "This portal answers over HTTPS only". Through the
+proxy, the login page answers `200`.
+
+If the login page says "This portal answers over HTTPS only" through your
+proxy too, the portal does not believe the proxy. Run
+`journalctl --user -u axis-portal.service`: one line names the address that
+forwarded headers came from. Put that address in
+`AXIS_PORTAL_TRUSTED_PROXIES` in `axis-portal.container`. The example names
+the portal's own address on its network, `172.31.78.3`, which is where a
+request through the published port of rootless Podman arrives from. A
+system-wide install can see another address.
+
+Every program on this machine can reach `127.0.0.1:7802` and can claim to be
+the proxy. Run the portal this way only on a machine whose users you trust.
+
+If nobody can log in at the portal, read the log of Axis
+(`journalctl --user -u axis.service`). A line "a connection from ... was
+refused before its token was looked at" names the address that the portal
+calls from: put that address in `AXIS_PORTAL_PEERS` in `axis.container`.
+
+If Axis refuses your own login after you set the portal up, see
+[the deployment guide](../../README.md#if-axis-refuses-your-own-login-after-you-set-the-portal-up).
+
+To replace the token: make a second token in Axis, run `podman secret rm
+axis_portal_token`, make the secret again (step 3), run `systemctl --user
+restart axis-portal.service`, and then revoke the first token.
+
+Not run for this example: a reverse proxy in front of the portal, and a
+system-wide (rootful) install.
+
 ## Upgrading
 
 Change the tag on the `Image=` line when you move to another version, run

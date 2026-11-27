@@ -1,0 +1,79 @@
+# axis-portal.container - the request portal, as a systemd service
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# NOT REVIEWED FOR THE INTERNET.  The request portal (axis-portal), the portal
+# API and the requester role have not had their independent security review.
+# Until the documents of Axis say that the review has passed, let the portal
+# be reached only from a network you trust.
+#
+# Optional: not among the five files of the example, and nothing runs it
+# unless you install it (README.md, "The request portal").  Quadlet turns it
+# into axis-portal.service.  The portal has no database address, no media, no
+# volume and no secret but its token; it is read-only, has no capability and
+# writes nothing.  Lines to change are marked EDIT.
+[Unit]
+Description=Axis request portal
+Wants=axis.service
+After=axis.service
+
+[Container]
+ContainerName=axis-portal
+# EDIT: the same image as in axis.container.
+Image=ghcr.io/averagenative/axis:0.1.0-rc2
+Entrypoint=/usr/bin/axis-portal
+# The network it shares with the daemon, and no other, at a fixed address:
+# the one the daemon is told is the portal's (AXIS_PORTAL_PEERS in
+# axis.container), and see AXIS_PORTAL_TRUSTED_PROXIES below.
+Network=axis-portal.network:ip=172.31.78.3
+# No IPv6 in this container.  The daemon knows the portal by that IPv4
+# address; an interface also gives itself an IPv6 link-local address
+# (fe80::...), which is not it.  With these two lines the container has no
+# such address, and it cannot take them back: that needs a capability it does
+# not have.  Do not remove them.
+Sysctl=net.ipv6.conf.all.disable_ipv6=1
+Sysctl=net.ipv6.conf.default.disable_ipv6=1
+# For the reverse proxy on this machine, and only for it: never 0.0.0.0.  The
+# portal must be reached through a proxy that terminates TLS.
+PublishPort=127.0.0.1:7802:7802
+# The token, readable by the portal's user only.
+# EDIT: uid as User= below.
+Secret=axis_portal_token,type=mount,target=/run/secrets/axis_portal_token,uid=1000,mode=0400
+# The daemon's portal listener, by the daemon's name on the shared network.
+# Plain http: see axis-portal.network.
+Environment=AXIS_PORTAL_URL=http://axis:7801
+Environment=AXIS_PORTAL_ALLOW_INSECURE_HTTP=true
+Environment=AXIS_PORTAL_TOKEN_FILE=/run/secrets/axis_portal_token
+Environment=AXIS_PORTAL_WEB_LISTEN_HOST=0.0.0.0
+# The reverse proxy on this machine, as the portal sees it: with rootless
+# Podman, a request through the published port arrives from the container's
+# own address on its network.  The portal serves a login only to a request
+# that this address reports as https, and takes the client's address from it.
+# Check it after the first visit: the portal's log names the address
+# forwarded headers came from when it is not this one (a system-wide install
+# may see another).
+Environment=AXIS_PORTAL_TRUSTED_PROXIES=172.31.78.3
+Environment=AXIS_PORTAL_LOG_LEVEL=info
+# EDIT: any numeric ids; the portal reads no file of yours.
+User=1000
+Group=1000
+ReadOnly=true
+# No volume and nothing writable: not even the tmpfs Podman gives a read-only
+# container.
+ReadOnlyTmpfs=false
+DropCapability=all
+NoNewPrivileges=true
+PodmanArgs=--pids-limit=64 --memory=256m
+HealthCmd=/usr/bin/axis-portal --healthcheck
+HealthInterval=15s
+HealthTimeout=5s
+HealthRetries=3
+HealthStartPeriod=20s
+Notify=healthy
+StopTimeout=15
+
+[Service]
+Restart=always
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target

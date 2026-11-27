@@ -23,6 +23,8 @@
 #include <glib/gstdio.h>
 #include <gio/gio.h>
 #include <libsoup/soup.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <signal.h>
 #include <string.h>
 #include <sys/prctl.h>
@@ -99,11 +101,14 @@ reply_clear(Reply *reply)
 	g_clear_pointer(&reply->cookies, g_hash_table_unref);
 }
 
-/* One request, redirects not followed.  @from: the client the test's
- * "proxy" forwards for (%NULL: no forwarding header at all); @bearer and
- * @json: a call of the portal API itself.  A status of 0: not reached. */
+/* One request, redirects not followed.  @local: the address of this machine
+ * the connection is made from (%NULL: 127.0.0.1, where the portal of these
+ * tests is too); @from: the client the test's "proxy" forwards for (%NULL:
+ * no forwarding header at all); @bearer and @json: a call of the portal API
+ * itself.  A status of 0: not reached. */
 static Reply
-send_request(
+send_request_from(
+	const gchar *local,
 	guint16      port,
 	const gchar *method,
 	const gchar *path,
@@ -113,7 +118,10 @@ send_request(
 	const gchar *bearer,
 	const gchar *json
 ){
-	g_autoptr(SoupSession) session = soup_session_new_with_options("timeout", 60, NULL);
+	g_autoptr(GSocketAddress) source = local != NULL ? g_inet_socket_address_new_from_string(local, 0) : NULL;
+	g_autoptr(SoupSession) session = source != NULL ?
+		soup_session_new_with_options("timeout", 60, "local-address", source, NULL) :
+		soup_session_new_with_options("timeout", 60, NULL);
 	g_autofree gchar *url = g_strdup_printf("http://127.0.0.1:%u%s", (guint)port, path);
 	g_autoptr(SoupMessage) message = soup_message_new(method, url);
 	g_autoptr(GBytes) bytes = NULL;
@@ -165,6 +173,20 @@ send_request(
 	reply.body = g_strndup(data != NULL ? data : "", size);
 	reply.location = g_strdup(soup_message_headers_get_one(soup_message_get_response_headers(message), "Location"));
 	return reply;
+}
+
+static Reply
+send_request(
+	guint16      port,
+	const gchar *method,
+	const gchar *path,
+	const gchar *cookie,
+	const gchar *form,
+	const gchar *from,
+	const gchar *bearer,
+	const gchar *json
+){
+	return send_request_from(NULL, port, method, path, cookie, form, from, bearer, json);
 }
 
 /* The response header @name of GET @path on @port (transfer full). */
@@ -310,7 +332,7 @@ static const gchar *const clean[] = {
 	"AXIS_WORKER_LEASE", "AXIS_DATA_DIR", "AXIS_ADMIN_USERNAME", "AXIS_ADMIN_PASSWORD",
 	"AXIS_ADMIN_PASSWORD_FILE", "AXIS_METRICS_TOKEN", "AXIS_METRICS_TOKEN_FILE", "AXIS_HEAD_TIMEOUT",
 	"AXIS_BODY_TIMEOUT", "AXIS_IDLE_TIMEOUT", "AXIS_MAX_CONNECTIONS", "AXIS_MAX_CONNECTIONS_PER_ADDRESS",
-	"AXIS_PORTAL_LISTEN_PORT", "AXIS_PORTAL_LISTEN_HOST", NULL
+	"AXIS_PORTAL_LISTEN_PORT", "AXIS_PORTAL_LISTEN_HOST", "AXIS_PORTAL_PEERS", NULL
 };
 
 static gchar *
@@ -339,6 +361,11 @@ start_daemon(Fixture *fx)
 	g_subprocess_launcher_setenv(launcher, "AXIS_DATA_DIR", data_dir, TRUE);
 	g_subprocess_launcher_setenv(launcher, "AXIS_LISTEN_PORT", port, TRUE);
 	g_subprocess_launcher_setenv(launcher, "AXIS_PORTAL_LISTEN_PORT", api_port, TRUE);
+	/* The portal of these tests calls from 127.0.0.1: that is the portal's
+	 * address, the only one the portal API answers and one nobody logs in to
+	 * Axis from.  The administrator of these tests logs in from 127.0.0.2,
+	 * directly (admin_change()). */
+	g_subprocess_launcher_setenv(launcher, "AXIS_PORTAL_PEERS", "127.0.0.1", TRUE);
 	g_subprocess_launcher_setenv(launcher, "AXIS_DATABASE_URL", axis_test_db_get_url(fx->db), TRUE);
 	g_subprocess_launcher_set_child_setup(launcher, child_setup, NULL, NULL);
 	fx->daemon = g_subprocess_launcher_spawn(launcher, &error, AXISD_PATH, NULL);
@@ -667,6 +694,50 @@ csrf_of(
 	return token;
 }
 
+/* The address the administrator of these tests reaches the daemon from,
+ * directly: one of this machine's that is not the portal's. */
+#define ADMIN_DESK "127.0.0.2"
+
+/* root's right password at the engine's own login page, from the address
+ * @local of this machine (%NULL: 127.0.0.1, the portal's): the status, 303
+ * when it opened a session. */
+static guint
+engine_login_status(
+	Fixture     *fx,
+	const gchar *local
+){
+	g_autoptr(GRegex) field = g_regex_new("name=\"_csrf\"[^>]*value=\"([^\"]+)\"|value=\"([^\"]+)\"[^>]*name=\"_csrf\"", 0,
+		0, NULL);
+	g_autoptr(GMatchInfo) match = NULL;
+	g_autofree gchar *token = NULL;
+	g_autofree gchar *escaped = NULL;
+	g_autofree gchar *cookie = NULL;
+	g_autofree gchar *form = NULL;
+	const gchar *name = "axis_presession";
+	const gchar *made = "axis_session";
+	Reply reply = send_request_from(local, fx->daemon_port, "GET", "/login", NULL, NULL, NULL, NULL, NULL);
+	guint status;
+
+	assert_status(&reply, 200);
+	g_assert_true(g_regex_match(field, reply.body, 0, &match));
+	token = g_match_info_fetch(match, 1);
+	if (token == NULL || token[0] == '\0') {
+		g_free(token);
+		token = g_match_info_fetch(match, 2);
+	}
+	g_assert_nonnull(g_hash_table_lookup(reply.cookies, name));
+	cookie = g_strdup_printf("%s=%s", name, (const gchar *)g_hash_table_lookup(reply.cookies, name));
+	reply_clear(&reply);
+	escaped = g_uri_escape_string(token, NULL, FALSE);
+	form = g_strdup_printf("_csrf=%s&username=root&password=%s", escaped, "a+made-up+password+of+root");
+	reply = send_request_from(local, fx->daemon_port, "POST", "/login", cookie, form, NULL, NULL, NULL);
+	status = reply.status;
+	/* A session only with the 303. */
+	g_assert_true((status == 303) == (g_hash_table_lookup(reply.cookies, made) != NULL));
+	reply_clear(&reply);
+	return status;
+}
+
 /* An administrator's change at the engine's own interface: logs root in
  * there and posts @form to @path of the Users page. */
 static void
@@ -675,7 +746,7 @@ admin_change(
 	const gchar *path,
 	const gchar *form
 ){
-	Reply reply = send_request(fx->daemon_port, "GET", "/login", NULL, NULL, NULL, NULL, NULL);
+	Reply reply;
 	g_autofree gchar *presession = NULL;
 	g_autofree gchar *token = NULL;
 	g_autofree gchar *login = NULL;
@@ -684,6 +755,14 @@ admin_change(
 	g_autofree gchar *escaped = NULL;
 	g_autofree gchar *body = NULL;
 
+	/* Slice P4 (the real daemon and the real portal): 127.0.0.1 is the
+	 * portal's address (AXIS_PORTAL_PEERS), so the administrator's right
+	 * password is refused at the engine's login from that address, as a
+	 * wrong one is, and no session is made. */
+	g_assert_cmpuint(engine_login_status(fx, NULL), ==, 401);
+	/* From another address the same administrator logs in: directly, over
+	 * plain http, with no proxy between (as before the rule). */
+	reply = send_request_from(ADMIN_DESK, fx->daemon_port, "GET", "/login", NULL, NULL, NULL, NULL, NULL);
 	assert_status(&reply, 200);
 	token = hidden_value(reply.body, "_csrf");
 	if (token == NULL) {
@@ -700,16 +779,20 @@ admin_change(
 			token = g_match_info_fetch(match, 2);
 		}
 	}
+	g_assert_nonnull(g_hash_table_lookup(reply.cookies, "axis_presession"));
 	presession = g_strdup_printf("axis_presession=%s", (const gchar *)g_hash_table_lookup(reply.cookies,
 		"axis_presession"));
 	reply_clear(&reply);
 	escaped = g_uri_escape_string(token, NULL, FALSE);
 	login = g_strdup_printf("_csrf=%s&username=root&password=%s", escaped, "a+made-up+password+of+root");
-	reply = send_request(fx->daemon_port, "POST", "/login", presession, login, NULL, NULL, NULL);
+	reply = send_request_from(ADMIN_DESK, fx->daemon_port, "POST", "/login", presession, login, NULL, NULL, NULL);
 	assert_status(&reply, 303);
+	g_assert_nonnull(g_hash_table_lookup(reply.cookies, "axis_session"));
 	session = g_strdup_printf("axis_session=%s", (const gchar *)g_hash_table_lookup(reply.cookies, "axis_session"));
 	reply_clear(&reply);
 
+	/* (The session goes on wherever it is used from: the rule is the
+	 * login's.) */
 	reply = send_request(fx->daemon_port, "GET", "/admin/users", session, NULL, NULL, NULL, NULL);
 	assert_status(&reply, 200);
 	csrf = axis_test_web_csrf_token(reply.body);
@@ -718,7 +801,7 @@ admin_change(
 	g_free(escaped);
 	escaped = g_uri_escape_string(csrf, NULL, FALSE);
 	body = g_strdup_printf("_csrf=%s%s%s", escaped, form[0] != '\0' ? "&" : "", form);
-	reply = send_request(fx->daemon_port, "POST", path, session, body, NULL, NULL, NULL);
+	reply = send_request_from(ADMIN_DESK, fx->daemon_port, "POST", path, session, body, NULL, NULL, NULL);
 	if (reply.status != 303 && reply.status != 200)
 		g_error("the administrator's change at %s was answered %u:\n%s", path, reply.status, reply.body);
 	reply_clear(&reply);
@@ -924,13 +1007,18 @@ test_refuses_to_start(Fixture *fx, gconstpointer data)
  * was taken in silence, and a token given in the environment stayed in the
  * process's environment for as long as it ran, where the user's other
  * processes can read it (/proc/<pid>/environ).  The first is said at start;
- * the second is overwritten and taken out once read. */
+ * the second is overwritten and taken out once read.  Since P4 the process
+ * is not dumpable either, so that file is refused to anyone but root; the
+ * overwriting is then seen only by a test that runs as root. */
 static void
 test_token_out_of_sight(Fixture *fx, gconstpointer data)
 {
 	g_autofree gchar *log = NULL;
 	g_autofree gchar *path = NULL;
 	g_autofree gchar *environ_text = NULL;
+	g_autofree gchar *status_path = NULL;
+	g_autofree gchar *status_text = NULL;
+	g_autoptr(GError) read_error = NULL;
 	const gchar *pid;
 	gsize length = 0;
 	Browser robin;
@@ -954,13 +1042,28 @@ test_token_out_of_sight(Fixture *fx, gconstpointer data)
 	start_portal(fx, NULL, NULL);
 	pid = g_subprocess_get_identifier(fx->portal);
 	g_assert_nonnull(pid);
+	/* Slice P4 (task 4.2): the portal sets no-new-privileges and makes
+	 * itself not dumpable at start, so its environment, its memory and the
+	 * rest under /proc/<pid> belong to root and its own user's other
+	 * processes are refused them. */
+	status_path = g_strdup_printf("/proc/%s/status", pid);
+	g_assert_true(g_file_get_contents(status_path, &status_text, NULL, NULL));
+	assert_has(status_text, "NoNewPrivs:\t1");
 	path = g_strdup_printf("/proc/%s/environ", pid);
-	g_assert_true(g_file_get_contents(path, &environ_text, &length, NULL));
-	/* (What was read is the portal's environment, and the token is not in
-	 * it.) */
-	g_assert_nonnull(memmem(environ_text, length, "AXIS_PORTAL_URL=http://127.0.0.1:",
-		strlen("AXIS_PORTAL_URL=http://127.0.0.1:")));
-	g_assert_null(memmem(environ_text, length, fx->token, strlen(fx->token)));
+	if (g_file_get_contents(path, &environ_text, &length, &read_error)) {
+		/* Read all the same (the test runs as root): what was read is the
+		 * portal's environment, and the token is not in it. */
+		g_assert_cmpuint(geteuid(), ==, 0);
+		g_assert_nonnull(memmem(environ_text, length, "AXIS_PORTAL_URL=http://127.0.0.1:",
+			strlen("AXIS_PORTAL_URL=http://127.0.0.1:")));
+		g_assert_null(memmem(environ_text, length, fx->token, strlen(fx->token)));
+	} else {
+		g_assert_error(read_error, G_FILE_ERROR, G_FILE_ERROR_ACCES);
+		g_clear_pointer(&path, g_free);
+		path = g_strdup_printf("/proc/%s/mem", pid);
+		g_assert_cmpint(g_open(path, O_RDONLY, 0), ==, -1);
+		g_assert_cmpint(errno, ==, EACCES);
+	}
 	/* The portal has it where it needs it. */
 	g_assert_cmpuint(portal_login(fx, "robin", ROBIN_PASSWORD, OUTSIDE, NULL, &robin), ==, 303);
 	browser_clear(&robin);

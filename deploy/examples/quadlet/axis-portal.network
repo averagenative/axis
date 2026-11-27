@@ -1,0 +1,32 @@
+# axis-portal.network - the network the daemon and the request portal share
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Optional, with axis-portal.container (README.md, "The request portal").
+# Only the daemon and the portal are on it: the database is not, and the
+# portal is on no other network.  The portal's token and the requesters'
+# passwords cross it unencrypted, which is why it holds only those two.
+#
+# Internal: the network has no way out.  It is the portal's only network, so
+# the portal's container has no route to anything but the daemon: not to the
+# internet, and not to the addresses of the other networks of this machine
+# (PostgreSQL's), which a container on an ordinary network can reach by
+# address even when no name resolves.  Do not remove that line.
+#
+# The subnet is fixed so that the daemon's address and the portal's on it can
+# be: the portal API listens on the daemon's address alone and answers the
+# portal's alone, and the portal trusts its own address as its reverse
+# proxy's (axis-portal.container).
+# EDIT: another subnet if 172.31.78.0/24 is in use on this machine (and then
+# the addresses in axis.container and axis-portal.container).
+#
+# IPv4 only (IPv6=false says what the default is).  Do not give this network
+# an IPv6 subnet: the portal is named by its IPv4 address, and its container
+# has IPv6 switched off (axis-portal.container).
+[Unit]
+Description=The network of Axis and its request portal
+
+[Network]
+NetworkName=axis-portal
+Subnet=172.31.78.0/24
+Internal=true
+IPv6=false

@@ -12,8 +12,12 @@
 
 services:
   traefik:
-    # EDIT: pin the Traefik version you have tested.
-    image: docker.io/library/traefik:v3.3
+    # EDIT: pin the Traefik version you have tested.  Not one before 3.6.1
+    # with Docker 29 or later: an older Traefik asks Docker's API for a
+    # version that Docker no longer speaks ("client version 1.24 is too
+    # old" in Traefik's log), reads no label, and answers 404 for every
+    # host name.  (Seen with Traefik 3.3 and Docker 29; 3.6.25 worked.)
+    image: docker.io/library/traefik:v3.6
     restart: unless-stopped
     command:
       - --providers.docker=true
@@ -111,9 +115,15 @@ services:
       retries: 3
       start_period: 60s
     stop_grace_period: 45s
+    # (Written as a map, not a list, so that compose.portal.yaml can add
+    # to it: some Compose front ends cannot merge a list with a map.)
     networks:
-      - axis-proxy
-      - private
+      axis-proxy:
+        # Fixed because Traefik's is: where one address of a subnet is
+        # written down, a container without one can be given it first, and
+        # the other then does not start.
+        ipv4_address: 172.30.0.3
+      private: {}
 
   postgres:
     image: docker.io/library/postgres:17

@@ -13,7 +13,11 @@
  *    static file, no login form, no worker API, no probe, no metrics.  The
  *    daemon's main listener answers every path under AXIS_PORTAL_API_PREFIX
  *    as one that does not exist (web/axis-web-auth.c).
- *  - The gate, for every request, in this order: a path that is not under
+ *  - The gate, for every request, in this order: the connection's own
+ *    address is one of the portal's (server.portal_peers,
+ *    web/axis-web-auth-portal.h): while that list is empty everyone is
+ *    answered 503, and an address outside it 403, before its token is looked
+ *    at and with nothing counted; a path that is not under
  *    the prefix does not exist (404); the daemon serves (503 while it does
  *    not hold its database); no query string (400, whatever it carries: a
  *    token is taken from the Authorization header alone); a portal token:

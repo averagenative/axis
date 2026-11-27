@@ -128,6 +128,70 @@ test_proxy_contains(void)
 	g_assert_false(axis_proxy_list_contains(NULL, &a));
 }
 
+/* Whether two lists share an address (the portal's addresses against the
+ * trusted proxies): a range holds an address, a range holds a range, either
+ * way round; never across the families; a name stands for what its lookup
+ * found, and for nothing before. */
+static void
+test_proxy_lists_overlap(void)
+{
+	static const struct
+	{
+		const gchar *mine;
+		const gchar *theirs;
+		const gchar *entry;	/* NULL: no overlap */
+		const gchar *other;
+	} cases[] = {
+		{ "172.30.1.3", "172.30.0.2", NULL, NULL },
+		{ "172.30.1.3", "172.30.1.3", "172.30.1.3", "172.30.1.3" },
+		{ "172.30.1.3", "10.0.0.1, 172.30.0.0/16", "172.30.1.3", "172.30.0.0/16" },
+		{ "172.30.1.0/24", "172.30.1.2", "172.30.1.0/24", "172.30.1.2" },
+		{ "172.30.1.0/24", "172.30.0.0/16", "172.30.1.0/24", "172.30.0.0/16" },
+		{ "172.30.0.0/16", "172.30.1.0/24", "172.30.0.0/16", "172.30.1.0/24" },
+		{ "172.30.1.0/25", "172.30.1.128/25", NULL, NULL },
+		{ "192.0.2.16/28", "192.0.2.32", NULL, NULL },
+		{ "192.0.2.16/28", "192.0.2.31", "192.0.2.16/28", "192.0.2.31" },
+		{ "::ffff:172.30.1.3", "172.30.1.3", "172.30.1.3", "172.30.1.3" },
+		{ "2001:db8:1:2::7", "2001:db8:1:2::8", NULL, NULL },
+		{ "2001:db8:1:2::7", "2001:db8:1:2::/64", "2001:db8:1:2::7", "2001:db8:1:2::/64" },
+		{ "2001:db8::/32", "10.0.0.0/8", NULL, NULL },
+		{ "", "10.0.0.0/8", NULL, NULL },
+		{ "10.0.0.1", "", NULL, NULL },
+		{ "10.0.0.1", "traefik", NULL, NULL }
+	};
+	guint i;
+
+	for (i = 0; i < G_N_ELEMENTS(cases); i++) {
+		g_autoptr(AxisProxyList) mine = axis_proxy_list_parse(cases[i].mine, NULL);
+		g_autoptr(AxisProxyList) theirs = axis_proxy_list_parse(cases[i].theirs, NULL);
+		g_autofree gchar *entry = NULL;
+		g_autofree gchar *other = NULL;
+
+		g_assert_nonnull(mine);
+		g_assert_nonnull(theirs);
+		g_test_message("%s against %s", cases[i].mine, cases[i].theirs);
+		g_assert_true(axis_proxy_lists_overlap(mine, theirs, &entry, &other) == (cases[i].entry != NULL));
+		g_assert_cmpstr(entry, ==, cases[i].entry);
+		g_assert_cmpstr(other, ==, cases[i].other);
+	}
+	g_assert_false(axis_proxy_lists_overlap(NULL, NULL, NULL, NULL));
+	{
+		g_autoptr(AxisProxyList) mine = axis_proxy_list_parse("172.30.2.0/24", NULL);
+		g_autoptr(AxisProxyList) theirs = axis_proxy_list_parse("10.9.9.9, traefik", NULL);
+		AxisIpAddress found[2];
+		g_autofree gchar *entry = NULL;
+		g_autofree gchar *other = NULL;
+
+		found[0] = address("172.30.0.2");
+		found[1] = address("172.30.2.2");
+		g_assert_false(axis_proxy_lists_overlap(mine, theirs, NULL, NULL));
+		axis_proxy_list_name_result(theirs, "traefik", found, 2, NULL, NULL);
+		g_assert_true(axis_proxy_lists_overlap(mine, theirs, &entry, &other));
+		g_assert_cmpstr(entry, ==, "172.30.2.0/24");
+		g_assert_cmpstr(other, ==, "traefik");
+	}
+}
+
 typedef struct
 {
 	const gchar *trusted;
@@ -837,6 +901,7 @@ main(int argc, char **argv)
 	g_test_add_func("/auth/proxy/list-parse", test_proxy_list_parse);
 	g_test_add_func("/auth/proxy/list-limits", test_proxy_list_limits);
 	g_test_add_func("/auth/proxy/contains", test_proxy_contains);
+	g_test_add_func("/auth/proxy/lists-overlap", test_proxy_lists_overlap);
 	g_test_add_func("/auth/proxy/address-key", test_proxy_address_key);
 	g_test_add_func("/auth/proxy/resolve", test_proxy_resolve);
 	g_test_add_func("/auth/proxy/resolve-hop-limit", test_proxy_resolve_hop_limit);
