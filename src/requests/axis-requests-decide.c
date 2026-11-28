@@ -948,6 +948,20 @@ axis_requests_set_person(
 }
 
 gboolean
+axis_requests_set_new_account_switches(
+	AxisRequests  *self,
+	gboolean       movies,
+	gboolean       series,
+	GError       **error
+){
+	if (self->settings == NULL ||
+	    axis_settings_lookup(self->settings, AXIS_REQUESTS_SETTING_NEW_AUTO_MOVIES, NULL) == NULL)
+		return refuse(error, AXIS_REQUESTS_ERROR_INVALID, "the settings are not available");
+	return axis_settings_set(self->settings, AXIS_REQUESTS_SETTING_NEW_AUTO_MOVIES, movies ? "true" : "false", error) &&
+		axis_settings_set(self->settings, AXIS_REQUESTS_SETTING_NEW_AUTO_SERIES, series ? "true" : "false", error);
+}
+
+gboolean
 axis_requests_set_defaults(
 	AxisRequests               *self,
 	const AxisRequestDefaults  *defaults,

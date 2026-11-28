@@ -402,6 +402,17 @@ static const AxisSettingInfo settings_table[] = {
 	{ AXIS_REQUESTS_SETTING_AUTO_SEASONS, AXIS_SETTING_INTEGER, "Most seasons approved automatically in one request",
 	  "For a person whose series requests are approved automatically: a request that lists more seasons than this "
 	  "waits for an administrator.", 0, "3", 1, AXIS_REQUESTS_MAX_SEASONS, 0, 0, NULL },
+	{ AXIS_REQUESTS_SETTING_NEW_AUTO_MOVIES, AXIS_SETTING_BOOLEAN, "Approve movie requests automatically for new accounts",
+	  "On: a new account starts with automatic approval of its movie requests switched on. Off: its movie requests "
+	  "wait for an administrator. Changing this changes nothing for accounts that exist: change theirs on the "
+	  "Requests page, under People. Automatic approval still needs the default library folder and quality profile "
+	  "for movies and is still bounded by the person's limit.", 0, "false", 0, 0, 0, 0, NULL },
+	{ AXIS_REQUESTS_SETTING_NEW_AUTO_SERIES, AXIS_SETTING_BOOLEAN, "Approve series requests automatically for new accounts",
+	  "On: a new account starts with automatic approval of its series requests switched on. Off: its series "
+	  "requests wait for an administrator. Changing this changes nothing for accounts that exist: change theirs on "
+	  "the Requests page, under People. Automatic approval still needs the default library folder and quality "
+	  "profile for series and is still bounded by the person's limit and by the most seasons approved automatically "
+	  "in one request.", 0, "false", 0, 0, 0, 0, NULL },
 	{ AXIS_REQUESTS_SETTING_SHOW_WHO, AXIS_SETTING_BOOLEAN, "Show people who asked for a title",
 	  "On: beside a requested title, everyone who can ask sees the name of the person who asked. Off: only "
 	  "administrators and that person do.", 0, "true", 0, 0, 0, 0, NULL },

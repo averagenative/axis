@@ -826,6 +826,64 @@ test_auto(Fixture *fx, gconstpointer data)
 	axis_request_made_clear(&made);
 }
 
+/* Scenario: New accounts start with the switches the settings say.  Both
+ * settings on: an account made now has both switches on and its request is
+ * approved when it is made; an account made before keeps its switches; the
+ * settings off (the default) give an account with both off. */
+static void
+test_new_account_switches(Fixture *fx, gconstpointer data)
+{
+	gint64 orchard = film(fx, AXIS_TEST_REQUESTS_ORCHARD);
+	gint64 harbour = series(fx, AXIS_TEST_REQUESTS_HARBOUR);
+	static const gint one[] = { 1 };
+	g_autoptr(GError) error = NULL;
+	g_autoptr(AxisUser) early = NULL;
+	g_autoptr(AxisUser) late = NULL;
+	g_autoptr(AxisUser) off = NULL;
+	AxisRequestMade made;
+
+	axis_test_requests_set_defaults(fx->r);
+	g_assert_false(axis_settings_get_boolean(fx->r->settings, "requests.new_auto_movies"));
+	g_assert_false(axis_settings_get_boolean(fx->r->settings, "requests.new_auto_series"));
+	early = axis_user_store_create(fx->r->t->pool, "early", "$argon2id$not-a-password", AXIS_USER_ROLE_USER, &error);
+	g_assert_no_error(error);
+	g_assert_nonnull(early);
+	g_assert_cmpint(N("SELECT count(*) FROM app_user WHERE username = 'early' AND NOT request_auto_movies"
+		" AND NOT request_auto_series"), ==, 1);
+
+	g_assert_true(axis_requests_set_new_account_switches(fx->r->requests, TRUE, TRUE, &error));
+	g_assert_no_error(error);
+	late = axis_user_store_create(fx->r->t->pool, "late", "$argon2id$not-a-password", AXIS_USER_ROLE_USER, &error);
+	g_assert_no_error(error);
+	g_assert_cmpint(N("SELECT count(*) FROM app_user WHERE username = 'late' AND request_auto_movies"
+		" AND request_auto_series"), ==, 1);
+	/* The account made before keeps off. */
+	g_assert_cmpint(N("SELECT count(*) FROM app_user WHERE username = 'early' AND NOT request_auto_movies"
+		" AND NOT request_auto_series"), ==, 1);
+
+	g_assert_true(ask_movie(fx, late->id, orchard, &made, &error));
+	g_assert_no_error(error);
+	g_assert_cmpint(made.decision, ==, AXIS_REQUEST_APPROVED);
+	g_assert_cmpstr(made.approved_how, ==, "auto");
+	axis_request_made_clear(&made);
+	g_assert_true(ask_series(fx, late->id, harbour, AXIS_REQUEST_SEASONS_PICKED, one, 1, &made, &error));
+	g_assert_no_error(error);
+	g_assert_cmpint(made.decision, ==, AXIS_REQUEST_APPROVED);
+	axis_request_made_clear(&made);
+	g_assert_true(ask_movie(fx, early->id, film(fx, AXIS_TEST_REQUESTS_LEDGER), &made, &error));
+	g_assert_cmpint(made.decision, ==, AXIS_REQUEST_WAITING);
+	axis_request_made_clear(&made);
+
+	/* Switched off again: the next account starts off; "late" keeps on. */
+	g_assert_true(axis_requests_set_new_account_switches(fx->r->requests, FALSE, FALSE, &error));
+	off = axis_user_store_create(fx->r->t->pool, "off", "$argon2id$not-a-password", AXIS_USER_ROLE_USER, &error);
+	g_assert_no_error(error);
+	g_assert_cmpint(N("SELECT count(*) FROM app_user WHERE username = 'off' AND NOT request_auto_movies"
+		" AND NOT request_auto_series"), ==, 1);
+	g_assert_cmpint(N("SELECT count(*) FROM app_user WHERE username = 'late' AND request_auto_movies"
+		" AND request_auto_series"), ==, 1);
+}
+
 /* Scenario: Too many seasons for automatic approval; and a series within
  * the cap is approved automatically, with its seasons monitored. */
 static void
@@ -2649,6 +2707,7 @@ main(int argc, char **argv)
 	AXIS_TEST_ADD_DB_CASE("/requests/decide/folder-gone", Fixture, NULL, test_could_not_be_added);
 	AXIS_TEST_ADD_DB_CASE("/requests/decide/stopped-before-placing", Fixture, NULL, test_stopped_before_placing);
 	AXIS_TEST_ADD_DB_CASE("/requests/auto/movie", Fixture, NULL, test_auto);
+	AXIS_TEST_ADD_DB_CASE("/requests/auto/new-account-switches", Fixture, NULL, test_new_account_switches);
 	AXIS_TEST_ADD_DB_CASE("/requests/auto/too-many-seasons", Fixture, NULL, test_auto_seasons);
 	AXIS_TEST_ADD_DB_CASE("/requests/auto/defaults-gone", Fixture, NULL, test_auto_defaults_gone);
 	AXIS_TEST_ADD_DB_CASE("/requests/quota/limit-reached", Fixture, NULL, test_quota_movies);

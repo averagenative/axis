@@ -237,6 +237,7 @@ done_message(const gchar *key)
 		{ "closed", "The title is closed to requests." },
 		{ "opened", "The title can be requested again." },
 		{ "defaults_saved", "The defaults were saved." },
+		{ "new_accounts_saved", "The switches that new accounts start with were saved." },
 		{ "person_saved", "The person's switches and limits were saved." }
 	};
 	guint i;
@@ -902,6 +903,8 @@ typedef struct
 	GPtrArray           *people;
 	AxisRequestInfo     *one;
 	gint64               movies_limit;
+	gboolean             new_movies;
+	gboolean             new_series;
 	gint64               seasons_limit;
 	GError              *error;
 } PageWork;
@@ -1615,6 +1618,9 @@ typedef struct
 	AxisRequestDefaults  defaults;
 	AxisRequestPerson    person;
 	gboolean             is_person;
+	gboolean             is_new_accounts;
+	gboolean             new_movies;
+	gboolean             new_series;
 	GError              *error;
 } SaveWork;
 
@@ -1634,7 +1640,9 @@ save_run(
 ){
 	SaveWork *work = data;
 
-	if (work->is_person)
+	if (work->is_new_accounts)
+		axis_requests_set_new_account_switches(self, work->new_movies, work->new_series, &work->error);
+	else if (work->is_person)
 		axis_requests_set_person(self, &work->person, &work->error);
 	else
 		axis_requests_set_defaults(self, &work->defaults, &work->error);
@@ -1651,6 +1659,10 @@ save_done(
 
 	if (work->error != NULL)
 		return refusal(request, "Not saved", work->error);
+	if (work->is_new_accounts) {
+		axis_web_storage_audit(request, "the switches that new accounts start with changed");
+		return axis_web_place_redirect(request, "/requests/people", "new_accounts_saved", "new-accounts");
+	}
 	if (!work->is_person) {
 		axis_web_storage_audit(request, "the defaults for requests changed");
 		return axis_web_place_redirect(request, "/requests", "defaults_saved", "defaults");
@@ -1659,6 +1671,20 @@ save_done(
 		work->person.id);
 	row = g_strdup_printf("person-%" G_GINT64_FORMAT, work->person.id);
 	return axis_web_place_redirect(request, "/requests/people", "person_saved", row);
+}
+
+static HtmxResponse *
+handle_new_accounts(
+	HtmxRequest *request,
+	GHashTable  *params,
+	gpointer     user_data
+){
+	SaveWork *work = g_new0(SaveWork, 1);
+
+	work->is_new_accounts = TRUE;
+	work->new_movies = axis_web_storage_form_yes(request, "new_auto_movies");
+	work->new_series = axis_web_storage_form_yes(request, "new_auto_series");
+	return dispatch(user_data, request, save_run, save_done, work, save_work_free);
 }
 
 static HtmxResponse *
@@ -1730,6 +1756,12 @@ people_run(
 
 	work->movies_limit = axis_requests_setting_int(self, AXIS_REQUESTS_SETTING_MOVIES, 5);
 	work->seasons_limit = axis_requests_setting_int(self, AXIS_REQUESTS_SETTING_SEASONS, 5);
+	work->new_movies = self->settings != NULL &&
+		axis_settings_lookup(self->settings, AXIS_REQUESTS_SETTING_NEW_AUTO_MOVIES, NULL) != NULL &&
+		axis_settings_get_boolean(self->settings, AXIS_REQUESTS_SETTING_NEW_AUTO_MOVIES);
+	work->new_series = self->settings != NULL &&
+		axis_settings_lookup(self->settings, AXIS_REQUESTS_SETTING_NEW_AUTO_SERIES, NULL) != NULL &&
+		axis_settings_get_boolean(self->settings, AXIS_REQUESTS_SETTING_NEW_AUTO_SERIES);
 	axis_requests_list_people(self, &work->people, &work->error);
 }
 
@@ -1787,12 +1819,30 @@ people_done(
 	htmx_node_set_text_content(HTMX_NODE(heading), "People who ask");
 	htmx_node_add_child(HTMX_NODE(content), HTMX_NODE(heading));
 	ADD(content, axis_web_page_intro("For each person: whether their requests are approved without waiting for "
-		"you, and how many they may make. Both switches are off for a new account."));
+		"you, and how many they may make. Both switches are off for a new account, unless you switch them on for new accounts below."));
 	back = htmx_a_new_with_href("/requests");
 	htmx_node_set_text_content(HTMX_NODE(back), "All requests");
 	ADD(content, back);
 	axis_web_notice_begin(&notice, request, FALSE,
 		g_strdup(done_message(htmx_request_get_query_param(request, AXIS_WEB_PLACE_DONE))), HTMX_NODE(content));
+	{
+		HtmxNode *newcard = axis_web_storage_card("New accounts");
+		HtmxNode *newform = axis_web_auth_post_form(request, "/requests/people/new-accounts");
+
+		htmx_element_set_id(HTMX_ELEMENT(newcard), "new-accounts");
+		ADD(newcard, text("help", "A new account starts with these two switches as they are when it is made. "
+			"Changing them changes nothing for accounts that exist: change those below. Automatic approval still "
+			"needs the default library folder and quality profile, and is still bounded by the person's limit and "
+			"by \"Most seasons approved automatically in one request\" (Settings, Requests)."));
+		htmx_element_add_class(HTMX_ELEMENT(newform), "form");
+		ADD(newform, tick("new-auto-movies", "new_auto_movies",
+			"Approve movie requests automatically for new accounts", work->new_movies));
+		ADD(newform, tick("new-auto-series", "new_auto_series",
+			"Approve series requests automatically for new accounts", work->new_series));
+		ADD(newform, axis_web_auth_button("Save", "button-primary"));
+		ADD(newcard, newform);
+		ADD(content, newcard);
+	}
 	card = axis_web_storage_card("Automatic approval and limits");
 	usual = g_strdup_printf("An empty limit is the installation's: %" G_GINT64_FORMAT " movies and %" G_GINT64_FORMAT
 		" seasons in each window (Settings, Requests). 0 means the person cannot ask for that kind. An automatic "
@@ -2078,6 +2128,8 @@ axis_web_requests_register(
 	/* Before the routes with a request's identifier in that place: the first
 	 * route that matches answers. */
 	axis_web_route_full(web, HTMX_METHOD_GET, "/requests/people", AXIS_WEB_ROUTE_ADMIN, handle_people, self);
+	axis_web_route_full(web, HTMX_METHOD_POST, "/requests/people/new-accounts", AXIS_WEB_ROUTE_ADMIN,
+		handle_new_accounts, self);
 	axis_web_route_full(web, HTMX_METHOD_POST, "/requests/people/:id", AXIS_WEB_ROUTE_ADMIN, handle_person, self);
 	axis_web_route_full(web, HTMX_METHOD_POST, "/requests/defaults", AXIS_WEB_ROUTE_ADMIN, handle_defaults, self);
 	axis_web_route_full(web, HTMX_METHOD_POST, "/requests/titles/:id/close", AXIS_WEB_ROUTE_ADMIN, handle_close, self);
