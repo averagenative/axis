@@ -1821,6 +1821,14 @@ axis_import_count(
 
 /* ── Volumes that make every import a copy ──────────────────────── */
 
+static void
+volume_root_free(AxisImportVolumeRoot *root)
+{
+	g_free(root->name);
+	g_free(root->volume);
+	g_free(root);
+}
+
 void
 axis_import_volume_warning_free(AxisImportVolumeWarning *warning)
 {
@@ -1829,8 +1837,7 @@ axis_import_volume_warning_free(AxisImportVolumeWarning *warning)
 	g_free(warning->client_name);
 	g_free(warning->client_prefix);
 	g_free(warning->download_volume);
-	g_free(warning->root_name);
-	g_free(warning->root_volume);
+	g_clear_pointer(&warning->roots, g_ptr_array_unref);
 	g_free(warning);
 }
 
@@ -1841,41 +1848,86 @@ axis_import_volume_warnings(
 	GError     **error
 ){
 	g_autoptr(AxisDbResult) result = NULL;
+	g_autoptr(AxisDbResult) setting = NULL;
+	gboolean seeding = FALSE;
+	AxisImportVolumeWarning *warning = NULL;
 	guint i;
 
 	*warnings = NULL;
-	if (!axis_db_pool_exec(pool, "SELECT c.id, c.name, m.client_prefix, m.volume_id, mv.name, r.id, r.name,"
-	        " r.volume_id, rv.name FROM download_path_map m JOIN download_client c ON c.id = m.client_id"
+	if (!axis_db_pool_exec(pool, "SELECT value #>> '{}' FROM setting WHERE key = '" AXIS_IMPORT_SETTING_TORRENTS "'", 0,
+	        NULL, &setting, error))
+		return FALSE;
+	if (axis_db_result_get_n_rows(setting) > 0)
+		seeding = g_strcmp0(axis_db_result_get_text(setting, 0, 0), AXIS_IMPORT_TORRENTS_SEED) == 0;
+	if (!axis_db_pool_exec(pool, "SELECT c.id, c.name, m.client_prefix, m.volume_id, mv.name, c.kind, r.name,"
+	        " rv.name FROM download_path_map m JOIN download_client c ON c.id = m.client_id"
 	        " JOIN volume mv ON mv.id = m.volume_id JOIN library_root r ON r.media_type = 'movies'"
 	        " AND r.volume_id <> m.volume_id JOIN volume rv ON rv.id = r.volume_id"
-	        " ORDER BY c.name, m.client_prefix, r.name LIMIT 100", 0, NULL, &result, error))
+	        " ORDER BY c.name, c.id, m.client_prefix, r.name LIMIT 500", 0, NULL, &result, error))
 		return FALSE;
 	*warnings = g_ptr_array_new_with_free_func((GDestroyNotify)axis_import_volume_warning_free);
 	for (i = 0; i < axis_db_result_get_n_rows(result); i++) {
-		AxisImportVolumeWarning *warning = g_new0(AxisImportVolumeWarning, 1);
+		AxisImportVolumeRoot *root = g_new0(AxisImportVolumeRoot, 1);
+		gint64 client_id = row_int(result, i, 0, 0);
+		g_autofree gchar *prefix = row_text(result, i, 2);
 
-		warning->client_id = row_int(result, i, 0, 0);
-		warning->client_name = row_text(result, i, 1);
-		warning->client_prefix = row_text(result, i, 2);
-		warning->download_volume_id = row_int(result, i, 3, 0);
-		warning->download_volume = row_text(result, i, 4);
-		warning->root_id = row_int(result, i, 5, 0);
-		warning->root_name = row_text(result, i, 6);
-		warning->root_volume_id = row_int(result, i, 7, 0);
-		warning->root_volume = row_text(result, i, 8);
-		g_ptr_array_add(*warnings, warning);
+		if (warning == NULL || warning->client_id != client_id || g_strcmp0(warning->client_prefix, prefix) != 0) {
+			g_autofree gchar *kind = row_text(result, i, 5);
+
+			warning = g_new0(AxisImportVolumeWarning, 1);
+			warning->client_id = client_id;
+			warning->client_name = row_text(result, i, 1);
+			warning->client_prefix = g_steal_pointer(&prefix);
+			warning->download_volume_id = row_int(result, i, 3, 0);
+			warning->download_volume = row_text(result, i, 4);
+			/* The kinds that take .nzb files; the rest are torrent clients. */
+			warning->usenet = g_strcmp0(kind, "sabnzbd") == 0 || g_strcmp0(kind, "nzbget") == 0;
+			warning->seeding = seeding;
+			warning->roots = g_ptr_array_new_with_free_func((GDestroyNotify)volume_root_free);
+			g_ptr_array_add(*warnings, warning);
+		}
+		root->name = row_text(result, i, 6);
+		root->volume = row_text(result, i, 7);
+		g_ptr_array_add(warning->roots, root);
 	}
 	return TRUE;
 }
 
+gboolean
+axis_import_volume_warning_is_costly(const AxisImportVolumeWarning *warning)
+{
+	return !warning->usenet && warning->seeding;
+}
+
+/* The most folders a notice names; the rest are counted. */
+#define VOLUME_ROOTS_SHOWN 5
+
 gchar *
 axis_import_volume_warning_text(const AxisImportVolumeWarning *warning)
 {
-	return g_strdup_printf("%s puts its downloads (%s) on disk %s, and the Movies library folder %s is on disk %s. A "
-		"hardlink cannot cross disks, so every movie imported from %s into %s is copied: it takes the time to copy "
-		"it, and as much space again while the download is kept (a torrent that seeds, its whole life). Map the "
-		"download client's folder to a folder on the disk of %s, or, to block such imports instead, change "
-		"\"Download and library on different disks\" in Settings, under Imports.", warning->client_name,
-		warning->client_prefix, warning->download_volume,
-		warning->root_name, warning->root_volume, warning->client_name, warning->root_name, warning->root_name);
+	g_autoptr(GString) list = g_string_new(NULL);
+	g_autofree gchar *more = NULL;
+	guint i;
+
+	for (i = 0; i < warning->roots->len && i < VOLUME_ROOTS_SHOWN; i++) {
+		const AxisImportVolumeRoot *root = g_ptr_array_index(warning->roots, i);
+
+		g_string_append_printf(list, "%s%s (disk %s)", i > 0 ? ", " : "", root->name, root->volume);
+	}
+	if (warning->roots->len > VOLUME_ROOTS_SHOWN)
+		more = g_strdup_printf(", and %u more", warning->roots->len - VOLUME_ROOTS_SHOWN);
+	if (axis_import_volume_warning_is_costly(warning)) {
+		return g_strdup_printf("%s puts its downloads (%s) on disk %s, and a torrent is left seeding after it is "
+			"imported. These Movies library folders are on other disks: %s%s. A hardlink cannot cross disks, so "
+			"a movie imported into them is copied, and the copy takes as much space again while the torrent "
+			"seeds. Map the download client's folder to a folder on the disk of the library folder. To block such "
+			"imports instead, change \"Download and library on different disks\" in Settings, under Imports.",
+			warning->client_name, warning->client_prefix, warning->download_volume, list->str,
+			more != NULL ? more : "");
+	}
+	return g_strdup_printf("%s puts its downloads (%s) on disk %s. These Movies library folders are on other "
+		"disks: %s%s. A movie imported into them is copied instead of moved in one step. That costs the time of "
+		"the copy and nothing else, and it needs no action. To block such imports instead, change \"Download "
+		"and library on different disks\" in Settings, under Imports.", warning->client_name,
+		warning->client_prefix, warning->download_volume, list->str, more != NULL ? more : "");
 }

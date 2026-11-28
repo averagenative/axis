@@ -1415,29 +1415,43 @@ axis_import_count(
 );
 
 /**
- * AxisImportVolumeWarning:
+ * AxisImportVolumeRoot:
  *
- * A download client's mapped folder and a library root of @media_type on
- * different volumes: every import between them would be a copy.
+ * A library folder of one media type, and the disk it is on.
  */
 typedef struct
 {
-	gint64  client_id;
-	gchar  *client_name;
-	gchar  *client_prefix;
-	gint64  download_volume_id;
-	gchar  *download_volume;
-	gint64  root_id;
-	gchar  *root_name;
-	gint64  root_volume_id;
-	gchar  *root_volume;
+	gchar *name;
+	gchar *volume;
+} AxisImportVolumeRoot;
+
+/**
+ * AxisImportVolumeWarning:
+ *
+ * One download client's mapped folder, and the Movies library folders on
+ * other disks than it (@roots: every import into them is a copy).
+ * @usenet: the client never seeds.  @seeding: "After a torrent is imported"
+ * is "Leave it seeding".  Only a torrent client that seeds makes the copy
+ * cost space; every other case costs the time of the copy and is information.
+ */
+typedef struct
+{
+	gint64      client_id;
+	gchar      *client_name;
+	gchar      *client_prefix;
+	gint64      download_volume_id;
+	gchar      *download_volume;
+	gboolean    usenet;
+	gboolean    seeding;
+	GPtrArray  *roots;	/* of AxisImportVolumeRoot */
 } AxisImportVolumeWarning;
 
 void
 axis_import_volume_warning_free(AxisImportVolumeWarning *warning);
 
-/* Every such pair, for the Download clients and Storage pages (the
- * database only: no volume is touched). */
+/* One per download client folder with Movies folders on other disks, for
+ * the Download clients and Storage pages (the database only: no volume is
+ * touched). */
 gboolean
 axis_import_volume_warnings(
 	AxisDbPool  *pool,
@@ -1445,7 +1459,12 @@ axis_import_volume_warnings(
 	GError     **error
 );
 
-/* The sentence a page shows for a warning, with what it costs. */
+/* %TRUE when the copy costs space (a torrent left seeding): a warning;
+ * %FALSE when it costs only time: information. */
+gboolean
+axis_import_volume_warning_is_costly(const AxisImportVolumeWarning *warning);
+
+/* What a page shows for a warning, in the words of its case. */
 gchar *
 axis_import_volume_warning_text(const AxisImportVolumeWarning *warning);
 
