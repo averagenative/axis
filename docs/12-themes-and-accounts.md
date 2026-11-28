@@ -110,6 +110,11 @@ username does not stop you from changing your password.
 3. **Session idle limit** sets how long a browser may go unused before it
    must log in again. The default is 30 days. A session also ends 90 days
    after it was opened, however busy.
+4. **Log level** sets how much the Axis server writes to its log. Choose
+   **Debug** to see more detail when you look into a problem, and
+   **As the configuration says** to go back to `AXIS_LOG_LEVEL`. The change
+   takes effect at once and needs no restart. It applies to the server only,
+   not to the worker or the request portal.
 
 ## What can go wrong
 

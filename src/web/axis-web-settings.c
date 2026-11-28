@@ -7,9 +7,11 @@
 #include "web/axis-web-settings-private.h"
 #include "web/axis-session-store.h"
 #include "web/axis-web-theme.h"
+#include "core/axis-log.h"
 
 #define SESSION_IDLE_KEY   "web.session_idle"
 #define DEFAULT_THEME_KEY  "web.default_theme"
+#define LOG_LEVEL_KEY      "web.log_level"
 
 /* ── Tasks off the main loop ────────────────────────────────────── */
 
@@ -138,6 +140,41 @@ axis_web_settings_card(const gchar *heading)
 
 /* ── The session idle setting ───────────────────────────────────── */
 
+/* The level the setting asks for: the configuration's for "config". */
+static AxisLogLevel
+wanted_log_level(AxisSettings *settings)
+{
+	g_autofree gchar *value = axis_settings_get_string(settings, LOG_LEVEL_KEY);
+	AxisLogLevel level;
+
+	if (axis_log_level_from_string(value, &level))
+		return level;
+
+	return axis_log_get_configured_level();
+}
+
+/* Applies the setting.  The line that says so is written while it can be
+ * seen: after the level is lowered (more is shown), before it is raised. */
+static void
+apply_log_level(AxisSettings *settings)
+{
+	AxisLogLevel wanted = wanted_log_level(settings);
+	AxisLogLevel current = axis_log_get_level();
+
+	if (wanted == current)
+		return;
+
+	/* A lower level shows more: set it, then say so.  A higher one shows
+	 * less: say so first. */
+	if (wanted < current)
+		axis_log_set_level(wanted);
+	g_message("log level: now %s (set in Settings); the configuration says %s",
+		axis_log_level_to_string(wanted),
+		axis_log_level_to_string(axis_log_get_configured_level()));
+	if (wanted > current)
+		axis_log_set_level(wanted);
+}
+
 void
 axis_web_settings_sync(AxisWebSettings *self)
 {
@@ -152,6 +189,8 @@ axis_web_settings_sync(AxisWebSettings *self)
 	theme = axis_settings_get_string(self->settings, DEFAULT_THEME_KEY);
 	axis_web_theme_set_default(theme);
 	g_free(theme);
+
+	apply_log_level(self->settings);
 }
 
 static void
@@ -181,6 +220,8 @@ axis_web_settings_new(
 		self);
 	self->theme_subscription = axis_settings_subscribe(settings, DEFAULT_THEME_KEY,
 		on_setting_changed, self);
+	self->log_level_subscription = axis_settings_subscribe(settings, LOG_LEVEL_KEY,
+		on_setting_changed, self);
 
 	return self;
 }
@@ -204,6 +245,7 @@ axis_web_settings_free(AxisWebSettings *self)
 	axis_web_settings_stop(self);
 	axis_settings_unsubscribe(self->settings, self->subscription);
 	axis_settings_unsubscribe(self->settings, self->theme_subscription);
+	axis_settings_unsubscribe(self->settings, self->log_level_subscription);
 	g_free(self);
 }
 
@@ -222,6 +264,11 @@ register_routes(
 	axis_web_outbound_register_page(self, web);
 }
 
+static const gchar *const log_level_choices[] = { "config", "debug", "info", "warning", "error", NULL };
+static const gchar *const log_level_labels[] = {
+	"As the configuration says", "Debug", "Info", "Warning", "Error", NULL
+};
+
 static const AxisSettingInfo setting_table[] = {
 	{
 		SESSION_IDLE_KEY, AXIS_SETTING_DURATION,
@@ -238,6 +285,19 @@ static const AxisSettingInfo setting_table[] = {
 		"one on their account page. Users who have chosen a theme keep it.",
 		0, AXIS_WEB_THEME_FALLBACK,
 		0, 0, 0, 0, axis_web_theme_ids
+	},
+	{
+		LOG_LEVEL_KEY, AXIS_SETTING_CHOICE,
+		"Log level",
+		"What the daemon writes to its log. Debug shows everything, including routine detail "
+		"of what the daemon does and of requests; it is verbose, and its lines never hold a "
+		"password or a token. Info adds the events worth a line, Warning shows only what went "
+		"wrong or may, and Error only what failed. \"As the configuration says\" uses "
+		"AXIS_LOG_LEVEL or log_level. This applies to the daemon only: the worker and the portal "
+		"take theirs from their own configuration. A change takes effect at once and needs no "
+		"restart.",
+		0, "config",
+		0, 0, 0, 0, log_level_choices
 	},
 	{ NULL, 0, NULL, NULL, 0, NULL, 0, 0, 0, 0, NULL }
 };
@@ -270,5 +330,6 @@ const AxisModuleInfo *
 axis_web_settings_get_module(void)
 {
 	axis_setting_set_choice_labels(DEFAULT_THEME_KEY, axis_web_theme_labels);
+	axis_setting_set_choice_labels(LOG_LEVEL_KEY, log_level_labels);
 	return &module;
 }

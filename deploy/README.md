@@ -1240,11 +1240,21 @@ scrape_configs:
 ## Logs
 
 Axis logs to standard error, one line per event, which every container
-runtime collects. `AXIS_LOG_FORMAT=json` writes each line as a JSON object
+runtime collects. Each line starts with the time in UTC with milliseconds
+(for example `2026-11-27T17:54:06.123Z`), then the level, the domain and the
+message. `AXIS_LOG_FORMAT=json` writes each line as a JSON object
 with exactly four members, `time`, `level`, `domain` and `message`; the
 message is the same text as in the plain format, so the same redaction
 applies (database URLs with their password replaced by `****`, tokens and
 passwords never written at all).
+
+`AXIS_LOG_LEVEL` sets the level at start. To change the daemon's level while
+it runs, for example to debug a problem without a restart, open **Settings**,
+find **Log level** under Web interface settings, and choose a level. The change
+takes effect at once, and one line in the log says so. Choose **As the
+configuration says** to go back to `AXIS_LOG_LEVEL`. The setting applies to
+`axisd` only: `axis-worker` and `axis-portal` take their level from their own
+configuration.
 
 ### When a program crashes
 

@@ -24,6 +24,7 @@ struct _AxisWebSettings
 	AxisWeb      *web;	/* set when the routes are registered */
 	guint         subscription;
 	guint         theme_subscription;
+	guint         log_level_subscription;
 	guint         pending;	/* dispatched, not yet answered */
 	gboolean      stopping;
 	gboolean      module_busy;	/* a module switch is being stored */

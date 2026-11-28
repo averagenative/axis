@@ -119,7 +119,7 @@ already on disk** (optional). You do not need any of them to look at your librar
 | What you see | What to do |
 | --- | --- |
 | Every page answers `503` | Axis is waiting for its database. Run `docker compose logs postgres`. A PostgreSQL older than 15 stops the start. |
-| The log has no "setup token" line | The log level is above warning, or an account exists already. Set `AXIS_LOG_LEVEL` to `warning` or lower and restart, or create the administrator from a secret file ([deployment notes](../deploy/README.md#the-first-administrator)). |
+| The log has no "setup token" line | The log level is above warning, or an account exists already. Set `AXIS_LOG_LEVEL` to `warning` or lower and restart (the setting **Log level** in Settings cannot help here, because it needs a login), or create the administrator from a secret file ([deployment notes](../deploy/README.md#the-first-administrator)). |
 | "The setup token is not correct. Copy the newest one from the Axis log." | Restarting Axis prints a new token. Use the newest line. |
 | "The filesystem is mounted read-only and has no marker yet." followed by a reason, and "Mount it read-write once so that Axis can write its marker; it may be read-only after that." | Axis cannot recognize this kind of disk without a marker. Take `:ro` off its line, restart, add the disk, and then put `:ro` back. |
 | A container cannot read your files | The container user must be allowed to read your media. See [User and group](../deploy/README.md#user-and-group). On a host with SELinux enforcing, see [SELinux](../deploy/README.md#selinux). |
