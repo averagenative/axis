@@ -198,8 +198,8 @@ always takes the newest. `podman run --rm --entrypoint cat <image>
 updates yt-dlp by itself: a newer one comes with a newer image, or from the
 setting "yt-dlp program" pointing at a copy you mount. `make
 container-debug` writes the split-off symbols (`axisd.debug`,
-`axis-worker.debug`) to `build/container-debug/` for symbolising crash
-reports.
+`axis-worker.debug`, `axis-portal.debug`) to `build/container-debug/` for
+reading crash reports (see "When a program crashes").
 
 `Containerfile` names Debian stable (slim) by digest, with the date the
 digest was read: the digest of the image index, which holds every
@@ -1245,6 +1245,48 @@ with exactly four members, `time`, `level`, `domain` and `message`; the
 message is the same text as in the plain format, so the same redaction
 applies (database URLs with their password replaced by `****`, tokens and
 passwords never written at all).
+
+### When a program crashes
+
+When `axisd`, `axis-worker` or `axis-portal` dies of a fault (a segmentation
+fault, a bus error, an illegal instruction, an arithmetic fault or an abort),
+it first writes a report to its log, in the log's format: one line with the
+signal, the address, the thread and the build, then one line for each frame
+of that thread's stack, as a file and an offset in it:
+
+    ERROR axis: crashed: signal 11 (SIGSEGV) at address 0x10 (nothing is mapped there), in thread pool-7 (id 41); build axisd 0.1.0 (abc1234). ...
+    ERROR axis: crash: frame 0: /usr/bin/axisd+0x1a2b3c (the instruction that faulted)
+    ERROR axis: crash: frame 1: /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0+0x7dd52
+
+The program then ends as it would have, and a restart policy starts it again.
+To turn the offsets in an Axis program into functions and lines, take the
+debug files of the same build (`make container-debug` at that commit writes
+`axisd.debug`, `axis-worker.debug` and `axis-portal.debug` to
+`build/container-debug/`) and run `eu-addr2line -f -i -e axisd.debug
+0x1a2b3c`. A thread whose own stack overflowed leaves no report.
+
+The report shows where the program died, not what was in its memory. For
+that you need a core dump, and the kernel writes those, not Axis: where they
+go is one setting of the host (`kernel.core_pattern`), shared by every
+container. To keep core dumps of Axis:
+
+1. On the host, set a pattern that is a path, for example `sysctl -w
+   kernel.core_pattern=/var/crash/core.%e.%p.%t`. The kernel opens that path
+   inside the container that crashed. A pattern that starts with `|` (apport,
+   systemd-coredump) hands the dump to a program on the host instead, and
+   what that program does with a container's dump is its own business;
+   Ubuntu's apport drops it.
+2. Mount a writable directory of the host at that path in the container (the
+   examples run with a read-only root, so nothing can be written elsewhere),
+   owned by the user Axis runs as.
+3. Leave the core size limit unlimited (`ulimits: core: -1` in Compose;
+   Docker's default already is, Podman's may not be).
+
+A core dump holds everything the program had in memory: session secrets, API
+keys, the database password. Keep that directory as private as the secrets
+directory, and remove dumps when you are done with them. One dump of `axisd`
+is some hundreds of megabytes. `gdb /usr/bin/axisd core.axisd.1.1764266045`
+with `axisd.debug` beside it reads one.
 
 ## Upgrading
 

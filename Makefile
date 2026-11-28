@@ -135,6 +135,7 @@ DEFINITION_OBJECT := $(OBJDIR)/gen/axis-definitions-resource.o
 # link into the worker.  A file joins it here, by name.
 CORE_SOURCES := \
 	$(SRCDIR)/api/axis-worker-proto.c \
+	$(SRCDIR)/core/axis-crash.c \
 	$(SRCDIR)/core/axis-log.c \
 	$(SRCDIR)/library/axis-library-name.c \
 	$(SRCDIR)/probe/axis-probe-describe.c \

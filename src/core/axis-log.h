@@ -144,6 +144,10 @@ axis_log_get_level(void);
 void
 axis_log_set_format(AxisLogFormat format);
 
+/* The format last set; safe in a signal handler (an atomic read). */
+AxisLogFormat
+axis_log_get_format(void);
+
 G_END_DECLS
 
 #endif /* AXIS_LOG_H */

@@ -243,3 +243,9 @@ axis_log_set_format(AxisLogFormat format)
 {
 	g_atomic_int_set(&axis_log_output_format, (gint)format);
 }
+
+AxisLogFormat
+axis_log_get_format(void)
+{
+	return (AxisLogFormat)g_atomic_int_get(&axis_log_output_format);
+}

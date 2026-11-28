@@ -27,6 +27,7 @@
 #include "axis-portal-app.h"
 #include "axis-portal-config.h"
 #include "axis-version.h"
+#include "core/axis-crash.h"
 #include "core/axis-log.h"
 
 #define TOKEN_VARIABLE "AXIS_PORTAL_TOKEN"
@@ -156,6 +157,8 @@ run(const AxisPortalConfig *config)
 
 	axis_log_init(config->log_level);
 	axis_log_set_format(config->log_format);
+	/* A fatal signal leaves its stack in the log (axis-crash.h). */
+	axis_crash_report_install("axis-portal", "axis-portal " AXIS_VERSION " (" AXIS_GIT_SHA ")");
 	g_message("axis-portal %s (%s) starts: %s", AXIS_VERSION, AXIS_GIT_SHA, settings);
 	if (config->service_links != NULL)
 		g_message("left aside the Kubernetes service links of a Service called axis-portal, which are not settings: "

@@ -24,6 +24,7 @@
 #include "core/axis-config.h"
 #include "core/axis-data-dir.h"
 #include "core/axis-error.h"
+#include "core/axis-crash.h"
 #include "core/axis-log.h"
 #include "core/axis-module.h"
 #include "core/axis-module-state.h"
@@ -1893,6 +1894,8 @@ main(int argc, char **argv)
 
 	axis_log_init(axis_config_get_log_level(config));
 	axis_log_set_format(axis_config_get_log_format(config));
+	/* A fatal signal leaves its stack in the log (axis-crash.h). */
+	axis_crash_report_install("axis", "axisd " AXIS_VERSION " (" AXIS_GIT_SHA ")");
 	/* The line shows the pool size in use; a size that cannot be used is refused later, with its reason. */
 	{
 		guint used = 0;

@@ -19,6 +19,7 @@
 #include "axis-version.h"
 #include "axis-worker-config.h"
 #include "axis-worker-private.h"
+#include "core/axis-crash.h"
 #include "core/axis-log.h"
 
 int
@@ -65,5 +66,7 @@ main(int argc, char **argv)
 		return axis_worker_work_healthcheck(config->state);
 
 	axis_log_init(config->log_level);
+	/* A fatal signal leaves its stack in the log (axis-crash.h). */
+	axis_crash_report_install("axis-worker", "axis-worker " AXIS_VERSION " (" AXIS_GIT_SHA ")");
 	return axis_worker_run(config);
 }
