@@ -1984,7 +1984,9 @@ test_answers(Fixture *fx, gconstpointer data)
 		g_assert_cmpint(N("SELECT count(*) FROM request"), ==, 0);
 	}
 
-	/* A poster: not held, then held; nothing is fetched for a requester. */
+	/* A poster: `art` alone fetches nothing, so it is not held; an answer
+	 * that shows the title has the daemon fetch it from the title's
+	 * provider, once, and it is held from then on. */
 	{
 		g_autofree gchar *art = g_strdup_printf("{\"proof\":\"%s\",\"id\":%" G_GINT64_FORMAT "}", robin, orchard);
 		g_autofree gchar *one = g_strdup_printf("{\"proof\":\"%s\",\"id\":%" G_GINT64_FORMAT "}", robin, orchard);
@@ -1994,17 +1996,16 @@ test_answers(Fixture *fx, gconstpointer data)
 
 		N("UPDATE meta_title SET poster_ref = '/p101.png' WHERE id = %" G_GINT64_FORMAT " RETURNING id", orchard);
 		g_free(expect(fx, "art", art, 404));
+		axis_test_pump_for(200);
+		g_assert_cmpuint(axis_test_plex_n_requests(fx->r->fa->images), ==, fetched);
 		{
 			g_autofree gchar *shown = expect(fx, "title", one, 200);
 
-			assert_holds(shown, "\"has_poster\":false");
+			assert_holds(shown, "\"has_poster\":true");
 		}
-		axis_test_pump_for(200);
-		g_assert_cmpuint(axis_test_plex_n_requests(fx->r->fa->images), ==, fetched);
-		/* The engine fetches it (an administrator looked at the title). */
-		g_assert_true(axis_meta_artwork_fetch(fx->r->meta, "fixture", "/p101.png", AXIS_META_ART_POSTER_SMALL, &hash,
-			&error));
-		g_assert_no_error(error);
+		g_assert_cmpuint(axis_test_plex_n_requests(fx->r->fa->images), ==, fetched + 1);
+		hash = axis_meta_artwork_find(fx->r->meta, "fixture", "/p101.png", AXIS_META_ART_POSTER_SMALL, FALSE);
+		g_assert_nonnull(hash);
 		reply = call(fx, "art", art);
 		assert_status(&reply, 200);
 		g_assert_cmpstr(axis_test_reply_header(&reply, "Content-Type"), ==, "image/png");

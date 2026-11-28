@@ -800,6 +800,13 @@ title_shown(
 	return FALSE;
 }
 
+/* How long an answer with titles waits for posters being fetched: at most
+ * POSTER_WAIT_ROUNDS times POSTER_WAIT_ROUND_US, 1.5 seconds, and no longer
+ * than POSTER_WAIT_IDLE_ROUNDS rounds without one more arriving. */
+#define POSTER_WAIT_ROUNDS   15
+#define POSTER_WAIT_ROUND_US 100000
+#define POSTER_WAIT_IDLE_ROUNDS 5
+
 /*
  * Writes @titles (stored records, borrowed) as "titles", or with @single the
  * one title as "title", with its seasons when it is a series.  Titles marked
@@ -859,10 +866,40 @@ write_titles(
 		            &requesters, error))
 			return FALSE;
 	}
-	/* Whether the daemon holds each poster.  Nothing is fetched on a
-	 * requester's account. */
-	if (titles->len > 0)
-		axis_meta_artwork_find_many(self->meta, providers, refs, titles->len, AXIS_META_ART_POSTER_SMALL, FALSE, hashes);
+	/* Each title's poster.  One the daemon does not hold is asked for from
+	 * the title's provider, in the background, and waited for a short while,
+	 * so that a search shows pictures the first time: the reference is the
+	 * provider's own, from the record the daemon stored, never a value of
+	 * the portal's, so what is fetched is that provider's picture of a title
+	 * the search or the list already brought, and nothing else.  A poster
+	 * that is stored, or that was refused lately, is not asked for again
+	 * (axis_meta_artwork_find_many()); what has not come in time is shown
+	 * the next time. */
+	if (titles->len > 0) {
+		guint round;
+
+		axis_meta_artwork_find_many(self->meta, providers, refs, titles->len, AXIS_META_ART_POSTER_SMALL, TRUE, hashes);
+		guint before = G_MAXUINT;
+		guint idle = 0;
+
+		for (round = 0; round < POSTER_WAIT_ROUNDS; round++) {
+			guint missing = 0;
+
+			for (i = 0; i < titles->len; i++)
+				missing += refs[i] != NULL && hashes[i] == NULL ? 1 : 0;
+			/* None to wait for, or none came for a while (a provider that
+			 * has no such picture, or is slow): the answer does not wait. */
+			idle = missing < before ? 0 : idle + 1;
+			before = missing;
+			if (missing == 0 || idle >= POSTER_WAIT_IDLE_ROUNDS)
+				break;
+			g_usleep(POSTER_WAIT_ROUND_US);
+			for (i = 0; i < titles->len; i++)
+				g_clear_pointer(&hashes[i], g_free);
+			axis_meta_artwork_find_many(self->meta, providers, refs, titles->len, AXIS_META_ART_POSTER_SMALL, FALSE,
+				hashes);
+		}
+	}
 
 	for (i = 0; i < titles->len; i++) {
 		const AxisMetaTitle *title = g_ptr_array_index(titles, i);

@@ -1901,7 +1901,7 @@ test_failure_words(Fixture *fx, gconstpointer data)
 	assert_status(&reply, 200);
 	assert_has(reply.body, "A download failed. Axis is looking again.");
 	assert_has(reply.body, "5 of 16 episodes");
-	assert_has(reply.body, "Series, seasons 1 and 2");
+	assert_has(reply.body, "TV, seasons 1 and 2");
 	assert_has(reply.body, "Waiting for approval");
 	/* Only the waiting one can be withdrawn. */
 	assert_has(reply.body, "action=\"/requests/reqCCCCCCCCCCCCCCCCCCC/withdraw\"");

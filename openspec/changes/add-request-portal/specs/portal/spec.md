@@ -184,7 +184,7 @@ Each operation SHALL answer with the members listed here and no others. A title 
 - **THEN** the request's `asked_at` and `changed_at` are when `robin` began to follow it, and the answer holds no time of `sam`'s
 
 ### Requirement: Posters come from the engine's own artwork by title, never by address
-The `art` operation SHALL take a title's `id` and SHALL answer with that title's poster from the artwork the daemon already holds, as an image of at most 4 MiB with its type, or 404 when the daemon holds none. It SHALL take no address, no file name and no artwork identifier, and SHALL fetch nothing from anywhere on the caller's account. The portal SHALL serve a poster only at `/art/<title id>`, to a logged-in person, and SHALL fetch nothing from any address but the daemon's.
+The `art` operation SHALL take a title's `id` and SHALL answer with that title's poster from the artwork the daemon already holds, as an image of at most 4 MiB with its type, or 404 when the daemon holds none. It SHALL take no address, no file name and no artwork identifier, and SHALL fetch nothing from anywhere on the caller's account. The portal SHALL serve a poster only at `/art/<title id>`, to a logged-in person, and SHALL fetch nothing from any address but the daemon's. An operation that answers with titles (`search`, `browse`, `title`) SHALL ask the title's provider, in the background, for each shown title's poster that the daemon does not hold, by the reference in the daemon's stored record and by nothing the caller sent, and SHALL wait at most 1.5 seconds for them before it answers; a poster that is held, or that the provider refused lately, SHALL NOT be asked for again.
 
 #### Scenario: A poster by title
 - **WHEN** `art` is called for a title whose poster the daemon holds
@@ -197,6 +197,10 @@ The `art` operation SHALL take a title's `id` and SHALL answer with that title's
 #### Scenario: Not held
 - **WHEN** `art` is called for a title whose poster was never downloaded
 - **THEN** the answer is 404, no outbound request is made for it, and the portal shows the title without a picture
+
+#### Scenario: A search brings its pictures
+- **WHEN** `title`, `search` or `browse` answers with a title whose poster the daemon does not hold
+- **THEN** the daemon asks the title's provider for that poster once, the answer says `has_poster` true when it arrived in time, and `art` serves it from then on
 
 ### Requirement: Searching for a title to request is bounded
 The `search` operation SHALL pass the query, of at most 100 characters, to the configured details provider as a search text and to nothing else, SHALL apply the same adult filter as the engine's own search, and SHALL answer from the daemon's stored results, marked `stale`, when the provider cannot be reached. The `title`, `art` and `request` operations SHALL answer a title that the adult filter excludes, a title whose adult mark is not known yet, and a title of a kind that cannot be requested now as a number never given. `browse` SHALL answer from the stored Discover lists, without the titles marked "Not interested", and SHALL never ask the provider. The same query for the same kind within 10 minutes SHALL be answered without asking the provider again.

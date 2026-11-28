@@ -118,7 +118,7 @@ kind_word(AxisPortalKind kind)
 static const gchar *
 kind_label(AxisPortalKind kind)
 {
-	return kind == AXIS_PORTAL_KIND_IS_SERIES ? "Series" : "Movie";
+	return kind == AXIS_PORTAL_KIND_IS_SERIES ? "TV" : "Movie";
 }
 
 static const gchar *
@@ -449,7 +449,7 @@ axis_portal_view_home(
 		g_string_append_printf(out, "<a%s href=\"/?kind=movie\">Movies</a>",
 			kind == AXIS_PORTAL_KIND_IS_MOVIE ? " class=\"here\"" : "");
 	if (hello->series)
-		g_string_append_printf(out, "<a%s href=\"/?kind=series\">Series</a>",
+		g_string_append_printf(out, "<a%s href=\"/?kind=series\">TV</a>",
 			kind == AXIS_PORTAL_KIND_IS_SERIES ? " class=\"here\"" : "");
 	g_string_append(out, "</nav>");
 	if (hello->lists[0] == NULL || list == NULL) {
@@ -504,9 +504,9 @@ axis_portal_view_search(
 		"<label>Name <input type=\"search\" name=\"q\" maxlength=\"100\" required value=\"");
 	axis_portal_view_escape(out, query);
 	g_string_append(out, "\"></label><label>Kind <select name=\"kind\">");
-	g_string_append_printf(out, "<option value=\"any\"%s>Movies and series</option>", kind < 0 ? " selected" : "");
+	g_string_append_printf(out, "<option value=\"any\"%s>Movies and TV</option>", kind < 0 ? " selected" : "");
 	g_string_append_printf(out, "<option value=\"movie\"%s>Movies</option>", kind == 0 ? " selected" : "");
-	g_string_append_printf(out, "<option value=\"series\"%s>Series</option>", kind == 1 ? " selected" : "");
+	g_string_append_printf(out, "<option value=\"series\"%s>TV</option>", kind == 1 ? " selected" : "");
 	g_string_append(out, "</select></label><button type=\"submit\">Search</button></form>");
 	if (titles != NULL) {
 		if (titles->stale)
@@ -745,7 +745,7 @@ axis_portal_view_requests(
 			g_string_append_printf(out, " (%d)", request->year);
 		g_string_append(out, "</td><td>");
 		if (request->kind == AXIS_PORTAL_KIND_IS_SERIES && request->seasons->len > 0) {
-			g_string_append(out, "Series, ");
+			g_string_append(out, "TV, ");
 			season_list(out, request->seasons);
 		} else {
 			g_string_append(out, kind_label(request->kind));
@@ -803,13 +803,14 @@ axis_portal_view_style(void)
 		"*{box-sizing:border-box}\n"
 		"body{margin:0;background:var(--bg);color:var(--text);font:16px/1.5 system-ui,sans-serif}\n"
 		"a{color:var(--link)}\n"
-		".top{display:flex;flex-wrap:wrap;gap:.75rem 1.25rem;align-items:center;padding:.75rem 1rem;"
+		".top{display:flex;flex-wrap:wrap;gap:.75rem 1.25rem;align-items:center;"
+		"padding:.75rem max(1rem,calc((100% - 70rem)/2 + 1rem));"
 		"background:var(--panel);border-bottom:1px solid var(--line)}\n"
 		".top nav{display:flex;gap:1rem}\n"
 		".top form{display:flex;gap:.5rem;align-items:center;margin:0}\n"
 		".brand{font-weight:700;color:var(--text);text-decoration:none}\n"
 		".who{display:flex;gap:.75rem;align-items:center;margin-left:auto}\n"
-		".quota{margin:0;padding:.4rem 1rem;color:var(--dim);font-size:.9rem;border-bottom:1px solid var(--line)}\n"
+		".quota{margin:0;padding:.4rem max(1rem,calc((100% - 70rem)/2 + 1rem));color:var(--dim);font-size:.9rem;border-bottom:1px solid var(--line)}\n"
 		"main{max-width:70rem;margin:0 auto;padding:1rem}\n"
 		"input,select,button{font:inherit;color:inherit;background:var(--bg);border:1px solid var(--line);"
 		"border-radius:.3rem;padding:.35rem .6rem}\n"
