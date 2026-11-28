@@ -771,6 +771,8 @@ typedef struct
 	gchar  *root_name;
 	gchar  *rel_path;
 	gchar  *state;	/* the file's index state now, nullable when it is gone */
+	gboolean kept;	/* a movie or an episode keeps it now */
+	gchar  *kept_how;	/* "brought" (brought over from Radarr or Sonarr), or NULL: by hand */
 } AxisConversionRunExcluded;
 
 void

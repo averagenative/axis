@@ -1270,6 +1270,22 @@ test_kept(Fixture *fx, gconstpointer data)
 	assert_contains(reply.body, "Kept: Axis does not replace this file");
 	assert_contains(reply.body, "Add these 2 files to the run");
 	assert_contains(reply.body, "/include-kept\"");
+	/* The crumbs are one line: links with " / " between, no paragraph
+	 * inside the paragraph. */
+	assert_contains(reply.body, "<a href=\"/conversions\">Conversions</a><span> / </span><a href=\"/conversions/runs\">");
+	/* Why each of them is kept, on the page of that reason. */
+	{
+		g_autofree gchar *left = g_strdup_printf("%s/left-out?reason=kept", path);
+		AxisTestReply why = get_as(fx, fx->admin, left);
+
+		g_assert_cmpuint(why.status, ==, 200);
+		assert_contains(why.body, "Why Axis keeps it");
+		assert_contains(why.body, "A kept file is one Axis leaves alone");
+		g_assert_true(strstr(why.body, "Brought over from Radarr or Sonarr") != NULL ||
+			strstr(why.body, "You chose &quot;Keep it by hand&quot;") != NULL ||
+			strstr(why.body, "You chose \"Keep it by hand\"") != NULL);
+		axis_test_reply_clear(&why);
+	}
 	assert_contains(reply.body, "1 movies and series, 1 files of the 3 looked at");
 	/* A run not started: nothing is converted until it is, and how is
 	 * chosen then; no box to tick here. */

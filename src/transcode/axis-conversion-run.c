@@ -102,8 +102,12 @@ axis_conversion_run_reason_help(const gchar *reason)
 	if (g_strcmp0(reason, "in_flight") == 0)
 		return "Someone asked for a conversion of it that has not ended yet; plan a new run when it has.";
 	if (g_strcmp0(reason, "kept") == 0)
-		return "Axis does not replace these files with another release. A run with \"Also convert files Axis keeps\" "
-			"converts them in place, and they stay kept. Or let Axis upgrade a file again on its links page.";
+		return "A kept file is one Axis leaves alone: it does not look for a better release of it and does not "
+			"replace it. A file is kept because it came over from Radarr or Sonarr (every file brought over starts "
+			"kept, so that Axis does not download your library again), or because you chose \"Keep it by hand\" for it. "
+			"A conversion run leaves kept files out unless you tell it to convert them: with \"Also convert files Axis "
+			"keeps\" it converts them in place, and they stay kept. To stop keeping one file, let Axis upgrade it again "
+			"on its links page.";
 	if (axis_estimate_reason_from_string(reason, &estimated))
 		return axis_estimate_reason_help(estimated);
 	return "";

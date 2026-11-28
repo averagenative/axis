@@ -350,19 +350,30 @@ done_text(const gchar *key)
 	return NULL;
 }
 
+/* " / " between two links of the crumbs: a span, since a paragraph inside
+ * the crumbs' paragraph ends it, and each link then stands on its own line. */
+static HtmxNode *
+crumb_separator(void)
+{
+	HtmxSpan *span = htmx_span_new();
+
+	htmx_node_set_text_content(HTMX_NODE(span), " / ");
+	return HTMX_NODE(span);
+}
+
 static HtmxNode *
 crumbs(gint64 run_id)
 {
 	HtmxP *p = htmx_p_new();
 
 	ADD(p, axis_web_browser_link("/conversions", "Conversions"));
-	ADD(p, axis_web_storage_text(NULL, " / "));
+	ADD(p, crumb_separator());
 	ADD(p, axis_web_browser_link("/conversions/runs", "Conversion runs"));
 	if (run_id > 0) {
 		g_autofree gchar *href = g_strdup_printf("/conversions/runs/%" G_GINT64_FORMAT, run_id);
 		g_autofree gchar *title = run_title(run_id);
 
-		ADD(p, axis_web_storage_text(NULL, " / "));
+		ADD(p, crumb_separator());
 		ADD(p, axis_web_browser_link(href, title));
 	}
 	return HTMX_NODE(p);
@@ -977,7 +988,13 @@ status_block(
 		htmx_element_set_attribute(HTMX_ELEMENT(block), "hx-trigger", STATUS_POLL);
 		htmx_element_set_attribute(HTMX_ELEMENT(block), "hx-swap", "outerHTML");
 	}
-	axis_web_browser_fact_node(facts, "State", state_badge(info->state));
+	/* A run that is on but asks for nothing now (conversion work is paused,
+	 * no worker, outside its hours) is waiting, not running: the reason is
+	 * in the notice above the bar. */
+	if (g_strcmp0(info->state, "running") == 0 && info->wait_text != NULL)
+		axis_web_browser_fact_node(facts, "State", axis_web_browser_badge("Waiting", "badge-warn"));
+	else
+		axis_web_browser_fact_node(facts, "State", state_badge(info->state));
 	if (g_strcmp0(info->state, "listing") == 0) {
 		g_autofree gchar *text = g_strdup_printf("%s%s%s", info->list_job_state != NULL &&
 			g_strcmp0(info->list_job_state, "running") == 0 ? "Being made" : "Waiting for its turn",
@@ -1946,7 +1963,15 @@ left_done(
 		{ "Size", AXIS_WEB_COL_SIZE },
 		{ NULL, 0 }
 	};
+	static const AxisWebColumn kept_columns[] = {
+		{ "File", AXIS_WEB_COL_NAME },
+		{ "Why Axis keeps it", AXIS_WEB_COL_TEXT },
+		{ "Library folder", AXIS_WEB_COL_TEXT },
+		{ "Size", AXIS_WEB_COL_SIZE },
+		{ NULL, 0 }
+	};
 	LeftWork *work = data;
+	gboolean kept = g_strcmp0(work->reason, "kept") == 0;
 	g_autoptr(HtmxDiv) content = htmx_div_new();
 	g_autofree gchar *label = NULL;
 	HtmxNode *card;
@@ -1963,7 +1988,7 @@ left_done(
 	if (work->list->len == 0) {
 		ADD(card, axis_web_storage_text("help", "There is no file left out for this reason."));
 	} else {
-		HtmxNode *table = axis_web_table_new("conversion-run-left-out", columns);
+		HtmxNode *table = axis_web_table_new("conversion-run-left-out", kept ? kept_columns : columns);
 		HtmxTbody *body = htmx_tbody_new();
 
 		for (i = 0; i < work->list->len; i++) {
@@ -1979,6 +2004,10 @@ left_done(
 			} else {
 				ADD(row, cell_text("(no longer in the library)"));
 			}
+			if (kept)
+				ADD(row, cell_text(!x->kept ? "Not kept any more: a new run would list it" :
+					g_strcmp0(x->kept_how, "brought") == 0 ? "Brought over from Radarr or Sonarr" :
+					"You chose \"Keep it by hand\" on its movie or series"));
 			ADD(row, cell_text(x->root_name));
 			ADD(row, cell_size(x->size));
 			ADD(body, row);

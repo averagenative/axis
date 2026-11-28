@@ -166,6 +166,7 @@ axis_conversion_run_excluded_free(AxisConversionRunExcluded *file)
 	g_free(file->root_name);
 	g_free(file->rel_path);
 	g_free(file->state);
+	g_free(file->kept_how);
 	g_free(file);
 }
 
@@ -863,7 +864,14 @@ axis_conversion_runs_excluded(
 	params[2] = size;
 	params[3] = file;
 	params[4] = n;
-	if (!exec(self, "SELECT x.file_id, x.size, lr.name, f.rel_path, f.state FROM conversion_run_excluded x"
+	if (!exec(self, "SELECT x.file_id, x.size, lr.name, f.rel_path, f.state,"
+	        " (EXISTS (SELECT 1 FROM movie_file kf WHERE kf.file_id = x.file_id AND kf.kept)"
+	        "  OR EXISTS (SELECT 1 FROM series_file ks WHERE ks.file_id = x.file_id AND ks.kept)),"
+	        " coalesce((SELECT kf.kept_how FROM movie_file kf WHERE kf.file_id = x.file_id AND kf.kept"
+	        "   ORDER BY kf.kept_how NULLS LAST LIMIT 1),"
+	        "  (SELECT ks.kept_how FROM series_file ks WHERE ks.file_id = x.file_id AND ks.kept"
+	        "   ORDER BY ks.kept_how NULLS LAST LIMIT 1))"
+	        " FROM conversion_run_excluded x"
 	        " LEFT JOIN library_file f ON f.id = x.file_id LEFT JOIN library_root lr ON lr.id = f.root_id"
 	        " WHERE x.run_id = $1::bigint AND x.reason = $2"
 	        " AND ($4::bigint <= 0 OR x.size < $3::bigint OR (x.size = $3::bigint AND x.file_id < $4::bigint))"
@@ -883,6 +891,8 @@ axis_conversion_runs_excluded(
 		x->root_name = text_at(result, i, 2);
 		x->rel_path = text_at(result, i, 3);
 		x->state = text_at(result, i, 4);
+		x->kept = g_strcmp0(axis_db_result_get_text(result, i, 5), "t") == 0;
+		x->kept_how = text_at(result, i, 6);
 		g_ptr_array_add(list, x);
 	}
 	*out = list;
