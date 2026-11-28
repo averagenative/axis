@@ -11,6 +11,7 @@
 
 /* Read from whichever thread logs; always access with g_atomic_int_*. */
 static gint axis_log_threshold = AXIS_LOG_LEVEL_INFO;
+static gint axis_log_configured = AXIS_LOG_LEVEL_INFO;
 static gint axis_log_output_format = AXIS_LOG_FORMAT_TEXT;
 
 static const gchar *const level_names[] = {
@@ -229,6 +230,7 @@ axis_log_writer(
 void
 axis_log_init(AxisLogLevel threshold)
 {
+	axis_log_set_configured_level(threshold);
 	axis_log_set_level(threshold);
 	g_log_set_writer_func(axis_log_writer, NULL, NULL);
 }
@@ -255,4 +257,16 @@ AxisLogFormat
 axis_log_get_format(void)
 {
 	return (AxisLogFormat)g_atomic_int_get(&axis_log_output_format);
+}
+
+void
+axis_log_set_configured_level(AxisLogLevel level)
+{
+	g_atomic_int_set(&axis_log_configured, (gint)level);
+}
+
+AxisLogLevel
+axis_log_get_configured_level(void)
+{
+	return (AxisLogLevel)g_atomic_int_get(&axis_log_configured);
 }

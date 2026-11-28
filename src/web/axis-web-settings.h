@@ -73,7 +73,7 @@ axis_web_settings_new(
 /**
  * axis_web_settings_sync:
  *
- * Applies the settings this module follows (the session idle limit) now.
+ * Applies the settings this module follows (the session idle limit, the default theme and the log level) now.
  * Call it once the store is loaded.
  */
 void

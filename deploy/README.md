@@ -1248,6 +1248,14 @@ message is the same text as in the plain format, so the same redaction
 applies (database URLs with their password replaced by `****`, tokens and
 passwords never written at all).
 
+`AXIS_LOG_LEVEL` sets the level at start. To change the daemon's level while
+it runs, for example to debug a problem without a restart, open **Settings**,
+find **Log level** under Web interface settings, and choose a level. The change
+takes effect at once, and one line in the log says so. Choose **As the
+configuration says** to go back to `AXIS_LOG_LEVEL`. The setting applies to
+`axisd` only: `axis-worker` and `axis-portal` take their level from their own
+configuration.
+
 ### When a program crashes
 
 When `axisd`, `axis-worker` or `axis-portal` dies of a fault (a segmentation

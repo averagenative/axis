@@ -135,6 +135,20 @@ axis_log_format_json(
 void
 axis_log_init(AxisLogLevel threshold);
 
+/**
+ * axis_log_set_configured_level:
+ * @level: the level the configuration asks for
+ *
+ * Remembers the configured level (axis_log_init() does it) so that a
+ * setting that overrides the level can say what the configuration holds
+ * and go back to it.  It does not change the level in use.
+ */
+void
+axis_log_set_configured_level(AxisLogLevel level);
+
+AxisLogLevel
+axis_log_get_configured_level(void);
+
 void
 axis_log_set_level(AxisLogLevel threshold);
 

@@ -26,6 +26,7 @@
 #include "web/axis-session-store.h"
 #include "web/axis-web.h"
 #include "web/axis-web-auth.h"
+#include "core/axis-log.h"
 #include "web/axis-web-settings.h"
 #include "web/axis-web-theme.h"
 
@@ -137,6 +138,8 @@ fixture_setup(Fixture *fx, gconstpointer data)
 	axis_test_log_reset();
 	axis_session_store_set_idle_seconds(30 * 24 * 3600);
 	axis_web_theme_set_default(NULL);
+	axis_log_set_configured_level(AXIS_LOG_LEVEL_INFO);
+	axis_log_set_level(AXIS_LOG_LEVEL_INFO);
 
 	fx->db = axis_test_db_new();
 	if (fx->db == NULL)
@@ -204,6 +207,8 @@ fixture_setup(Fixture *fx, gconstpointer data)
 static void
 fixture_teardown(Fixture *fx, gconstpointer data)
 {
+	axis_log_set_configured_level(AXIS_LOG_LEVEL_INFO);
+	axis_log_set_level(AXIS_LOG_LEVEL_INFO);
 	axis_session_store_set_idle_seconds(30 * 24 * 3600);
 	axis_web_theme_set_default(NULL);
 	if (fx->db == NULL) {
@@ -1258,6 +1263,76 @@ test_default_theme_setting(Fixture *fx, gconstpointer data)
 	assert_theme(fx, NULL, "/login", "midnight");
 }
 
+/* ── The log level setting ──────────────────────────────────────── */
+
+static void
+test_log_level_setting(Fixture *fx, gconstpointer data)
+{
+	g_autofree gchar *token = NULL;
+	g_autofree gchar *stored = NULL;
+	AxisTestReply reply;
+
+	SKIP_WITHOUT_DB(fx);
+	token = csrf_for(fx, fx->admin);
+
+	/* The configuration says warning; the setting says nothing yet. */
+	axis_log_set_configured_level(AXIS_LOG_LEVEL_WARNING);
+	axis_log_set_level(AXIS_LOG_LEVEL_WARNING);
+	axis_web_settings_sync(fx->web_settings);
+	g_assert_cmpint(axis_log_get_level(), ==, AXIS_LOG_LEVEL_WARNING);
+	stored = axis_settings_get_string(fx->settings, "web.log_level");
+	g_assert_cmpstr(stored, ==, "config");
+
+	/* It is a choice with the labels, "as the configuration says" first and selected. */
+	reply = get_as(fx, fx->admin, "/admin/settings");
+	assert_contains(reply.body, "name=\"web.log_level\"");
+	assert_contains(reply.body, "<option selected=\"selected\" value=\"config\">As the configuration says</option>");
+	assert_contains(reply.body, "value=\"debug\">Debug</option>");
+	assert_contains(reply.body, "value=\"info\">Info</option>");
+	assert_contains(reply.body, "value=\"warning\">Warning</option>");
+	assert_contains(reply.body, "value=\"error\">Error</option>");
+	axis_test_reply_clear(&reply);
+
+	/* A level that is not one is refused and changes nothing. */
+	reply = post_as(fx, fx->admin, "/admin/settings/web", token, "web.log_level=trace");
+	g_assert_cmpuint(reply.status, ==, 400);
+	axis_test_reply_clear(&reply);
+	axis_test_pump_for(50);
+	g_assert_cmpint(axis_log_get_level(), ==, AXIS_LOG_LEVEL_WARNING);
+
+	/* Debug applies at once, and one line says so. */
+	reply = post_as(fx, fx->admin, "/admin/settings/web", token, "web.log_level=debug");
+	assert_redirect(&reply, "/admin/settings?done=saved");
+	axis_test_reply_clear(&reply);
+	axis_test_pump_for(50);
+	g_assert_cmpint(axis_log_get_level(), ==, AXIS_LOG_LEVEL_DEBUG);
+	g_assert_cmpuint(axis_test_log_count(G_LOG_LEVEL_MESSAGE,
+		"log level: now debug (set in Settings); the configuration says warning"), ==, 1);
+
+	/* A higher level applies too (the line is written before it does). */
+	reply = post_as(fx, fx->admin, "/admin/settings/web", token, "web.log_level=error");
+	assert_redirect(&reply, "/admin/settings?done=saved");
+	axis_test_reply_clear(&reply);
+	axis_test_pump_for(50);
+	g_assert_cmpint(axis_log_get_level(), ==, AXIS_LOG_LEVEL_ERROR);
+	g_assert_cmpuint(axis_test_log_count(G_LOG_LEVEL_MESSAGE, "log level: now error (set in Settings)*"), ==, 1);
+
+	/* The stored level is applied again by the sync the daemon runs after
+	 * it loads the settings (a new process starts at the configured level). */
+	axis_log_set_level(AXIS_LOG_LEVEL_WARNING);
+	axis_web_settings_sync(fx->web_settings);
+	g_assert_cmpint(axis_log_get_level(), ==, AXIS_LOG_LEVEL_ERROR);
+
+	/* "As the configuration says" goes back to the configuration's level. */
+	reply = post_as(fx, fx->admin, "/admin/settings/web", token, "web.log_level=config");
+	assert_redirect(&reply, "/admin/settings?done=saved");
+	axis_test_reply_clear(&reply);
+	axis_test_pump_for(50);
+	g_assert_cmpint(axis_log_get_level(), ==, AXIS_LOG_LEVEL_WARNING);
+	g_assert_cmpuint(axis_test_log_count(G_LOG_LEVEL_MESSAGE,
+		"log level: now warning (set in Settings); the configuration says warning"), ==, 1);
+}
+
 /* The forms of Settings and Modules come back to the module's card or row. */
 static void
 test_back_to_place(Fixture *fx, gconstpointer data)
@@ -1297,6 +1372,7 @@ main(int argc, char **argv)
 	ADD("settings/unknown-modules", test_unknown_and_unsettable_modules);
 	ADD("settings/session-idle", test_session_idle_setting);
 	ADD("settings/default-theme", test_default_theme_setting);
+	ADD("settings/log-level", test_log_level_setting);
 
 	ADD("access/non-administrator", test_non_administrator_is_refused);
 	ADD("access/forged-requests", test_forged_requests_are_refused);
