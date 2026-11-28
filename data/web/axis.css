@@ -4272,13 +4272,9 @@ a.folder-mark:hover {
 	margin-top: 1rem;
 }
 
-/* The volume warning: one paragraph per pair of volumes. */
-.import-volume-warning > p {
+/* The volume notices: one box per download client. */
+.import-volume-warning > .notice > p {
 	margin: 0;
-}
-
-.import-volume-warning > p + p {
-	margin-top: 0.5rem;
 }
 
 /* The Naming page: the fields in a narrow column, the preview as wide as

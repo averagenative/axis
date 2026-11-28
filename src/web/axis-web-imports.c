@@ -119,19 +119,25 @@ axis_web_imports_volume_warnings(const GPtrArray *warnings)
 	if (warnings == NULL || warnings->len == 0)
 		return NULL;
 	block = htmx_div_new();
-	htmx_element_add_class(HTMX_ELEMENT(block), "notice");
-	htmx_element_add_class(HTMX_ELEMENT(block), "notice-error");
 	htmx_element_add_class(HTMX_ELEMENT(block), "import-volume-warning");
-	htmx_element_set_attribute(HTMX_ELEMENT(block), "role", "status");
 	for (i = 0; i < warnings->len && i < 10; i++) {
-		g_autofree gchar *text = axis_import_volume_warning_text(g_ptr_array_index(warnings, i));
+		const AxisImportVolumeWarning *warning = g_ptr_array_index(warnings, i);
+		g_autofree gchar *text = axis_import_volume_warning_text(warning);
+		HtmxDiv *notice = htmx_div_new();
 		HtmxP *p = htmx_p_new();
 
+		/* A torrent left seeding costs space: a warning.  Any other costs
+		 * the time of a copy: only information. */
+		htmx_element_add_class(HTMX_ELEMENT(notice), "notice");
+		if (axis_import_volume_warning_is_costly(warning))
+			htmx_element_add_class(HTMX_ELEMENT(notice), "notice-error");
+		htmx_element_set_attribute(HTMX_ELEMENT(notice), "role", "status");
 		htmx_node_set_text_content(HTMX_NODE(p), text);
-		axis_web_storage_add(block, p);
+		axis_web_storage_add(notice, p);
+		axis_web_storage_add(block, notice);
 	}
 	if (warnings->len > 10) {
-		g_autofree gchar *more = g_strdup_printf("And %u more such pairs.", warnings->len - 10);
+		g_autofree gchar *more = g_strdup_printf("And %u more download clients.", warnings->len - 10);
 		HtmxP *p = htmx_p_new();
 
 		htmx_node_set_text_content(HTMX_NODE(p), more);

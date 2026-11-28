@@ -847,7 +847,7 @@ test_pages(Fixture *fx, gconstpointer data)
 	reply = get_as(fx, fx->admin, "/downloads/clients");
 	g_assert_cmpuint(reply.status, ==, 200);
 	assert_contains(reply.body, "import-volume-warning");
-	assert_contains(reply.body, "is copied");
+	assert_contains(reply.body, "as much space again while the torrent seeds");
 	assert_csp_clean(reply.body);
 	save_page("volume-warning.html", reply.body);
 	axis_test_reply_clear(&reply);
