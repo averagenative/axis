@@ -2891,8 +2891,9 @@ test_home_page_budget(Fixture *fx, gconstpointer data)
 /*
  * Found by the security review (F4): a follower was told when the person who
  * made the request asked for it.  Following shows a request, and a follower
- * is now told when they asked (began to follow); the person who made it is
- * told when they did.
+ * is now told when they asked (began to follow), and of a change no time
+ * before that (a waiting request's changed_at was when it was made); the
+ * person who made it is told when they did.
  */
 static void
 test_follower_asked_at(Fixture *fx, gconstpointer data)
@@ -2909,6 +2910,11 @@ test_follower_asked_at(Fixture *fx, gconstpointer data)
 		AXIS_TEST_REQUESTS_NOW_US / G_USEC_PER_SEC);
 	g_autofree gchar *followed_at = g_strdup_printf("\"asked_at\":%" G_GINT64_FORMAT ",",
 		(AXIS_TEST_REQUESTS_NOW_US + 2 * G_TIME_SPAN_HOUR) / G_USEC_PER_SEC);
+	g_autofree gchar *made_changed = g_strdup_printf("\"changed_at\":%" G_GINT64_FORMAT "}",
+		AXIS_TEST_REQUESTS_NOW_US / G_USEC_PER_SEC);
+	g_autofree gchar *followed_changed = g_strdup_printf("\"changed_at\":%" G_GINT64_FORMAT "}",
+		(AXIS_TEST_REQUESTS_NOW_US + 2 * G_TIME_SPAN_HOUR) / G_USEC_PER_SEC);
+	g_autofree gchar *made_time = g_strdup_printf("%" G_GINT64_FORMAT, AXIS_TEST_REQUESTS_NOW_US / G_USEC_PER_SEC);
 	gint64 orchard = film(fx, AXIS_TEST_REQUESTS_ORCHARD);
 
 	made = ask_movie(fx, sam, orchard, 200);
@@ -2919,10 +2925,13 @@ test_follower_asked_at(Fixture *fx, gconstpointer data)
 	of_robin = expect(fx, "requests", robin_list, 200);
 	assert_holds(of_robin, "\"mine\":\"followed\"");
 	assert_holds(of_robin, followed_at);
-	assert_lacks(of_robin, made_at);
+	assert_holds(of_robin, followed_changed);
+	/* No time of sam's at all. */
+	assert_lacks(of_robin, made_time);
 	of_sam = expect(fx, "requests", sam_list, 200);
 	assert_holds(of_sam, "\"mine\":\"made\"");
 	assert_holds(of_sam, made_at);
+	assert_holds(of_sam, made_changed);
 	axis_requests_set_clock(fx->r->requests, AXIS_TEST_REQUESTS_NOW_US);
 }
 

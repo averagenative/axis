@@ -695,11 +695,16 @@ fill_view(
 	if (info->state == AXIS_REQUEST_STATE_DECLINED)
 		view->reason = info->decline_reason;
 	view->mine = info->requested_by == viewer ? "made" : "followed";
-	/* A follower is told when they asked (began to follow), not when the
-	 * person who made it did (after the security review, F4). */
-	view->asked_at = (info->requested_by != viewer && info->followed_us != 0 ? info->followed_us : info->created_us) /
-		G_USEC_PER_SEC;
+	view->asked_at = info->created_us / G_USEC_PER_SEC;
 	view->changed_at = (info->decided_us != 0 ? info->decided_us : info->created_us) / G_USEC_PER_SEC;
+	/* A follower is told when they asked (began to follow), and of a change
+	 * no time before that: not when the person who made it asked, nor when
+	 * it was approved before they followed (after the security review,
+	 * F4). */
+	if (info->requested_by != viewer && info->followed_us != 0) {
+		view->asked_at = info->followed_us / G_USEC_PER_SEC;
+		view->changed_at = MAX(view->changed_at, view->asked_at);
+	}
 }
 
 static void
