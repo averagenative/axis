@@ -34,9 +34,17 @@
  *   5. the query and, for a POST, the form are read by axis-portal-form.h or
  *      refused whole (400; a form that is not urlencoded 415); a POST that
  *      the browser reports as coming from another site is refused (403);
- *   6. /login: the form carries a token bound to the cookie set with it and
- *      to a key only this process has (403); failed logins from one address
- *      are refused here, before the daemon is asked (429);
+ *   6. /login: the form carries a token bound to the cookie set with it, to
+ *      the time it was given and to a key only this process has, and given
+ *      at most AXIS_PORTAL_FORM_MAX_AGE_S ago (403); a form that cannot be a
+ *      username and a password is answered 400 and counted nowhere.  A
+ *      login with a device cookie this portal sealed for the username typed
+ *      (a remembered browser) spends the calls of remembered browsers, and
+ *      each username's share of them (429), and nothing of an address's.
+ *      Any other login: failed logins from one address are refused here
+ *      (429), and it spends the calls that logins share, from every address
+ *      together, and its address's share of them, whatever the daemon then
+ *      answers (429);
  *   7. every other path needs the session cookie, once (two are none), and
  *      sealed by this portal: its value is the proof and a keyed hash of the
  *      proof under a key derived from the portal's token, checked in
@@ -44,15 +52,19 @@
  *      daemon is asked nothing.  A session the daemon has not confirmed in
  *      the last 15 minutes is held to its address's count of cookies the
  *      daemon did not know (429), and its first call to the daemon spends
- *      one of the calls that such sessions and logins share, from every
- *      address together (429);
+ *      one of the calls that such sessions share, from every address
+ *      together (429): a stranger, who cannot seal a cookie, spends none of
+ *      them;
  *   8. a POST carries the CSRF token derived from that cookie (403);
  *   9. the route's own values are checked (a search with a query that the
  *      browser reports as from another site is 403), and only then is the
  *      daemon asked, through the eleven operations' own members
- *      (axis-portal-wire.h) and nothing else.  A search or a request post is
- *      counted for the session (429) once the daemon has said whose session
- *      it is, before the search or the request is asked for.
+ *      (axis-portal-wire.h) and nothing else.  Every call for a session
+ *      takes one of the session's own (429), and a session the daemon
+ *      refused by the person's budget is held off for the time it said.  A
+ *      search or a request post is counted for the session (429) once the
+ *      daemon has said whose session it is, before the search or the
+ *      request is asked for.
  *
  * What the daemon answers is read by the strict readers of
  * axis-portal-wire.h and written by axis-portal-view.h; a failure of the
@@ -122,11 +134,47 @@ G_BEGIN_DECLS
 #define AXIS_PORTAL_CONFIRMED_SECONDS     (15 * 60)
 #define AXIS_PORTAL_CONFIRMED_MAX_KEPT    4096
 
-/* Calls to the daemon for sessions it has not confirmed, and logins, from
- * every address together, in any minute: well under the 600 operations a
- * minute the daemon allows the portal's token, so that the sessions it has
- * confirmed keep the rest whoever sends what. */
-#define AXIS_PORTAL_UNCONFIRMED_A_MINUTE  120
+/*
+ * The calls to the daemon that are not a confirmed session's, each in any
+ * minute (the generic cell rate algorithm: as many of them at once as that).
+ * After the security review (F1), three budgets of their own, so that what
+ * a stranger can spend is apart from what a remembered browser and a
+ * returning session need:
+ *
+ *  - logins without a remembered browser's cookie, from every address
+ *    together, and of them from one client address (an IPv6 address by its
+ *    /64): every call the daemon answers counts, whatever it answers (429
+ *    and 503 too), so one address cannot spend the others' for them;
+ *  - logins with a device cookie this portal sealed for the username typed:
+ *    a stranger cannot make one.  Not held to an address's count of failed
+ *    logins or to its share; each username has a share of its own;
+ *  - sessions the daemon has not confirmed lately: their cookies are sealed,
+ *    so a stranger cannot spend these either.
+ *
+ * Together 240, under the 600 operations a minute the daemon allows the
+ * portal's token: one person (AXIS_PORTAL_PERSON_OPS_A_MINUTE, 240, at the
+ * daemon) and all three spent leave 120 for everyone else's confirmed
+ * sessions, and strangers alone, who can spend only the first, leave 480.
+ */
+#define AXIS_PORTAL_LOGINS_A_MINUTE                 120
+#define AXIS_PORTAL_LOGINS_A_MINUTE_FROM_ADDRESS    10
+#define AXIS_PORTAL_REMEMBERED_A_MINUTE             60
+#define AXIS_PORTAL_REMEMBERED_A_MINUTE_FOR_NAME    5
+#define AXIS_PORTAL_UNCONFIRMED_A_MINUTE            60
+
+/* Each session's calls to the daemon, in any minute (after the security
+ * review, F2 and F5).  A poster the portal holds, for a person the daemon
+ * knew within the last 30 seconds, is no call.  A home page whose 20
+ * posters the portal does not hold is hello, browse and 20 art, 22 calls,
+ * and whoami is asked at most every 30 seconds: ten such pages a minute are
+ * 222.  The daemon's budget for a person is as large; a session it refused
+ * by that budget is held off here for as long as it said. */
+#define AXIS_PORTAL_SESSION_CALLS_A_MINUTE          240
+
+/* The most keys of each table of shares above (an address, a username, a
+ * session).  A key whose share is whole again goes when room is needed; a
+ * new key waits while there is none. */
+#define AXIS_PORTAL_SHARES_MAX_KEYS                 4096
 
 /* Pages waiting for the daemon at once; one more is answered 503.  As many
  * as the calls that may be in flight: a page waits for one at a time. */
@@ -148,7 +196,9 @@ G_BEGIN_DECLS
  * the old one is none. */
 #define AXIS_PORTAL_SEAL_KEY_PURPOSE      "axis portal cookie v1"
 
-/* The pre-login form's cookie lives long enough to fill the form in. */
+/* The pre-login form's cookie lives long enough to fill the form in, and
+ * its token is refused once it is older (it carries its time inside its
+ * keyed hash: after the security review, F3). */
 #define AXIS_PORTAL_FORM_MAX_AGE_S        1800
 #define AXIS_PORTAL_SESSION_MAX_AGE_S     (90 * 24 * 3600)
 #define AXIS_PORTAL_DEVICE_MAX_AGE_S      (90 * 24 * 3600)
@@ -196,6 +246,24 @@ gchar *
 axis_portal_session_cookie(
 	const gchar *token,
 	const gchar *proof
+);
+
+/**
+ * axis_portal_device_cookie:
+ * @token: the portal's token
+ * @name: the username the daemon logged in
+ * @device: the device value the daemon gave with it
+ *
+ * Returns: (transfer full): the device cookie's value, as the portal with
+ *   @token sets it: "<device>.<seal>", the seal a keyed hash of @device and
+ *   of @name as a login's username is read (a secret).  A login whose
+ *   username is another name does not count it.
+ */
+gchar *
+axis_portal_device_cookie(
+	const gchar *token,
+	const gchar *name,
+	const gchar *device
 );
 
 /* ── For tests ────────────────────────────────────────────────── */

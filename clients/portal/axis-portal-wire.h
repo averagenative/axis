@@ -311,6 +311,18 @@ axis_portal_wire_split_session_cookie(
 	gchar       **seal
 );
 
+/* The two parts of a device cookie's value: "<device>.<seal>", the device
+ * value as the daemon gave it (axis_portal_wire_is_device()) and a keyed
+ * hash in the form of a proof (axis-portal-app.h), split at the last dot;
+ * %FALSE, and nothing set, for any other value.  @device and @seal: (out)
+ * (transfer full): secrets.  (After the security review, F1.) */
+gboolean
+axis_portal_wire_split_device_cookie(
+	const gchar  *value,
+	gchar       **device,
+	gchar       **seal
+);
+
 /* Whether @text is a request's identifier in that form. */
 gboolean
 axis_portal_wire_is_request_id(const gchar *text);

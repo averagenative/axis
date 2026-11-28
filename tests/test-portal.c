@@ -183,7 +183,15 @@ default_answer(
 		*json = "{\"protocol\":1,\"kinds\":[\"movie\",\"series\"],\"lists\":[\"popular\",\"trending\"],"
 			"\"show_names\":true}";
 	} else if (strcmp(op, "login") == 0) {
-		if (strstr(body, "\"username\":\"robin\"") != NULL && strstr(body, "\"" ROBIN_PASSWORD "\"") != NULL) {
+		/* What the daemon answers at once, with no password work: a username
+		 * that a stranger has delayed, and every login while eight wait. */
+		if (strstr(body, "\"username\":\"zz-delayed\"") != NULL) {
+			*status = 429;
+			*json = "{\"error\":\"throttled\",\"message\":\"too many failed logins; wait\",\"wait\":60}";
+		} else if (strstr(body, "\"username\":\"zz-busy\"") != NULL) {
+			*status = 503;
+			*json = "{\"error\":\"busy\",\"message\":\"the daemon cannot do this now; try again\",\"wait\":5}";
+		} else if (strstr(body, "\"username\":\"robin\"") != NULL && strstr(body, "\"" ROBIN_PASSWORD "\"") != NULL) {
 			g_snprintf(login, sizeof(login), "{\"proof\":\"%s\",\"name\":\"robin\",\"expires_in\":2592000,"
 				"\"device\":\"zzdev1.robin-device-value\"}", fx->robin);
 			*json = login;
@@ -643,6 +651,50 @@ login_from(
 	if (cookie_out != NULL)
 		*cookie_out = reply.status == 303 ? set_cookie(&reply, session_name(fx)) : NULL;
 	return reply;
+}
+
+/* As login_from(), from a browser that sends @device ("name=value",
+ * nullable) beside the form's cookie: a remembered one. */
+static AxisTestReply
+login_with_device(
+	Fixture      *fx,
+	const gchar  *username,
+	const gchar  *password,
+	const gchar  *from,
+	const gchar  *device,
+	gchar       **cookie_out
+){
+	AxisTestReply page = send_from(fx, "GET", "/login", NULL, NULL, from, NULL);
+	g_autofree gchar *form_cookie = NULL;
+	g_autofree gchar *cookies = NULL;
+	g_autofree gchar *token = NULL;
+	g_autofree gchar *user = g_uri_escape_string(username, NULL, FALSE);
+	g_autofree gchar *pass = g_uri_escape_string(password, NULL, FALSE);
+	g_autofree gchar *form = NULL;
+	AxisTestReply reply;
+
+	assert_status(&page, 200);
+	form_cookie = set_cookie(&page, form_name(fx));
+	token = hidden_value(page.body, "_csrf");
+	g_assert_nonnull(form_cookie);
+	g_assert_nonnull(token);
+	axis_test_reply_clear(&page);
+	cookies = device != NULL ? g_strdup_printf("%s; %s", form_cookie, device) : g_strdup(form_cookie);
+	form = g_strdup_printf("_csrf=%s&username=%s&password=%s", token, user, pass);
+	reply = send_from(fx, "POST", "/login", cookies, form, from, NULL);
+	if (cookie_out != NULL)
+		*cookie_out = reply.status == 303 ? set_cookie(&reply, session_name(fx)) : NULL;
+	return reply;
+}
+
+/* The device cookie ("name=value") the portal sets for robin's device
+ * value, which the stand-in gives with every login of robin. */
+static gchar *
+robin_device(Fixture *fx)
+{
+	g_autofree gchar *value = axis_portal_device_cookie(fx->token, "robin", "zzdev1.robin-device-value");
+
+	return g_strdup_printf("%s=%s", AXIS_PORTAL_DEVICE_COOKIE, value);
 }
 
 /* Logs robin in; the session cookie. */
@@ -2039,10 +2091,21 @@ test_cookie(Fixture *fx, gconstpointer data)
 	g_assert_cmpuint(strlen(value), ==, AXIS_PORTAL_WIRE_SESSION_COOKIE_LEN);
 	g_assert_true(g_str_has_prefix(value, fx->robin));
 	assert_lacks(value, fx->token);
-	/* The device value: kept by the browser, never sent to another site. */
+	/* The device value: kept by the browser, never sent to another site,
+	 * and sealed by the portal for the username it was given with (after
+	 * the security review, F1). */
 	device = set_cookie_line(&reply, AXIS_PORTAL_DEVICE_COOKIE);
-	g_assert_cmpstr(device, ==, AXIS_PORTAL_DEVICE_COOKIE "=zzdev1.robin-device-value; Path=/; Max-Age=7776000; "
-		"HttpOnly; SameSite=Strict; Secure");
+	{
+		g_autofree gchar *sealed_value = axis_portal_device_cookie(fx->token, "robin", "zzdev1.robin-device-value");
+		g_autofree gchar *for_sam = axis_portal_device_cookie(fx->token, "sam", "zzdev1.robin-device-value");
+		g_autofree gchar *wanted = g_strdup_printf("%s=%s; Path=/; Max-Age=7776000; HttpOnly; SameSite=Strict; Secure",
+			AXIS_PORTAL_DEVICE_COOKIE, sealed_value);
+
+		g_assert_cmpstr(device, ==, wanted);
+		g_assert_true(g_str_has_prefix(sealed_value, "zzdev1.robin-device-value."));
+		g_assert_cmpstr(sealed_value, !=, for_sam);
+		assert_lacks(sealed_value, fx->token);
+	}
 	/* The pre-login form's cookie is spent. */
 	form_line = set_cookie_line(&reply, AXIS_PORTAL_FORM_COOKIE);
 	g_assert_cmpstr(form_line, ==, AXIS_PORTAL_FORM_COOKIE "=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict; Secure");
@@ -2056,31 +2119,41 @@ test_cookie(Fixture *fx, gconstpointer data)
 	g_assert_true(g_str_has_suffix(line, "; Path=/; Max-Age=1800; HttpOnly; SameSite=Strict; Secure"));
 	axis_test_reply_clear(&reply);
 
-	/* A device value the browser kept goes back with its next login, as it
-	 * is; one that is not in the form of one is not sent at all. */
+	/* A device cookie the browser kept goes back to the daemon with its
+	 * next login, as the device value the daemon gave, when this portal
+	 * sealed it for the username typed (as a login reads it: "Robin" is
+	 * robin).  One that is not in the form of one, one the portal did not
+	 * seal (the bare device value, as a portal before the review set it),
+	 * and one sealed for another name are not sent at all. */
 	{
-		g_autofree gchar *form_cookie = NULL;
-		g_autofree gchar *token = NULL;
-		g_autofree gchar *cookies = NULL;
-		g_autofree gchar *form = NULL;
+		g_autofree gchar *robins = robin_device(fx);
+		g_autofree gchar *sams_value = axis_portal_device_cookie(fx->token, "sam", "zzdev1.robin-device-value");
+		g_autofree gchar *other_token = fill43("zzAnotherPortalToken");
+		g_autofree gchar *other_value = axis_portal_device_cookie(other_token, "robin", "zzdev1.robin-device-value");
+		gchar *refused[4];
+		guint i;
 
-		reply = get(fx, "/login", NULL);
-		form_cookie = set_cookie(&reply, AXIS_PORTAL_FORM_COOKIE);
-		token = hidden_value(reply.body, "_csrf");
-		axis_test_reply_clear(&reply);
-		form = g_strdup_printf("_csrf=%s&username=robin&password=" ROBIN_PASSWORD, token);
-		cookies = g_strdup_printf("%s; %s=zzdev1.robin-device-value", form_cookie, AXIS_PORTAL_DEVICE_COOKIE);
-		reply = post(fx, "/login", cookies, form);
+		reply = login_with_device(fx, "robin", ROBIN_PASSWORD, NULL, robins, NULL);
 		assert_status(&reply, 303);
 		axis_test_reply_clear(&reply);
 		assert_has(last_call(fx, "login")->body, "\"device\":\"zzdev1.robin-device-value\"");
+		assert_lacks(last_call(fx, "login")->body, strrchr(robins, '.'));
 		g_assert_true(last_call(fx, "login")->valid);
-		g_clear_pointer(&cookies, g_free);
-		cookies = g_strdup_printf("%s; %s=\"zz device\"", form_cookie, AXIS_PORTAL_DEVICE_COOKIE);
-		reply = post(fx, "/login", cookies, form);
-		assert_status(&reply, 303);
+		reply = login_with_device(fx, "Robin", ROBIN_PASSWORD, NULL, robins, NULL);
 		axis_test_reply_clear(&reply);
-		assert_lacks(last_call(fx, "login")->body, "device");
+		assert_has(last_call(fx, "login")->body, "\"device\":\"zzdev1.robin-device-value\"");
+
+		refused[0] = g_strdup_printf("%s=\"zz device\"", AXIS_PORTAL_DEVICE_COOKIE);
+		refused[1] = g_strdup_printf("%s=zzdev1.robin-device-value", AXIS_PORTAL_DEVICE_COOKIE);
+		refused[2] = g_strdup_printf("%s=%s", AXIS_PORTAL_DEVICE_COOKIE, sams_value);
+		refused[3] = g_strdup_printf("%s=%s", AXIS_PORTAL_DEVICE_COOKIE, other_value);
+		for (i = 0; i < G_N_ELEMENTS(refused); i++) {
+			reply = login_with_device(fx, "robin", ROBIN_PASSWORD, NULL, refused[i], NULL);
+			assert_status(&reply, 303);
+			axis_test_reply_clear(&reply);
+			assert_lacks(last_call(fx, "login")->body, "device");
+			g_free(refused[i]);
+		}
 	}
 }
 
@@ -2317,8 +2390,10 @@ test_open_redirect(Fixture *fx, gconstpointer data)
 	static const gchar *const kept[] = { "/requests", "/title/7", "/search?q=lantern&kind=movie", "/?kind=series", NULL };
 	guint i;
 
+	/* (Each from an address of its own: an address has ten logins a minute.) */
 	for (i = 0; ignored[i] != NULL; i++) {
-		AxisTestReply reply = login_from(fx, "robin", ROBIN_PASSWORD, NULL, ignored[i], NULL);
+		g_autofree gchar *from = g_strdup_printf("198.51.100.%u", 130 + i);
+		AxisTestReply reply = login_from(fx, "robin", ROBIN_PASSWORD, from, ignored[i], NULL);
 
 		assert_status(&reply, 303);
 		if (g_strcmp0(axis_test_reply_header(&reply, "Location"), "/") != 0)
@@ -2326,7 +2401,8 @@ test_open_redirect(Fixture *fx, gconstpointer data)
 		axis_test_reply_clear(&reply);
 	}
 	for (i = 0; kept[i] != NULL; i++) {
-		AxisTestReply reply = login_from(fx, "robin", ROBIN_PASSWORD, NULL, kept[i], NULL);
+		g_autofree gchar *from = g_strdup_printf("198.51.100.%u", 160 + i);
+		AxisTestReply reply = login_from(fx, "robin", ROBIN_PASSWORD, from, kept[i], NULL);
 
 		assert_status(&reply, 303);
 		g_assert_cmpstr(axis_test_reply_header(&reply, "Location"), ==, kept[i]);
@@ -2728,14 +2804,17 @@ test_login_flood(Fixture *fx, gconstpointer data)
 {
 	guint refused = 0;
 	guint failed = 0;
+	guint minute;
 	guint i;
 
+	/* At once from one address: its share of the calls that logins share
+	 * (after the security review, F1), and nothing more. */
 	for (i = 0; i < 100; i++) {
 		AxisTestReply reply = login_from(fx, "robin", "a wrong password", "198.51.100.20", NULL, NULL);
 
 		if (reply.status == 429) {
 			g_assert_nonnull(axis_test_reply_header(&reply, "Retry-After"));
-			assert_has(reply.body, "There were too many failed logins.");
+			assert_has(reply.body, "There were too many logins from your address.");
 			refused++;
 		} else {
 			assert_status(&reply, 401);
@@ -2744,9 +2823,36 @@ test_login_flood(Fixture *fx, gconstpointer data)
 		}
 		axis_test_reply_clear(&reply);
 	}
-	g_assert_cmpuint(asked(fx, "login"), <=, AXIS_PORTAL_LOGIN_FREE_FAILURES + 1);
+	/* (The clock runs: a call of the share comes back after six seconds,
+	 * far longer than the loop takes, but it may.) */
+	g_assert_cmpuint(asked(fx, "login"), >=, AXIS_PORTAL_LOGINS_A_MINUTE_FROM_ADDRESS);
+	g_assert_cmpuint(asked(fx, "login"), <=, AXIS_PORTAL_LOGINS_A_MINUTE_FROM_ADDRESS + 1);
 	g_assert_cmpuint(failed, ==, asked(fx, "login"));
-	g_assert_cmpuint(refused, >=, 100 - AXIS_PORTAL_LOGIN_FREE_FAILURES - 1);
+	g_assert_cmpuint(refused, ==, 100 - failed);
+	assert_has(log_text->str, "login: refused 198.51.100.20, which sent 10 logins in a minute");
+
+	/* Minute after minute: the free failures of the address and one more
+	 * are asked about; then the address is in its delay, and refused
+	 * before the daemon is asked, whatever its share. */
+	for (minute = 1; minute <= 3 && asked(fx, "login") <= AXIS_PORTAL_LOGIN_FREE_FAILURES; minute++) {
+		axis_portal_app_set_time_offset(fx->app, (gint64)minute * 61 * G_USEC_PER_SEC);
+		for (i = 0; i < AXIS_PORTAL_LOGINS_A_MINUTE_FROM_ADDRESS && asked(fx, "login") <= AXIS_PORTAL_LOGIN_FREE_FAILURES;
+		     i++) {
+			AxisTestReply reply = login_from(fx, "robin", "a wrong password", "198.51.100.20", NULL, NULL);
+
+			assert_status(&reply, 401);
+			axis_test_reply_clear(&reply);
+		}
+	}
+	g_assert_cmpuint(asked(fx, "login"), ==, AXIS_PORTAL_LOGIN_FREE_FAILURES + 1);
+	for (i = 0; i < 5; i++) {
+		AxisTestReply reply = login_from(fx, "robin", "a wrong password", "198.51.100.20", NULL, NULL);
+
+		assert_status(&reply, 429);
+		assert_has(reply.body, "There were too many failed logins.");
+		axis_test_reply_clear(&reply);
+	}
+	g_assert_cmpuint(asked(fx, "login"), ==, AXIS_PORTAL_LOGIN_FREE_FAILURES + 1);
 	assert_has(log_text->str, "login: refused 198.51.100.20, which has too many failed logins");
 
 	/* Even the right password, from that address; another address, and
@@ -2765,7 +2871,8 @@ test_login_flood(Fixture *fx, gconstpointer data)
 		g_free(cookie);
 		axis_test_reply_clear(&reply);
 	}
-	/* An IPv6 address counts by its /64. */
+	/* An IPv6 address counts by its /64, for its share as for its failed
+	 * logins. */
 	for (i = 0; i < 40; i++) {
 		g_autofree gchar *from = g_strdup_printf("2001:db8:7:7::%x", i + 1);
 		AxisTestReply reply = login_from(fx, "robin", "a wrong password", from, NULL, NULL);
@@ -2782,7 +2889,7 @@ test_login_flood(Fixture *fx, gconstpointer data)
 		axis_test_reply_clear(&reply);
 	}
 	/* The delay ends. */
-	axis_portal_app_set_time_offset(fx->app, AXIS_PORTAL_THROTTLE_MAX_US + G_USEC_PER_SEC);
+	axis_portal_app_set_time_offset(fx->app, 4 * 61 * G_USEC_PER_SEC + AXIS_PORTAL_THROTTLE_MAX_US + G_USEC_PER_SEC);
 	{
 		AxisTestReply reply = login_from(fx, "robin", ROBIN_PASSWORD, "198.51.100.20", NULL, NULL);
 
@@ -2799,20 +2906,25 @@ test_login_flood(Fixture *fx, gconstpointer data)
 		axis_test_reply_clear(&reply);
 	}
 	/* And the daemon's own limit (for a username that a stranger spent) is
-	 * not counted against the address: it is asked every time. */
+	 * not a failure of the address: once the address's share comes back,
+	 * the daemon is asked again, as often as the share allows, minute after
+	 * minute.  Each of its answers took one of the share. */
 	{
 		guint before = asked(fx, "login");
 
-		script(fx, "login", 429, "{\"error\":\"throttled\",\"message\":\"x\",\"wait\":60}");
-		for (i = 0; i < AXIS_PORTAL_LOGIN_FREE_FAILURES + 5; i++) {
-			AxisTestReply reply = login_from(fx, "robin", ROBIN_PASSWORD, "198.51.100.40", NULL, NULL);
+		for (minute = 0; minute < 3; minute++) {
+			axis_portal_app_set_time_offset(fx->app, (gint64)(minute + 5) * 61 * G_USEC_PER_SEC +
+				AXIS_PORTAL_THROTTLE_MAX_US);
+			for (i = 0; i < AXIS_PORTAL_LOGINS_A_MINUTE_FROM_ADDRESS + 5; i++) {
+				AxisTestReply reply = login_from(fx, "zz-delayed", ROBIN_PASSWORD, "198.51.100.40", NULL, NULL);
 
-			assert_status(&reply, 429);
-			assert_has(reply.body, "There were too many failed logins.");
-			axis_test_reply_clear(&reply);
+				assert_status(&reply, 429);
+				assert_has(reply.body, i < AXIS_PORTAL_LOGINS_A_MINUTE_FROM_ADDRESS ?
+					"There were too many failed logins." : "There were too many logins from your address.");
+				axis_test_reply_clear(&reply);
+			}
 		}
-		g_assert_cmpuint(asked(fx, "login") - before, ==, AXIS_PORTAL_LOGIN_FREE_FAILURES + 5);
-		g_hash_table_remove(fx->script, "login");
+		g_assert_cmpuint(asked(fx, "login") - before, ==, 3 * AXIS_PORTAL_LOGINS_A_MINUTE_FROM_ADDRESS);
 	}
 
 	/* A stranger who presents session cookies that the portal sealed and
@@ -2979,9 +3091,12 @@ test_one_device_misbehaves(Fixture *fx, gconstpointer data)
 }
 
 /* Found by the review of P3 (S1): calls for sessions the daemon has not
- * confirmed, and logins, from every address together, are a share of the
- * daemon's calls; a flood of them from many addresses leaves the rest to the
- * sessions it has confirmed. */
+ * confirmed, from every address together, are a part of the daemon's calls;
+ * a flood of them from many addresses leaves the rest to the sessions it has
+ * confirmed.  Since the security review (F1) they are a part of their own:
+ * their cookies are sealed, so whoever sends them logged in once (a
+ * requester's sessions that were logged out, say), and logins do not spend
+ * them, nor they the logins'. */
 static void
 test_shared_calls(Fixture *fx, gconstpointer data)
 {
@@ -3012,7 +3127,6 @@ test_shared_calls(Fixture *fx, gconstpointer data)
 		}
 		axis_test_reply_clear(&reply);
 	}
-	/* (login_robin() spent one.) */
 	g_assert_cmpuint(asked(fx, NULL) - before, <=, AXIS_PORTAL_UNCONFIRMED_A_MINUTE);
 	g_assert_cmpuint(refused, >=, 60);
 	assert_has(log_text->str, "that the daemon has not confirmed lately");
@@ -3026,26 +3140,470 @@ test_shared_calls(Fixture *fx, gconstpointer data)
 		assert_status(&reply, 200);
 		axis_test_reply_clear(&reply);
 	}
-	/* A login spends the same calls: refused here, the daemon not asked. */
+	/* A login does not spend these calls, so it is asked about. */
 	{
 		guint logins = asked(fx, "login");
 		AxisTestReply reply;
 
 		axis_portal_app_set_time_offset(fx->app, start - g_get_monotonic_time());
 		reply = login_from(fx, "robin", ROBIN_PASSWORD, "198.51.100.30", NULL, NULL);
-		assert_status(&reply, 429);
-		assert_has(reply.body, "There are too many logins at the moment.");
-		axis_test_reply_clear(&reply);
-		g_assert_cmpuint(asked(fx, "login"), ==, logins);
-	}
-	/* A minute later there are calls again. */
-	axis_portal_app_set_time_offset(fx->app, start - g_get_monotonic_time() + G_GINT64_CONSTANT(61) * G_USEC_PER_SEC);
-	{
-		AxisTestReply reply = login_from(fx, "robin", ROBIN_PASSWORD, "198.51.100.30", NULL, NULL);
-
 		assert_status(&reply, 303);
 		axis_test_reply_clear(&reply);
+		g_assert_cmpuint(asked(fx, "login"), ==, logins + 1);
 	}
+	/* A minute later there are calls again for a session nobody confirmed
+	 * lately. */
+	axis_portal_app_set_time_offset(fx->app, start - g_get_monotonic_time() + G_GINT64_CONSTANT(61) * G_USEC_PER_SEC);
+	{
+		g_autofree gchar *sam = sealed(fx, fx->sam);
+		AxisTestReply reply = send_from(fx, "GET", "/requests", sam, NULL, "198.51.100.31", NULL);
+
+		assert_status(&reply, 200);
+		axis_test_reply_clear(&reply);
+	}
+}
+
+/* Spec (portal): Strangers at many addresses -- after the security review
+ * (F1, F6), with a stranger that can be one: logins, from one address and
+ * then from many, each of them answered at once by the daemon with 429 (the
+ * username is delayed) or 503 (eight logins wait).  One address spends its
+ * own share only; many spend the calls that logins share, and then a login
+ * is refused with the time to wait before the daemon is asked.  Throughout,
+ * another address's login is served while there are calls, and a remembered
+ * browser, a session the daemon confirmed and one it has not confirmed
+ * lately are served. */
+static void
+test_strangers(Fixture *fx, gconstpointer data)
+{
+	static const gchar *const names[] = { "zz-delayed", "zz-busy" };
+	g_autofree gchar *device = NULL;
+	g_autofree gchar *robin = NULL;
+	g_autofree gchar *sam = sealed(fx, fx->sam);
+	gint64 start;
+	AxisTestReply reply;
+	guint before;
+	guint n;
+	guint i;
+
+	reply = login_from(fx, "robin", ROBIN_PASSWORD, "198.51.100.10", NULL, &robin);
+	assert_status(&reply, 303);
+	axis_test_reply_clear(&reply);
+	device = robin_device(fx);
+
+	/* One address, at the stand-in's two answers in turn: its share, and
+	 * nothing more.  (The clock runs: a call of a share comes back after
+	 * six seconds, far longer than the loop takes.) */
+	for (n = 0; n < G_N_ELEMENTS(names); n++) {
+		g_autofree gchar *from = g_strdup_printf("198.51.100.%u", 50 + n);
+		guint refused = 0;
+
+		before = asked(fx, "login");
+		for (i = 0; i < 200; i++) {
+			reply = login_from(fx, names[n], "whatever-it-is", from, NULL, NULL);
+			if (strstr(reply.body, "too many logins from your address") != NULL) {
+				assert_status(&reply, 429);
+				g_assert_nonnull(axis_test_reply_header(&reply, "Retry-After"));
+				refused++;
+			} else {
+				assert_status(&reply, n == 0 ? 429 : 503);
+			}
+			axis_test_reply_clear(&reply);
+		}
+		g_assert_cmpuint(asked(fx, "login") - before, >=, AXIS_PORTAL_LOGINS_A_MINUTE_FROM_ADDRESS);
+		g_assert_cmpuint(asked(fx, "login") - before, <=, AXIS_PORTAL_LOGINS_A_MINUTE_FROM_ADDRESS + 1);
+		g_assert_cmpuint(refused, ==, 200 - (asked(fx, "login") - before));
+		/* Another address's login is asked about, and served. */
+		before = asked(fx, "login");
+		reply = login_from(fx, "robin", ROBIN_PASSWORD, "203.0.113.201", NULL, NULL);
+		assert_status(&reply, 303);
+		axis_test_reply_clear(&reply);
+		g_assert_cmpuint(asked(fx, "login"), ==, before + 1);
+	}
+	assert_has(log_text->str, "login: refused 198.51.100.50, which sent 10 logins in a minute");
+
+	/* Many addresses, each at its share, until the calls that logins share
+	 * are spent: a login from yet another address is then refused with the
+	 * time to wait, and the daemon is not asked.  (From here the portal's
+	 * clock stands still at @start, so that no call comes back.) */
+	start = g_get_monotonic_time();
+	before = asked(fx, "login");
+	for (i = 0; i < 2 * AXIS_PORTAL_LOGINS_A_MINUTE; i++) {
+		g_autofree gchar *from = g_strdup_printf("2001:db8:%x::1", 0x100 + i / AXIS_PORTAL_LOGINS_A_MINUTE_FROM_ADDRESS);
+
+		axis_portal_app_set_time_offset(fx->app, start - g_get_monotonic_time());
+		reply = login_from(fx, names[i % 2], "whatever-it-is", from, NULL, NULL);
+		axis_test_reply_clear(&reply);
+	}
+	g_assert_cmpuint(asked(fx, "login") - before, <=, AXIS_PORTAL_LOGINS_A_MINUTE);
+	before = asked(fx, "login");
+	axis_portal_app_set_time_offset(fx->app, start - g_get_monotonic_time());
+	reply = login_from(fx, "robin", ROBIN_PASSWORD, "203.0.113.202", NULL, NULL);
+	assert_status(&reply, 429);
+	assert_has(reply.body, "There are too many logins at the moment.");
+	g_assert_nonnull(axis_test_reply_header(&reply, "Retry-After"));
+	axis_test_reply_clear(&reply);
+	g_assert_cmpuint(asked(fx, "login"), ==, before);
+
+	/* The owner still gets in: robin's remembered browser, from yet another
+	 * address, is asked about and served. */
+	axis_portal_app_set_time_offset(fx->app, start - g_get_monotonic_time());
+	reply = login_with_device(fx, "robin", ROBIN_PASSWORD, "203.0.113.203", device, NULL);
+	assert_status(&reply, 303);
+	axis_test_reply_clear(&reply);
+	g_assert_cmpuint(asked(fx, "login"), ==, before + 1);
+	assert_has(last_call(fx, "login")->body, "\"device\":\"zzdev1.robin-device-value\"");
+	/* robin's session, which the daemon confirmed, and sam's, which it has
+	 * not: both served. */
+	axis_portal_app_set_time_offset(fx->app, start - g_get_monotonic_time());
+	reply = send_from(fx, "GET", "/requests", robin, NULL, "198.51.100.10", NULL);
+	assert_status(&reply, 200);
+	axis_test_reply_clear(&reply);
+	reply = send_from(fx, "GET", "/requests", sam, NULL, "203.0.113.204", NULL);
+	assert_status(&reply, 200);
+	axis_test_reply_clear(&reply);
+	/* A minute later there are calls again. */
+	axis_portal_app_set_time_offset(fx->app, start - g_get_monotonic_time() + G_GINT64_CONSTANT(61) * G_USEC_PER_SEC);
+	reply = login_from(fx, "robin", ROBIN_PASSWORD, "203.0.113.202", NULL, NULL);
+	assert_status(&reply, 303);
+	axis_test_reply_clear(&reply);
+}
+
+/* Found by the security review (F3): a login post with the form's token
+ * and no username or password (or one that cannot be one) was counted as a
+ * failed login of its address, without asking the daemon, so that one form
+ * posted from 10,000 addresses filled the address table for nothing.  It is
+ * answered 400 with the form again, the daemon is not asked, and nothing is
+ * counted for the address. */
+static void
+test_login_not_a_login(Fixture *fx, gconstpointer data)
+{
+	static const gchar *const from = "198.51.100.120";
+	AxisTestReply page = send_from(fx, "GET", "/login", NULL, NULL, from, NULL);
+	g_autofree gchar *form_cookie = set_cookie(&page, form_name(fx));
+	g_autofree gchar *token = hidden_value(page.body, "_csrf");
+	g_autofree gchar *long_name = g_strnfill(AXIS_PORTAL_USERNAME_MAX_BYTES + 1, 'r');
+	gchar *forms[4];
+	AxisTestReply reply;
+	guint i;
+	guint j;
+
+	axis_test_reply_clear(&page);
+	forms[0] = g_strdup_printf("_csrf=%s", token);
+	forms[1] = g_strdup_printf("_csrf=%s&username=robin", token);
+	forms[2] = g_strdup_printf("_csrf=%s&username=robin&password=", token);
+	forms[3] = g_strdup_printf("_csrf=%s&username=%s&password=x", token, long_name);
+	for (i = 0; i < 2 * AXIS_PORTAL_LOGIN_FREE_FAILURES; i++) {
+		for (j = 0; j < G_N_ELEMENTS(forms); j++) {
+			reply = send_from(fx, "POST", "/login", form_cookie, forms[j], from, NULL);
+			assert_status(&reply, 400);
+			assert_has(reply.body, "Enter your username and your password.");
+			assert_has(reply.body, "name=\"password\"");
+			axis_test_reply_clear(&reply);
+		}
+	}
+	g_assert_cmpuint(asked(fx, NULL), ==, 0);
+	assert_lacks(log_text->str, "login: failed");
+	assert_lacks(log_text->str, "login: refused");
+	/* Nothing was counted for the address: a wrong password from it is its
+	 * first failure, and the right one is asked about and served. */
+	reply = login_from(fx, "robin", "a wrong password", from, NULL, NULL);
+	assert_status(&reply, 401);
+	axis_test_reply_clear(&reply);
+	reply = login_from(fx, "robin", ROBIN_PASSWORD, from, NULL, NULL);
+	assert_status(&reply, 303);
+	axis_test_reply_clear(&reply);
+	g_assert_cmpuint(asked(fx, "login"), ==, 2);
+	for (j = 0; j < G_N_ELEMENTS(forms); j++)
+		g_free(forms[j]);
+}
+
+/* Found by the security review (F3): the login form's token was a keyed
+ * hash of its cookie alone, so one GET /login gave a cookie and a token that
+ * worked from every address until the portal restarted (the cookie's
+ * Max-Age is only the browser's).  The token carries the time it was given
+ * inside its hash, and is refused once it is older than the form's cookie
+ * lives; a time written over is refused too. */
+static void
+test_login_form_expires(Fixture *fx, gconstpointer data)
+{
+	gint64 minute = G_GINT64_CONSTANT(60) * G_USEC_PER_SEC;
+	AxisTestReply reply;
+	guint before;
+	guint i;
+
+	for (i = 0; i < 2; i++) {
+		g_autofree gchar *form_cookie = NULL;
+		g_autofree gchar *token = NULL;
+		g_autofree gchar *form = NULL;
+		gint64 opened = (gint64)i * 61 * minute;
+
+		axis_portal_app_set_time_offset(fx->app, opened);
+		reply = get(fx, "/login", NULL);
+		form_cookie = set_cookie(&reply, form_name(fx));
+		token = hidden_value(reply.body, "_csrf");
+		axis_test_reply_clear(&reply);
+		form = g_strdup_printf("_csrf=%s&username=robin&password=" ROBIN_PASSWORD, token);
+		before = asked(fx, NULL);
+		axis_portal_app_set_time_offset(fx->app, opened + (i == 0 ? 29 : 31) * minute);
+		reply = post(fx, "/login", form_cookie, form);
+		if (i == 0) {
+			/* 29 minutes after the form was given: a login. */
+			assert_status(&reply, 303);
+			g_assert_cmpuint(asked(fx, "login"), ==, before + 1);
+		} else {
+			/* 31: refused as a post that cannot be verified, and the daemon
+			 * is not asked. */
+			assert_status(&reply, 403);
+			assert_has(reply.body, "Load the page again");
+			g_assert_cmpuint(asked(fx, NULL), ==, before);
+		}
+		axis_test_reply_clear(&reply);
+
+		if (i == 1) {
+			/* The same hash with a later time, and the hash alone, as the
+			 * token was before: refused. */
+			g_autofree gchar *later = g_strdup_printf("%" G_GINT64_FORMAT "%s",
+				g_ascii_strtoll(token, NULL, 10) + 31 * 60, strchr(token, '.'));
+			g_autofree gchar *moved = g_strdup_printf("_csrf=%s&username=robin&password=" ROBIN_PASSWORD, later);
+			g_autofree gchar *bare = g_strdup_printf("_csrf=%s&username=robin&password=" ROBIN_PASSWORD,
+				strchr(token, '.') + 1);
+
+			g_assert_nonnull(strchr(token, '.'));
+			reply = post(fx, "/login", form_cookie, moved);
+			assert_status(&reply, 403);
+			axis_test_reply_clear(&reply);
+			reply = post(fx, "/login", form_cookie, bare);
+			assert_status(&reply, 403);
+			axis_test_reply_clear(&reply);
+			g_assert_cmpuint(asked(fx, NULL), ==, before);
+			/* The form loaded again, with the cookie the browser kept: a new
+			 * token, and a login. */
+			reply = send_from(fx, "GET", "/login", form_cookie, NULL, NULL, NULL);
+			g_clear_pointer(&token, g_free);
+			token = hidden_value(reply.body, "_csrf");
+			axis_test_reply_clear(&reply);
+			g_clear_pointer(&form, g_free);
+			form = g_strdup_printf("_csrf=%s&username=robin&password=" ROBIN_PASSWORD, token);
+			reply = post(fx, "/login", form_cookie, form);
+			assert_status(&reply, 303);
+			axis_test_reply_clear(&reply);
+		}
+	}
+}
+
+/* Found by the security review (F3, with F1): once the portal's table of
+ * failed logins holds 10,000 addresses, every address it has no room for
+ * counts on one shared count, which a stranger can keep in its delay; the
+ * address throttle came first, so a remembered browser was refused with
+ * everyone else.  A login with a device cookie this portal sealed for the
+ * username is held to no address's count, and is served.  (The table is
+ * filled as a stranger now must fill it: with logins the daemon answers,
+ * one from each IPv6 /64, at the pace the portal allows.) */
+static void
+test_full_table(Fixture *fx, gconstpointer data)
+{
+	g_autofree gchar *device = NULL;
+	g_autofree gchar *form_cookie = NULL;
+	g_autofree gchar *token = NULL;
+	gint64 offset = 0;
+	guint statuses[2] = { 0, 0 };
+	AxisTestReply reply;
+	guint before;
+	guint i;
+
+	reply = login_from(fx, "robin", ROBIN_PASSWORD, NULL, NULL, NULL);
+	assert_status(&reply, 303);
+	axis_test_reply_clear(&reply);
+	device = robin_device(fx);
+	before = asked(fx, "login");
+	for (i = 0; i < AXIS_PORTAL_THROTTLE_MAX_KEYS; i++) {
+		g_autofree gchar *from = g_strdup_printf("2001:db8:%x:%x::1", (i >> 16) & 0xffff, i & 0xffff);
+		g_autofree gchar *form = NULL;
+
+		/* A minute for each of the logins' minutes, and a form for each
+		 * twenty-five of them. */
+		if (i % AXIS_PORTAL_LOGINS_A_MINUTE == 0) {
+			offset += G_GINT64_CONSTANT(61) * G_USEC_PER_SEC;
+			axis_portal_app_set_time_offset(fx->app, offset);
+		}
+		if (i % (25 * AXIS_PORTAL_LOGINS_A_MINUTE) == 0) {
+			g_clear_pointer(&form_cookie, g_free);
+			g_clear_pointer(&token, g_free);
+			reply = get(fx, "/login", NULL);
+			form_cookie = set_cookie(&reply, form_name(fx));
+			token = hidden_value(reply.body, "_csrf");
+			axis_test_reply_clear(&reply);
+		}
+		form = g_strdup_printf("_csrf=%s&username=zz-stranger&password=zz-a-guess", token);
+		reply = send_from(fx, "POST", "/login", form_cookie, form, from, NULL);
+		assert_status(&reply, 401);
+		axis_test_reply_clear(&reply);
+	}
+	g_assert_cmpuint(asked(fx, "login") - before, ==, AXIS_PORTAL_THROTTLE_MAX_KEYS);
+	/* From /64s the table has no room for: one shared count, which the
+	 * stranger's failures put in its delay. */
+	for (i = 0; i < AXIS_PORTAL_LOGIN_FREE_FAILURES + 5; i++) {
+		g_autofree gchar *from = g_strdup_printf("2001:db8:ffff:%x::1", i + 1);
+
+		reply = login_from(fx, "zz-stranger", "zz-a-guess", from, NULL, NULL);
+		g_assert_true(reply.status == 401 || reply.status == 429);
+		statuses[reply.status == 429]++;
+		axis_test_reply_clear(&reply);
+	}
+	g_assert_cmpuint(statuses[0], ==, AXIS_PORTAL_LOGIN_FREE_FAILURES + 1);
+	g_assert_cmpuint(statuses[1], ==, 4);
+	/* robin, with the right password, from an address never seen: on that
+	 * count, refused, and the daemon is not asked. */
+	before = asked(fx, "login");
+	reply = login_from(fx, "robin", ROBIN_PASSWORD, "198.51.100.77", NULL, NULL);
+	assert_status(&reply, 429);
+	assert_has(reply.body, "There were too many failed logins.");
+	axis_test_reply_clear(&reply);
+	g_assert_cmpuint(asked(fx, "login"), ==, before);
+	/* robin's remembered browser, from another address never seen: asked
+	 * about, with the device value, and served. */
+	reply = login_with_device(fx, "robin", ROBIN_PASSWORD, "2001:db8:aaaa:1::5", device, NULL);
+	assert_status(&reply, 303);
+	axis_test_reply_clear(&reply);
+	g_assert_cmpuint(asked(fx, "login"), ==, before + 1);
+	assert_has(last_call(fx, "login")->body, "\"device\":\"zzdev1.robin-device-value\"");
+}
+
+/* A poster as the stand-in daemon answers art, for any title. */
+static void
+script_poster(Fixture *fx)
+{
+	static const gchar png[] = "\x89PNG\r\n\x1a\nzz-a-made-up-picture";
+	Answer *poster = g_new0(Answer, 1);
+
+	poster->status = 200;
+	poster->type = g_strdup("image/png");
+	poster->body = g_memdup2(png, sizeof(png));
+	poster->length = sizeof(png) - 1;
+	g_hash_table_replace(fx->script, g_strdup("art"), poster);
+}
+
+/* Found by the security review (F2): a confirmed session's pages had no
+ * limit of their own at the portal, so one requester loading pages fast
+ * spent the token's operations at the daemon for everyone.  Each session
+ * has AXIS_PORTAL_SESSION_CALLS_A_MINUTE calls a minute; a poster the
+ * portal holds is none; a session the daemon refused by the person's
+ * budget asks nothing more for the time the daemon said; another session is
+ * not held to either. */
+static void
+test_session_calls(Fixture *fx, gconstpointer data)
+{
+	g_autofree gchar *robin = login_robin(fx);
+	g_autofree gchar *sam = sealed(fx, fx->sam);
+	gint64 start;
+	AxisTestReply reply;
+	guint refused = 0;
+	guint before;
+	guint i;
+
+	script_poster(fx);
+	reply = get(fx, "/art/3", robin);
+	assert_status(&reply, 200);
+	axis_test_reply_clear(&reply);
+
+	/* (The portal's clock stands still at @start.) */
+	start = g_get_monotonic_time();
+	before = asked(fx, NULL);
+	for (i = 0; i < AXIS_PORTAL_SESSION_CALLS_A_MINUTE + 60; i++) {
+		axis_portal_app_set_time_offset(fx->app, start - g_get_monotonic_time());
+		reply = get(fx, "/title/3", robin);
+		if (reply.status == 429) {
+			assert_has(reply.body, "There were too many requests.");
+			g_assert_nonnull(axis_test_reply_header(&reply, "Retry-After"));
+			assert_has(reply.body, "Back to the lists");
+			refused++;
+		} else {
+			assert_status(&reply, 200);
+		}
+		axis_test_reply_clear(&reply);
+	}
+	g_assert_cmpuint(asked(fx, NULL) - before, <=, AXIS_PORTAL_SESSION_CALLS_A_MINUTE);
+	g_assert_cmpuint(refused, >=, 60);
+	assert_has(log_text->str, "which asked the daemon more than 240 times in a minute");
+	/* The poster the portal holds is no call: served. */
+	before = asked(fx, NULL);
+	axis_portal_app_set_time_offset(fx->app, start - g_get_monotonic_time());
+	reply = get(fx, "/art/3", robin);
+	assert_status(&reply, 200);
+	axis_test_reply_clear(&reply);
+	g_assert_cmpuint(asked(fx, NULL), ==, before);
+	/* sam's session has its own. */
+	reply = get(fx, "/title/3", sam);
+	assert_status(&reply, 200);
+	axis_test_reply_clear(&reply);
+	/* A minute later robin's are whole again. */
+	axis_portal_app_set_time_offset(fx->app, start - g_get_monotonic_time() + G_GINT64_CONSTANT(61) * G_USEC_PER_SEC);
+	reply = get(fx, "/title/3", robin);
+	assert_status(&reply, 200);
+	axis_test_reply_clear(&reply);
+
+	/* The daemon refuses robin by the person's budget: robin's session asks
+	 * nothing for the seven seconds it said, sam's is served, and then robin's
+	 * is again. */
+	script(fx, "title", 429, "{\"error\":\"person-limit\",\"message\":\"too many requests for this person; wait\","
+		"\"wait\":7}");
+	reply = get(fx, "/title/3", robin);
+	assert_status(&reply, 429);
+	g_assert_cmpstr(axis_test_reply_header(&reply, "Retry-After"), ==, "7");
+	axis_test_reply_clear(&reply);
+	g_hash_table_remove(fx->script, "title");
+	before = asked(fx, NULL);
+	for (i = 0; i < 5; i++) {
+		reply = get(fx, "/title/3", robin);
+		assert_status(&reply, 429);
+		assert_has(reply.body, "There were too many requests.");
+		axis_test_reply_clear(&reply);
+		reply = get(fx, "/requests", robin);
+		assert_status(&reply, 429);
+		axis_test_reply_clear(&reply);
+	}
+	g_assert_cmpuint(asked(fx, NULL), ==, before);
+	reply = get(fx, "/title/3", sam);
+	assert_status(&reply, 200);
+	axis_test_reply_clear(&reply);
+	axis_portal_app_set_time_offset(fx->app, start - g_get_monotonic_time() + G_GINT64_CONSTANT(69) * G_USEC_PER_SEC);
+	reply = get(fx, "/title/3", robin);
+	assert_status(&reply, 200);
+	axis_test_reply_clear(&reply);
+}
+
+/* Found by the security review (F5): a home page whose 20 posters were not
+ * held cost 22 calls, and the daemon's 120 operations a minute for a person
+ * refused the posters of the sixth such page in a minute.  Ten of them in a
+ * minute, each with 20 posters the portal does not hold, are served whole
+ * by the portal's budget for a session (the daemon's for a person is tested
+ * in test-portal-api). */
+static void
+test_home_posters(Fixture *fx, gconstpointer data)
+{
+	g_autofree gchar *robin = login_robin(fx);
+	guint round;
+	guint k;
+
+	script_poster(fx);
+	for (round = 0; round < 10; round++) {
+		AxisTestReply reply;
+
+		axis_portal_app_set_time_offset(fx->app, (gint64)round * 6 * G_USEC_PER_SEC);
+		reply = get(fx, "/", robin);
+		assert_status(&reply, 200);
+		axis_test_reply_clear(&reply);
+		for (k = 0; k < 20; k++) {
+			g_autofree gchar *path = g_strdup_printf("/art/%u", 1 + 20 * round + k);
+
+			reply = get(fx, path, robin);
+			assert_status(&reply, 200);
+			g_assert_cmpstr(axis_test_reply_header(&reply, "Content-Type"), ==, "image/png");
+			axis_test_reply_clear(&reply);
+		}
+	}
+	g_assert_cmpuint(asked(fx, "art"), ==, 200);
+	g_assert_cmpuint(asked(fx, "browse"), ==, 10);
 }
 
 /* Spec (portal): A flood of searches -- of 50 searches a session sends
@@ -3362,6 +3920,12 @@ main(int argc, char **argv)
 	ADD("/portal/limits/made-up-cookies", MODE_PROXY, test_made_up_cookies);
 	ADD("/portal/limits/one-device-misbehaves", MODE_PROXY, test_one_device_misbehaves);
 	ADD("/portal/limits/shared-calls", MODE_PROXY, test_shared_calls);
+	ADD("/portal/limits/strangers-at-many-addresses", MODE_PROXY, test_strangers);
+	ADD("/portal/limits/login-form-not-a-login", MODE_PROXY, test_login_not_a_login);
+	ADD("/portal/limits/full-table-remembered-browser", MODE_PROXY, test_full_table);
+	ADD("/portal/limits/session-calls", MODE_PROXY, test_session_calls);
+	ADD("/portal/limits/home-page-posters", MODE_PROXY, test_home_posters);
+	ADD("/portal/session/login-form-expires", MODE_PROXY, test_login_form_expires);
 	ADD("/portal/limits/search-flood", MODE_PROXY, test_search_flood);
 	ADD("/portal/limits/large-body", MODE_PROXY, test_large_body);
 	ADD("/portal/log/secrets-absent", MODE_PROXY, test_log);
