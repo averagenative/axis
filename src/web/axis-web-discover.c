@@ -229,7 +229,8 @@ done_message(const gchar *key)
 		{ "managed", "Axis manages it now: its files on disk count as in the library." },
 		{ "add_defaults", "Saved: your Adds from a list go there now. A title's own Options still choose for it "
 		  "alone." },
-		{ "hidden", "Hidden from Discover. The Not interested page lists it and can show it again." },
+		{ "hidden", "Hidden: the title that stood here before this one is gone from Discover. The Not interested page "
+		  "lists it and can show it again." },
 		{ "shown", "It is shown in Discover again." },
 		{ "refreshing", "Axis is fetching the lists from TMDb now. They appear here in a minute or two." },
 		{ "already_refreshing", "Axis is fetching the lists already." },
@@ -442,7 +443,12 @@ added_text_read(
 	AxisMetaTitleAnswer answer;
 	g_autoptr(GError) local = NULL;
 
-	if (!work->want.hide || work->want.done == NULL || work->want.added <= 0)
+	if (work->want.done == NULL || work->want.added <= 0)
+		return;
+	/* A title hidden from Discover is named whether the list hides what is
+	 * had or not: its card is gone either way, and the notice stands at the
+	 * card that took its place. */
+	if (!work->want.hide && g_strcmp0(work->want.done, "hidden") != 0)
 		return;
 	memset(&answer, 0, sizeof(answer));
 	if (axis_meta_get_title(axis_discover_get_meta(self->discover), work->want.added, 0, &answer, &local) &&
@@ -450,7 +456,10 @@ added_text_read(
 		g_autofree gchar *label = answer.title->year > 0 ?
 			g_strdup_printf("%s (%d)", answer.title->title, answer.title->year) : g_strdup(answer.title->title);
 
-		if (g_strcmp0(work->want.done, "added") == 0)
+		if (g_strcmp0(work->want.done, "hidden") == 0)
+			work->added_text = g_strdup_printf("Hidden from Discover: %s. The Not interested page lists it and can "
+				"show it again.", label);
+		else if (g_strcmp0(work->want.done, "added") == 0)
 			work->added_text = g_strdup_printf("Added %s to %s. It is not listed here now, as the list hides what you "
 				"have or want; its page has the details.", label, work->want.kind == AXIS_META_KIND_FILM ?
 				"Movies" : "TV");
@@ -1389,6 +1398,14 @@ act_done(
 	default:
 		key = work->changed ? "refreshing" : "already_refreshing";
 		break;
+	}
+	/* The list is told which title went, so that its notice can name it. */
+	if (work->act == ACT_DISMISS) {
+		const gchar *back = work->back != NULL ? work->back : MOVIES_PATH;
+		g_autofree gchar *named = g_strdup_printf("%s%c" AXIS_WEB_BACK_ADDED "=%" G_GINT64_FORMAT, back,
+			strchr(back, '?') != NULL ? '&' : '?', work->title_id);
+
+		return axis_web_place_redirect(request, named, key, work->at);
 	}
 	return axis_web_place_redirect(request, work->back != NULL ? work->back :
 		work->act == ACT_UNDISMISS ? NOT_INTERESTED_PATH : MOVIES_PATH, key, work->at);

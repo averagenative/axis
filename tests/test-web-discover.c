@@ -1193,11 +1193,24 @@ test_not_interested(Fixture *fx, gconstpointer data)
 
 	reply = post_as(fx, fx->admin, "/discover/movies", "/discover/dismiss", form);
 	g_assert_cmpuint(reply.status, ==, 303);
-	g_assert_cmpstr(axis_test_reply_header(&reply, "Location"), ==, "/discover/movies?list=popular&done=hidden");
+	/* The list is told which title went, and its notice names it: the
+	 * notice stands at another title's card, and must not read as that
+	 * card's. */
+	{
+		g_autofree gchar *named = g_strdup_printf("/discover/movies?list=popular&added=%" G_GINT64_FORMAT "&done=hidden",
+			lanterns);
+
+		g_assert_cmpstr(axis_test_reply_header(&reply, "Location"), ==, named);
+		axis_test_reply_clear(&reply);
+		reply = get_as(fx, fx->admin, named);
+	}
+	assert_contains(reply.body, "Hidden from Discover: Nine Lanterns South");
+	assert_contains(reply.body, "The Not interested page lists it and can show it again.");
+	assert_lacks(reply.body, "alt=\"Nine Lanterns South");
 	axis_test_reply_clear(&reply);
+	/* Without the title (an old address), the plain notice says whose it is. */
 	reply = get_as(fx, fx->admin, "/discover/movies?list=popular&done=hidden");
-	assert_contains(reply.body, "Hidden from Discover. The Not interested page lists it");
-	assert_lacks(reply.body, "Nine Lanterns South");
+	assert_contains(reply.body, "Hidden: the title that stood here before this one is gone from Discover.");
 	assert_contains(reply.body, "Showing 1 to 6 of 6 movies.");
 	axis_test_reply_clear(&reply);
 
