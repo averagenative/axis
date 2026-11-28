@@ -100,12 +100,12 @@ test_json(void)
 	}
 	g_test_trap_subprocess(NULL, 0, G_TEST_SUBPROCESS_DEFAULT);
 	g_test_trap_assert_failed();
-	g_test_trap_assert_stderr("{\"time\":\"\?\?\?\?-\?\?-\?\?T\?\?:\?\?:\?\?Z\",\"level\":\"error\",\"domain\":\"axis-test\","
+	g_test_trap_assert_stderr("{\"time\":\"\?\?\?\?-\?\?-\?\?T\?\?:\?\?:\?\?.\?\?\?Z\",\"level\":\"error\",\"domain\":\"axis-test\","
 		"\"message\":\"crashed: signal 4 (SIGILL), sent by process *, in thread *; build test \\\"0.0.0\\\" "
 		"(made-up). The stack of that thread follows, a frame a line, as a file and an offset in it\"}\n"
-		"{\"time\":\"\?\?\?\?-\?\?-\?\?T\?\?:\?\?:\?\?Z\",\"level\":\"error\",\"domain\":\"axis-test\","
+		"{\"time\":\"\?\?\?\?-\?\?-\?\?T\?\?:\?\?:\?\?.\?\?\?Z\",\"level\":\"error\",\"domain\":\"axis-test\","
 		"\"message\":\"crash: frame 0: *\"}\n*"
-		"{\"time\":\"\?\?\?\?-\?\?-\?\?T\?\?:\?\?:\?\?Z\",\"level\":\"error\",\"domain\":\"axis-test\","
+		"{\"time\":\"\?\?\?\?-\?\?-\?\?T\?\?:\?\?:\?\?.\?\?\?Z\",\"level\":\"error\",\"domain\":\"axis-test\","
 		"\"message\":\"crash: end of the report. *\"}\n");
 	g_test_trap_assert_stderr_unmatched("*ERROR axis-test:*");
 }

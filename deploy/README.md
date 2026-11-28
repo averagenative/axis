@@ -1240,7 +1240,9 @@ scrape_configs:
 ## Logs
 
 Axis logs to standard error, one line per event, which every container
-runtime collects. `AXIS_LOG_FORMAT=json` writes each line as a JSON object
+runtime collects. Each line starts with the time in UTC with milliseconds
+(for example `2026-11-27T17:54:06.123Z`), then the level, the domain and the
+message. `AXIS_LOG_FORMAT=json` writes each line as a JSON object
 with exactly four members, `time`, `level`, `domain` and `message`; the
 message is the same text as in the plain format, so the same redaction
 applies (database URLs with their password replaced by `****`, tokens and

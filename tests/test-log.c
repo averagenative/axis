@@ -88,7 +88,7 @@ test_format(void)
 	g_autofree gchar *line = axis_log_format(G_LOG_LEVEL_WARNING, "dom", "hello");
 	GRegex *re;
 
-	re = g_regex_new("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z WARNING dom: hello$",
+	re = g_regex_new("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z WARNING dom: hello$",
 		0, 0, NULL);
 	g_assert_true(g_regex_match(re, line, 0, NULL));
 	g_regex_unref(re);
@@ -199,7 +199,7 @@ assert_json_line(
 	g_assert_true(JSON_NODE_HOLDS_OBJECT(json_parser_get_root(parser)));
 	object = json_node_get_object(json_parser_get_root(parser));
 	g_assert_cmpuint(json_object_get_size(object), ==, 4);
-	g_assert_cmpuint(strlen(json_object_get_string_member(object, "time")), ==, 20);
+	g_assert_cmpuint(strlen(json_object_get_string_member(object, "time")), ==, 24);
 	g_assert_cmpstr(json_object_get_string_member(object, "level"), ==, level);
 	g_assert_cmpstr(json_object_get_string_member(object, "domain"), ==, domain);
 	g_assert_cmpstr(json_object_get_string_member(object, "message"), ==, message);

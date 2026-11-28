@@ -71,19 +71,27 @@ axis_log_should_write(
 	return axis_log_level_from_glib(flags) >= threshold;
 }
 
+/* The time of a line: UTC with milliseconds, 2026-11-27T17:54:06.123Z. */
+static gchar *
+log_stamp(void)
+{
+	g_autoptr(GDateTime) now = g_date_time_new_now_utc();
+	g_autofree gchar *head = g_date_time_format(now, "%Y-%m-%dT%H:%M:%S");
+
+	return g_strdup_printf("%s.%03dZ", head, g_date_time_get_microsecond(now) / 1000);
+}
+
 gchar *
 axis_log_format(
 	GLogLevelFlags  flags,
 	const gchar    *domain,
 	const gchar    *message
 ){
-	g_autoptr(GDateTime) now = g_date_time_new_now_utc();
-	g_autofree gchar *stamp = NULL;
+	g_autofree gchar *stamp = log_stamp();
 	g_autofree gchar *level = NULL;
 	GString *line;
 	const gchar *p;
 
-	stamp = g_date_time_format(now, "%Y-%m-%dT%H:%M:%SZ");
 	level = g_ascii_strup(axis_log_level_to_string(axis_log_level_from_glib(flags)), -1);
 
 	line = g_string_new(NULL);
@@ -147,8 +155,7 @@ axis_log_format_json(
 	const gchar    *domain,
 	const gchar    *message
 ){
-	g_autoptr(GDateTime) now = g_date_time_new_now_utc();
-	g_autofree gchar *stamp = g_date_time_format(now, "%Y-%m-%dT%H:%M:%SZ");
+	g_autofree gchar *stamp = log_stamp();
 	GString *line = g_string_new("{\"time\":");
 
 	append_json_string(line, stamp);

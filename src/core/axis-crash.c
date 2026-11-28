@@ -141,7 +141,7 @@ put_hex(
 	put_number(b, value, 16, 1);
 }
 
-/* The time as axis-log.c writes it: 2026-11-27T17:54:05Z. */
+/* The time as axis-log.c writes it: 2026-11-27T17:54:05.123Z. */
 static void
 put_time(Buf *b)
 {
@@ -186,6 +186,8 @@ put_time(Buf *b)
 	put_number(b, (unsigned long)(secs / 60 % 60), 10, 2);
 	put_char(b, ':');
 	put_number(b, (unsigned long)(secs % 60), 10, 2);
+	put_char(b, '.');
+	put_number(b, (unsigned long)(now.tv_nsec / 1000000L), 10, 3);
 	put_char(b, 'Z');
 }
 
