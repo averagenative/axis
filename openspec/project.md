@@ -207,6 +207,43 @@ The table lists each capability in `openspec/specs/` and what is planned beyond 
 | Operations | `deployment`, `user-documentation` | Built; the guide is partly written |
 | Planned | Music, books, audiobooks, games, a request portal, placement between disks, audio conversion, file preview | Not built |
 
+## The 1.0 release
+
+What 1.0 holds, decided with the owner on 2026-11-28. "In" is built before the release; "Later" stays on the roadmap. The sizes are estimates made before any design: small is one change of a few days, medium one change with a review, large several changes. Each item is described under "Roadmap". The order is the order of work.
+
+### In
+
+| # | Item | Size | Notes |
+|---|---|---|---|
+| 1 | Request portal: the independent security review (section 5 of `add-request-portal`) and its fixes | Medium | The portal is not opened to the internet before it passes. |
+| 2 | The Kubernetes example applied to a real cluster (task 4.16 of `add-request-portal`) | Small | |
+| 3 | The crash of 2026-11-27 (a segmentation fault in a pool thread, no report): found and fixed, or shown not to come back | Unknown | Crash reports are in the log since `decb8fb`. |
+| 4 | Logging: the level changed while Axis runs (a setting), milliseconds in the time stamp | Small | Debug lines are added area by area as each is touched. |
+| 5 | Database resilience 1: timeouts and retries | Medium | |
+| 6 | Database resilience 2: disk steps that survive a lost commit | Medium | |
+| 7 | Database resilience 3: a schema check at start | Small | |
+| 8 | Database resilience 4: foreign-key indexes, retention for search history | Small | |
+| 9 | Database resilience 5: `axisd --check-database` | Medium | |
+| 10 | Database resilience 6: a Database page under System | Small | |
+| 11 | File preview: play a file or a trial in the browser, with byte ranges and no script | Medium | Asked for by the owner; it ends the search for trial files on a disk. |
+| 12 | Worker load limits: decode on the GPU or cap ffmpeg's threads; the order of encoder families as a setting | Small | |
+| 13 | Needs attention: the ten missing sources of notices | Medium | Telling a person outside Axis (webhook, push, e-mail) is Later. |
+| 14 | Migration: the strict check for a Sonarr without a TheTVDB key, the links to the Migrate page, starting held titles | Medium | |
+| 15 | Downloads page: the stray-download check for series | Small | |
+| 16 | By hand: manual import for series, "Assign by hand" on a partly imported download, renaming to match a link, restoring a recycled duplicate | Medium | |
+| 17 | Conversion runs: the space projection for each volume, other orderings, estimates corrected from results | Medium | With standing runs (number 20). A read limit for each physical disk is Later: one worker converts one file at a time today. |
+| 18 | Site definitions: the git trees fallback for the Jackett fetch | Small | Logins are Later: the owner uses no site that asks for one. |
+| 19 | User guide: the missing pages, screenshots from the demo instance | Medium | Last, so that it shows what was built. |
+| 20 | Conversion runs: standing runs that pick up newly imported files | Medium | Only when the first replacement runs on the owner's library have gone well. |
+| 21 | TheTVDB, in part: provider keys from the environment or a file, and TheTVDB as a default source for new series | Medium | After a session against the real API with the owner's key. |
+| 22 | Anime: find an indexer that carries anime and that the owner can use, then confirm the searches against it | Small | The research is the first step; the owner has no such indexer today. |
+| 23 | YouTube: a video picked for one episode of a series, imported under the series' numbering | Medium | |
+| 24 | Before the tag: the known flakes (`/web/tv-scale/pages`), the workflow actions pinned to commits, a first run by a stranger, an adversarial bug hunt | Medium | |
+
+### Later
+
+Not in 1.0: TheTVDB's other episode orders, identification under both sources and the suggestion to change a series' numbering; the three anime rules (low numbers under another name, mixed forms, a corrected number); a whole series from a YouTube channel or playlist, followed playlists and channels, subtitles and thumbnails (wanted by the owner, after 1.0); logins for site definitions and the browser-challenge helper; a read limit for each physical disk; canary sets and the watch on the media server; audio conversion; the other space levers (dropping tracks, lossless surround to lossy); sandboxing of ffprobe, ffmpeg and yt-dlp (the first item after 1.0); placement between disks; refetching a lost volume; music, books, audiobooks and games; the smaller items (more of Discover, subtitles); notices sent outside Axis; replication and high availability, which are not goals at all.
+
 ## Roadmap
 
 Nothing here is built. Each item becomes one or more changes under `openspec/changes/` when its turn comes. The order within a group may change.

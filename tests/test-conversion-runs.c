@@ -732,9 +732,13 @@ test_list_kept(Fixture *fx, gconstpointer data)
 	g_assert_cmpint(reason_count(fx, run, "kept"), ==, 2);
 	g_assert_cmpint(N(fx, "SELECT scope_files FROM conversion_run WHERE id = %" G_GINT64_FORMAT, run), ==, 3);
 	g_assert_cmpstr(axis_conversion_run_reason_label("kept"), ==, "Kept: Axis does not replace this file");
-	g_assert_cmpstr(axis_conversion_run_reason_help("kept"), ==,
-		"Axis does not replace these files with another release. A run with \"Also convert files Axis keeps\" "
-		"converts them in place, and they stay kept. Or let Axis upgrade a file again on its links page.");
+	/* The help says what kept means, the two ways a file comes to be kept,
+	 * and both ways on: the run's choice, and the file's links page. */
+	g_assert_nonnull(strstr(axis_conversion_run_reason_help("kept"), "A kept file is one Axis leaves alone"));
+	g_assert_nonnull(strstr(axis_conversion_run_reason_help("kept"), "came over from Radarr or Sonarr"));
+	g_assert_nonnull(strstr(axis_conversion_run_reason_help("kept"), "\"Keep it by hand\""));
+	g_assert_nonnull(strstr(axis_conversion_run_reason_help("kept"), "\"Also convert files Axis keeps\""));
+	g_assert_nonnull(strstr(axis_conversion_run_reason_help("kept"), "on its links page"));
 	/* The default is off, and nothing of the choice is recorded. */
 	g_assert_cmpstr(Q(fx, "SELECT convert_kept::text || coalesce(convert_kept_by, '-') FROM conversion_run WHERE id = %"
 		G_GINT64_FORMAT, run), ==, "false-");
