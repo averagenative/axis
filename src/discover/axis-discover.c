@@ -821,6 +821,51 @@ refresh_kind(
 	return TRUE;
 }
 
+/*
+ * The posters of what the lists hold are asked for now, in the background,
+ * so that they are stored before anyone looks: the request portal shows only
+ * a stored picture (it never makes Axis fetch), and Axis's own Discover page
+ * asks only for the page a person opens.  A poster that is stored, or that
+ * its provider refused lately, is not asked for again
+ * (axis_meta_artwork_find_many()).  Best effort: a failure here leaves the
+ * lists as they are.
+ */
+#define POSTER_BATCH 200
+#define POSTER_MAX   4000
+
+static void
+ask_for_posters(AxisDiscover *self)
+{
+	g_autoptr(AxisDbResult) result = NULL;
+	g_autoptr(GError) local = NULL;
+	guint n;
+	guint at;
+
+	if (!axis_db_pool_exec(self->pool, "SELECT DISTINCT t.provider, t.poster_ref FROM discover_entry e"
+	        " JOIN meta_title t ON t.id = e.title_id WHERE t.poster_ref IS NOT NULL"
+	        " AND NOT EXISTS (SELECT 1 FROM discover_dismissed d WHERE d.title_id = t.id)"
+	        " ORDER BY 1, 2 LIMIT " G_STRINGIFY(POSTER_MAX), 0, NULL, &result, &local)) {
+		g_debug("discover: the lists' posters are not asked for now: %s", local->message);
+		return;
+	}
+	n = axis_db_result_get_n_rows(result);
+	for (at = 0; at < n; at += POSTER_BATCH) {
+		const gchar *providers[POSTER_BATCH];
+		const gchar *refs[POSTER_BATCH];
+		gchar *hashes[POSTER_BATCH];
+		guint count = MIN(POSTER_BATCH, n - at);
+		guint i;
+
+		for (i = 0; i < count; i++) {
+			providers[i] = axis_db_result_get_text(result, at + i, 0);
+			refs[i] = axis_db_result_get_text(result, at + i, 1);
+		}
+		axis_meta_artwork_find_many(self->meta, providers, refs, count, AXIS_META_ART_POSTER_SMALL, TRUE, hashes);
+		for (i = 0; i < count; i++)
+			g_free(hashes[i]);
+	}
+}
+
 gboolean
 axis_discover_run_refresh(
 	AxisDiscover        *self,
@@ -855,6 +900,7 @@ axis_discover_run_refresh(
 		g_set_error_literal(error, AXIS_JOB_ERROR, AXIS_JOB_ERROR_CANCELLED, "cancelled");
 		return FALSE;
 	}
+	ask_for_posters(self);
 	if (report.pages > 0 || report.dropped > 0)
 		g_info("discover: %u lists and %u titles' recommendations fetched (%u pages), %u failed, %u dropped",
 			report.lists, report.recommended, report.pages, report.failed, report.dropped);

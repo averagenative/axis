@@ -239,7 +239,8 @@ test_refresh_lists(Fixture *fx, gconstpointer data)
 	g_assert_nonnull(strstr(transcript, "/3/genre/tv/list?language=en-US"));
 	g_assert_cmpstr(auth, ==, expected_auth);
 	g_assert_false(axis_test_plex_saw_non_get(fx->tmdb->api));
-	g_assert_cmpuint(axis_test_plex_n_requests(fx->tmdb->images), ==, 0);
+	/* (The image host is asked for the lists' posters meanwhile, in the
+	 * background: /discover/refresh/posters.) */
 
 	/* Page 2 repeats a title of page 1: it is kept once, at its first place. */
 	entries = axis_test_db_query(fx->db, "SELECT string_agg(x.value, ' ' ORDER BY e.position) FROM discover_entry e"
@@ -254,6 +255,52 @@ test_refresh_lists(Fixture *fx, gconstpointer data)
 	query_is(fx, "SELECT rating FROM discover_entry e JOIN meta_external_id x ON x.title_id = e.title_id"
 		" WHERE x.value = '9005' LIMIT 1", NULL);
 	query_is(fx, "SELECT count(*) FROM discover_genre WHERE kind = 'film'", "13");
+}
+
+/* Waits until the image host was asked @n times, for a while. */
+static void
+wait_for_images(Fixture *fx, guint n)
+{
+	gint64 until = g_get_monotonic_time() + 10 * G_USEC_PER_SEC;
+
+	while (axis_test_plex_n_requests(fx->tmdb->images) < n && g_get_monotonic_time() < until)
+		g_usleep(20000);
+	g_assert_cmpuint(axis_test_plex_n_requests(fx->tmdb->images), ==, n);
+}
+
+/* A refresh asks for the posters of what the lists hold, by itself, so that
+ * they are stored before anyone opens a page (the request portal shows only
+ * stored pictures); a stored poster is not asked for again, and a title
+ * marked not interested is left out. */
+static void
+test_refresh_posters(Fixture *fx, gconstpointer data)
+{
+	g_autofree gchar *wanted = NULL;
+	g_autofree gchar *stored = NULL;
+	gint64 until;
+	guint n;
+
+	/* The first refresh fills the lists and asks for their posters; one
+	 * title is then marked not interested, and its poster forgotten. */
+	run(fx);
+	wanted = axis_test_db_query(fx->db, "SELECT count(DISTINCT (t.provider, t.poster_ref)) FROM discover_entry e"
+		" JOIN meta_title t ON t.id = e.title_id WHERE t.poster_ref IS NOT NULL");
+	n = (guint)g_ascii_strtoull(wanted, NULL, 10);
+	g_assert_cmpuint(n, >=, 2);
+	wait_for_images(fx, n);
+	until = g_get_monotonic_time() + 10 * G_USEC_PER_SEC;
+	do {
+		g_free(stored);
+		stored = axis_test_db_query(fx->db, "SELECT count(*) FROM meta_artwork WHERE sha256 IS NOT NULL");
+		if (g_strcmp0(stored, wanted) != 0)
+			g_usleep(20000);
+	} while (g_strcmp0(stored, wanted) != 0 && g_get_monotonic_time() < until);
+	g_assert_cmpstr(stored, ==, wanted);
+
+	/* Stored: the next refresh asks the image host for nothing. */
+	g_assert_true(axis_discover_run_refresh(fx->discover, NULL, TRUE, NULL, NULL));
+	g_usleep(300000);
+	g_assert_cmpuint(axis_test_plex_n_requests(fx->tmdb->images), ==, n);
 }
 
 static void
@@ -736,6 +783,7 @@ main(int argc, char **argv)
 
 	AXIS_TEST_ADD_DB_CASE("/discover/refresh/lists", Fixture, NULL, test_refresh_lists);
 	AXIS_TEST_ADD_DB_CASE("/discover/refresh/fresh-not-asked", Fixture, NULL, test_refresh_fresh_not_asked);
+	AXIS_TEST_ADD_DB_CASE("/discover/refresh/posters", Fixture, NULL, test_refresh_posters);
 	AXIS_TEST_ADD_DB_CASE("/discover/refresh/stale-asked-again", Fixture, NULL, test_refresh_stale_asked_again);
 	AXIS_TEST_ADD_DB_CASE("/discover/refresh/failure-keeps-snapshot", Fixture, NULL,
 		test_refresh_failure_keeps_snapshot);
