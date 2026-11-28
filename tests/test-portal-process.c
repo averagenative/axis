@@ -1225,6 +1225,18 @@ test_devices(Fixture *fx, gconstpointer data)
 	altered[strlen(altered) - 1] = altered[strlen(altered) - 1] == 'A' ? 'B' : 'A';
 	g_assert_cmpuint(portal_login(fx, "robin", ROBIN_PASSWORD, "198.51.100.61", altered, NULL), ==, 429);
 	g_assert_cmpuint(portal_login(fx, "robin", ROBIN_PASSWORD, "198.51.100.62", sam.device, NULL), ==, 429);
+	/* (After the security review, F1.)  The stranger goes on at the
+	 * portal's own limits, the daemon answering at once that the name is
+	 * delayed: from each address until its share of the logins' calls is
+	 * spent, and from address after address until the calls that logins
+	 * share are spent. */
+	for (i = 0; i < 2 * AXIS_PORTAL_LOGINS_A_MINUTE; i++) {
+		/* (The first address sends twice its share.) */
+		g_autofree gchar *from = g_strdup_printf("198.51.100.%u", i < 2 * AXIS_PORTAL_LOGINS_A_MINUTE_FROM_ADDRESS ? 99 :
+			100 + i / AXIS_PORTAL_LOGINS_A_MINUTE_FROM_ADDRESS);
+
+		g_assert_cmpuint(portal_login(fx, "robin", "not-robins-password", from, NULL, NULL), ==, 429);
+	}
 	/* robin, from the remembered browser: at once. */
 	g_assert_cmpuint(portal_login(fx, "robin", ROBIN_PASSWORD, OUTSIDE, robin.device, &again), ==, 303);
 	g_assert_nonnull(again.session);
@@ -1233,6 +1245,10 @@ test_devices(Fixture *fx, gconstpointer data)
 	{
 		g_autofree gchar *log = read_log(fx->portal_log);
 
+		/* The stranger spent the calls that logins share, and robin got in
+		 * all the same. */
+		assert_has(log, "the calls that logins share are spent");
+		assert_has(log, "which sent 10 logins in a minute");
 		/* No device value, changed or not, is in the log. */
 		assert_lacks(log, strchr(robin.device, '=') + 1);
 		assert_lacks(log, strchr(altered, '=') + 1);

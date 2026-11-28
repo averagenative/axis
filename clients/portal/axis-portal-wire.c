@@ -188,6 +188,37 @@ axis_portal_wire_split_session_cookie(
 }
 
 gboolean
+axis_portal_wire_split_device_cookie(
+	const gchar  *value,
+	gchar       **device,
+	gchar       **seal
+){
+	const gchar *dot;
+	gchar *first;
+	gchar *second;
+
+	g_return_val_if_fail(device != NULL && seal != NULL, FALSE);
+
+	*device = NULL;
+	*seal = NULL;
+	if (value == NULL || strlen(value) > AXIS_PORTAL_WIRE_DEVICE_MAX + 1 + AXIS_PORTAL_PROOF_LEN)
+		return FALSE;
+	dot = strrchr(value, '.');
+	if (dot == NULL || dot == value)
+		return FALSE;
+	first = g_strndup(value, (gsize)(dot - value));
+	second = g_strdup(dot + 1);
+	if (!axis_portal_wire_is_device(first) || !axis_portal_wire_is_proof(second)) {
+		axis_portal_wire_free(first);
+		axis_portal_wire_free(second);
+		return FALSE;
+	}
+	*device = first;
+	*seal = second;
+	return TRUE;
+}
+
+gboolean
 axis_portal_wire_is_request_id(const gchar *text)
 {
 	return is_token(text, AXIS_PORTAL_REQUEST_ID_LEN);

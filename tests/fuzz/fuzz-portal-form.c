@@ -24,7 +24,9 @@
  *
  * The same input is also read as the other things a browser sends, by the
  * readers axis-portal uses for them (after the review of P3, M15): a Cookie
- * header and a session cookie's value (the proof and its seal), a `next`, a
+ * header and a session cookie's value (the proof and its seal), a device
+ * cookie's value (the device value and its seal: after the security review,
+ * F1), a `next`, a
  * Content-Type, an Origin with a Host, and the forwarding headers of a
  * trusted proxy.  Only the request handler itself, serve(), is not reached
  * here: it needs a server (tests/test-portal.c tries it).
@@ -250,6 +252,31 @@ check_session_cookie(const gchar *value)
 	axis_portal_wire_free(seal);
 }
 
+/* A device cookie's value: "<device>.<seal>", a device value as the daemon
+ * gives one and a seal in the form of a proof, and nothing else (after the
+ * security review, F1). */
+static void
+check_device_cookie(const gchar *value)
+{
+	gchar *device = NULL;
+	gchar *seal = NULL;
+
+	if (!axis_portal_wire_split_device_cookie(value, &device, &seal)) {
+		if (device != NULL || seal != NULL)
+			abort();
+		return;
+	}
+	{
+		g_autofree gchar *joined = g_strconcat(device, ".", seal, NULL);
+
+		if (!axis_portal_wire_is_device(device) || !axis_portal_wire_is_proof(seal) || strcmp(joined, value) != 0 ||
+		    strlen(device) > AXIS_PORTAL_WIRE_DEVICE_MAX)
+			abort();
+	}
+	axis_portal_wire_free(device);
+	axis_portal_wire_free(seal);
+}
+
 /* What else a browser sends, read as the portal reads it. */
 static void
 check_browser(const gchar *text)
@@ -263,6 +290,14 @@ check_browser(const gchar *text)
 		if (value != NULL && strchr(value, ';') != NULL)
 			abort();
 		check_session_cookie(value != NULL ? value : text);
+	}
+	/* And the device cookie in it. */
+	{
+		g_autofree gchar *value = axis_cookie_find(text, "__Host-axis_portal_device");
+
+		if (value != NULL && strchr(value, ';') != NULL)
+			abort();
+		check_device_cookie(value != NULL ? value : text);
 	}
 	/* A `next`: a path of the portal's own, and nothing else. */
 	{

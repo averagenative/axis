@@ -790,6 +790,7 @@ typedef struct
 	GArray              *seasons;		/* gint, a series' */
 	guint                n_followers;
 	gboolean             follows;		/* the viewer follows it (lists of one person) */
+	gint64               followed_us;	/* since when the viewer follows it; 0: they do not */
 	guint                declined_before;	/* how often the title was declined before it */
 	gint64               root_id;
 	gint64               profile_id;
