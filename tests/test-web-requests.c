@@ -1158,6 +1158,37 @@ test_module_off(Fixture *fx, gconstpointer data)
 	axis_test_reply_clear(&reply);
 }
 
+/* Scenario: The two settings for new accounts are on the people page, with
+ * their help, and an administrator saves them there. */
+static void
+test_new_account_switches(Fixture *fx, gconstpointer data)
+{
+	AxisTestReply reply;
+
+	reply = get_as(fx, fx->admin, "/requests/people");
+	g_assert_cmpuint(reply.status, ==, 200);
+	assert_contains(reply.body, "Approve movie requests automatically for new accounts");
+	assert_contains(reply.body, "Approve series requests automatically for new accounts");
+	assert_contains(reply.body, "changes nothing for accounts that exist");
+	assert_contains(reply.body, "still needs the default library folder and quality profile");
+	assert_contains(reply.body, "Most seasons approved automatically in one request");
+	assert_csp_clean(reply.body);
+	axis_test_reply_clear(&reply);
+	g_assert_false(axis_settings_get_boolean(fx->r->settings, "requests.new_auto_movies"));
+
+	reply = post_as(fx, fx->robin, "/requests", "/requests/people/new-accounts", "new_auto_movies=yes");
+	g_assert_cmpuint(reply.status, ==, 403);
+	axis_test_reply_clear(&reply);
+	reply = post_as(fx, fx->admin, "/requests/people", "/requests/people/new-accounts", "new_auto_movies=yes");
+	g_assert_cmpuint(reply.status, ==, 303);
+	axis_test_reply_clear(&reply);
+	g_assert_true(axis_settings_get_boolean(fx->r->settings, "requests.new_auto_movies"));
+	g_assert_false(axis_settings_get_boolean(fx->r->settings, "requests.new_auto_series"));
+	reply = get_as(fx, fx->admin, "/requests/people");
+	assert_contains(reply.body, "checked");
+	axis_test_reply_clear(&reply);
+}
+
 /* Scenario: The switches and limits of a person; and the defaults. */
 static void
 test_people(Fixture *fx, gconstpointer data)
@@ -1477,6 +1508,7 @@ main(int argc, char **argv)
 	AXIS_TEST_ADD_DB_CASE("/web/requests/who-asked", Fixture, NULL, test_who_asked);
 	AXIS_TEST_ADD_DB_CASE("/web/requests/series-page", Fixture, NULL, test_series_page);
 	AXIS_TEST_ADD_DB_CASE("/web/requests/module-off", Fixture, NULL, test_module_off);
+	AXIS_TEST_ADD_DB_CASE("/web/requests/new-account-switches", Fixture, NULL, test_new_account_switches);
 	AXIS_TEST_ADD_DB_CASE("/web/requests/switches-and-limits", Fixture, NULL, test_people);
 	AXIS_TEST_ADD_DB_CASE("/web/attention/requests", Fixture, NULL, test_attention);
 	AXIS_TEST_ADD_DB_CASE("/web/requests/nothing-typed-is-logged", Fixture, NULL, test_nothing_typed_is_logged);

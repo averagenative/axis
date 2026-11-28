@@ -87,11 +87,15 @@ The library folder and the quality profile of a title that a request adds SHALL 
 - **THEN** the approval asks for the folder and the profile, and approves nothing until both are chosen
 
 ### Requirement: Automatic approval is two switches for each person, and is bounded
-Each person SHALL have two switches, off when the account is created: requests for movies are approved automatically, and requests for series are approved automatically. A request of a kind whose switch is on SHALL be approved when it is made, by the same code as an administrator's approval with the defaults, and SHALL be recorded as approved automatically. It SHALL wait instead when the defaults for its kind are not set or no longer exist, or when a series request lists more seasons than `requests.auto_max_seasons` (3 by default); the Requests page SHALL say why it waits.
+Each person SHALL have two switches, which start as the settings `requests.new_auto_movies` and `requests.new_auto_series` are when the account is created (both off by default; changing a setting changes no existing account): requests for movies are approved automatically, and requests for series are approved automatically. A request of a kind whose switch is on SHALL be approved when it is made, by the same code as an administrator's approval with the defaults, and SHALL be recorded as approved automatically. It SHALL wait instead when the defaults for its kind are not set or no longer exist, or when a series request lists more seasons than `requests.auto_max_seasons` (3 by default); the Requests page SHALL say why it waits.
 
 #### Scenario: Off by default
 - **WHEN** an administrator creates a requester and that requester asks for a movie
 - **THEN** the request waits
+
+#### Scenario: New accounts start with the installation's choice
+- **WHEN** `requests.new_auto_movies` and `requests.new_auto_series` (both off by default) are switched on and an administrator then creates an account
+- **THEN** the account starts with both switches on and its requests are approved automatically, within the usual bounds, while an account made before keeps the switches it had
 
 #### Scenario: A movie approved automatically
 - **WHEN** `robin` has the movies switch on and asks for a movie

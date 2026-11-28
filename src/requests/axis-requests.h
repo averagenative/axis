@@ -68,6 +68,8 @@ G_BEGIN_DECLS
 #define AXIS_REQUESTS_SETTING_MOVIES         "requests.movies_per_window"
 #define AXIS_REQUESTS_SETTING_SEASONS        "requests.seasons_per_window"
 #define AXIS_REQUESTS_SETTING_AUTO_SEASONS   "requests.auto_max_seasons"
+#define AXIS_REQUESTS_SETTING_NEW_AUTO_MOVIES "requests.new_auto_movies"
+#define AXIS_REQUESTS_SETTING_NEW_AUTO_SERIES "requests.new_auto_series"
 #define AXIS_REQUESTS_SETTING_SHOW_WHO       "requests.show_who_asked"
 #define AXIS_REQUESTS_SETTING_MOVIES_ROOT    "requests.movies_root"
 #define AXIS_REQUESTS_SETTING_MOVIES_PROFILE "requests.movies_profile"
@@ -998,6 +1000,17 @@ axis_requests_set_defaults(
 	AxisRequests               *self,
 	const AxisRequestDefaults  *defaults,
 	GError                    **error
+);
+
+/* Stores the two settings that give an account its switches when it is
+ * made (requests.new_auto_movies, requests.new_auto_series).  Accounts that
+ * exist are not changed. */
+gboolean
+axis_requests_set_new_account_switches(
+	AxisRequests  *self,
+	gboolean       movies,
+	gboolean       series,
+	GError       **error
 );
 
 /* A title closed to requests. */

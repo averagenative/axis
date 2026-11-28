@@ -162,8 +162,8 @@ stop monitoring) stays as you left it.
 2. On the person's row, set any of the following and select **Save**:
 
    - **Approve their movie requests automatically** and **Approve their
-     series requests automatically**. Both are off for a new account. With a
-     switch on, that person's requests of that kind are approved when they
+     series requests automatically**. Both are off for a new account unless
+     you change that (see the next procedure). With a switch on, that person's requests of that kind are approved when they
      are made, with the default folder and profile.
    - **Movie requests in each window** and **Season requests in each
      window**. Leave a field empty to use the limit for everyone. Enter 0 so
@@ -173,6 +173,22 @@ An automatic approval is bounded. The person's limit still applies. A series
 request that lists more than three seasons waits for you. A request also
 waits when no default folder and profile are set, or when one of them was
 removed. The request's row says why it waits.
+
+To have new accounts start with automatic approval, use the **New accounts**
+card at the top of the same page:
+
+1. Select **Approve movie requests automatically for new accounts**,
+   **Approve series requests automatically for new accounts**, or both, and
+   select **Save**. The same two settings are on the **Settings** page, under
+   **Requests**.
+2. Accounts that you create after that start with those switches on. Accounts
+   that exist keep theirs: change those on their rows. Switching a setting
+   off later does not switch anything off for an account made while it was
+   on.
+
+The bounds above apply as before: a default folder and quality profile are
+required, the person's limit applies, and a series request of more than the
+most seasons approved automatically in one request still waits for you.
 
 To change the limits for everyone, open **System**, then **Settings**, and
 find the **Requests** card:

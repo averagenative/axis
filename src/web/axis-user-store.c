@@ -261,8 +261,14 @@ axis_user_store_create(
 	params[1] = password_hash;
 	params[2] = axis_user_role_to_string(role);
 	if (!axis_db_pool_exec(pool,
-	                       "INSERT INTO app_user (username, password_hash, role) "
-	                       "VALUES ($1, $2, $3) RETURNING " USER_COLUMNS,
+	                       "INSERT INTO app_user (username, password_hash, role,"
+	                       " request_auto_movies, request_auto_series) "
+	                       "VALUES ($1, $2, $3,"
+	                       " COALESCE((SELECT value = 'true'::jsonb FROM setting"
+	                       "  WHERE key = 'requests.new_auto_movies'), false),"
+	                       " COALESCE((SELECT value = 'true'::jsonb FROM setting"
+	                       "  WHERE key = 'requests.new_auto_series'), false)) "
+	                       "RETURNING " USER_COLUMNS,
 	                       3, params, &result, &local)) {
 		if (g_error_matches(local, AXIS_DB_ERROR, AXIS_DB_ERROR_UNIQUE_VIOLATION)) {
 			g_set_error_literal(error, AXIS_USER_ERROR, AXIS_USER_ERROR_EXISTS,
