@@ -157,7 +157,7 @@ Every operation except `hello` and `login` SHALL require, beside the portal toke
 - **THEN** it holds no value that can be used as a proof
 
 ### Requirement: Answers carry a fixed set of fields
-Each operation SHALL answer with the members listed here and no others. A title SHALL be `id`, `kind`, `name`, `year`, `overview` (at most 600 characters), `has_poster`, `state` (one of `available`, `partly_available`, `downloading`, `approved`, `requested`, `declined`, `closed`, `open`), `asked_by` (a name, present only while `requests.show_who_asked` is on, and only when the account that asked is a requester) and, from `title` for a series, `seasons` (each `number`, `episodes`, `aired` and `state`). A request SHALL be `id`, the title's `id`, `kind`, `name` and `year`, `seasons`, `state` (one of `waiting`, `approved`, `downloading`, `partly_available`, `available`, `declined`, `withdrawn`, `failed`), `have` and `of` (episode counts, for a series), `cause` (one of the fixed causes, when failed), `reason` (when declined), `mine` (made or followed), `asked_at` and `changed_at`. `whoami` SHALL be the person's name and, for each kind, the limit, what is left and when the window ends. No answer SHALL carry a file name, a path, a release name, an indexer, a download client, a quality profile, a library folder, a disk, a size on disk, a job, a setting, the daemon's version, an account's role or an account other than as `asked_by`.
+Each operation SHALL answer with the members listed here and no others. A title SHALL be `id`, `kind`, `name`, `year`, `overview` (at most 600 characters), `has_poster`, `state` (one of `available`, `partly_available`, `downloading`, `approved`, `requested`, `declined`, `closed`, `open`), `asked_by` (a name, present only while `requests.show_who_asked` is on, and only when the account that asked is a requester) and, from `title` for a series, `seasons` (each `number`, `episodes`, `aired` and `state`). A request SHALL be `id`, the title's `id`, `kind`, `name` and `year`, `seasons`, `state` (one of `waiting`, `approved`, `downloading`, `partly_available`, `available`, `declined`, `withdrawn`, `failed`), `have` and `of` (episode counts, for a series), `cause` (one of the fixed causes, when failed), `reason` (when declined), `mine` (made or followed), `asked_at` and `changed_at`; for a request the caller follows, `asked_at` SHALL be when they began to follow it and `changed_at` SHALL be no earlier. `whoami` SHALL be the person's name and, for each kind, the limit, what is left and when the window ends. No answer SHALL carry a file name, a path, a release name, an indexer, a download client, a quality profile, a library folder, a disk, a size on disk, a job, a setting, the daemon's version, an account's role or an account other than as `asked_by`.
 
 #### Scenario: A search result's members
 - **WHEN** `search` answers
@@ -178,6 +178,10 @@ Each operation SHALL answer with the members listed here and no others. A title 
 #### Scenario: Only the caller's requests
 - **WHEN** `requests` is called with `robin`'s proof
 - **THEN** it lists the requests `robin` made and follows, and no other
+
+#### Scenario: A follower's times
+- **WHEN** `robin` follows `sam`'s waiting request two hours after `sam` made it, and calls `requests`
+- **THEN** the request's `asked_at` and `changed_at` are when `robin` began to follow it, and the answer holds no time of `sam`'s
 
 ### Requirement: Posters come from the engine's own artwork by title, never by address
 The `art` operation SHALL take a title's `id` and SHALL answer with that title's poster from the artwork the daemon already holds, as an image of at most 4 MiB with its type, or 404 when the daemon holds none. It SHALL take no address, no file name and no artwork identifier, and SHALL fetch nothing from anywhere on the caller's account. The portal SHALL serve a poster only at `/art/<title id>`, to a logged-in person, and SHALL fetch nothing from any address but the daemon's.
@@ -222,7 +226,7 @@ The `search` operation SHALL pass the query, of at most 100 characters, to the c
 - **THEN** `title`, `art` and `request`, of either kind, answer it as a number never given, and `search` leaves it out, until an answer of the provider says it is not adult
 
 ### Requirement: The daemon's limits are the authority
-The daemon SHALL enforce, on the portal API and whatever the portal does itself: the login throttle for each username, with the delays of the engine's own login; a ceiling of 30 failed logins an hour through all portal tokens together, after which a login is admitted once a minute until the hour has passed; a budget of 600 operations of any kind a minute for each portal token and 120 a minute for each person; a search budget of 30 searches a minute through all portal tokens together and 10 a minute for each person; each person's request quota; a ceiling of `requests.portal_per_day` (30 by default) on what all requests made through the portal API count in one day; and, of that ceiling, at most a third (at least one) for what one person's requests count, withdrawn ones included. The portal API's operations SHALL run on threads of their own, so that they cannot hold the threads the engine's own pages use. A refusal by a limit SHALL be 429 with the time to wait and SHALL do nothing. The client address that `login` reports SHALL be recorded as reported by the portal, and SHALL only ever add a refusal: no limit SHALL be loosened or cleared by what the portal reports.
+The daemon SHALL enforce, on the portal API and whatever the portal does itself: the login throttle for each username, with the delays of the engine's own login; a ceiling of 30 failed logins an hour through all portal tokens together, after which a login is admitted once a minute until the hour has passed; a budget of 600 operations of any kind a minute for each portal token and 240 a minute for each person, a call that the person's budget refuses taking nothing from the token's; a search budget of 30 searches a minute through all portal tokens together and 10 a minute for each person; each person's request quota; a ceiling of `requests.portal_per_day` (30 by default) on what all requests made through the portal API count in one day; and, of that ceiling, at most a third (at least one) for what one person's requests count, withdrawn ones included. The portal API's operations SHALL run on threads of their own, so that they cannot hold the threads the engine's own pages use. A refusal by a limit SHALL be 429 with the time to wait and SHALL do nothing. The client address that `login` reports SHALL be recorded as reported by the portal, and SHALL only ever add a refusal: no limit SHALL be loosened or cleared by what the portal reports.
 
 #### Scenario: Guessing one password
 - **WHEN** `login` fails many times for `robin`
@@ -253,8 +257,16 @@ The daemon SHALL enforce, on the portal API and whatever the portal does itself:
 - **THEN** `robin`'s next request is refused with 429 and a refusal of its own, and another person can still ask
 
 #### Scenario: Every operation's budget
-- **WHEN** one person's proof is presented 121 times within a minute, or one token 601 times
+- **WHEN** one person's proof is presented 241 times within a minute, or one token 601 times
 - **THEN** the call beyond the budget is refused with 429 and the time to wait, and another person or another token is answered as before
+
+#### Scenario: One person far beyond their budget
+- **WHEN** one person's proof is presented 1,200 more times within the minute after their budget is spent
+- **THEN** each is refused with 429 by the person's budget, the token's budget has spent nothing on them, and another person is answered as before
+
+#### Scenario: An ordinary home page
+- **WHEN** a person loads ten home pages within a minute, each with 20 posters the portal does not hold (`hello`, `browse` and 20 `art`, and `whoami` every 30 seconds)
+- **THEN** none of the 222 operations is refused by the person's budget
 
 ### Requirement: The portal is a separate program that holds nothing but its token
 The project SHALL provide a program, `axis-portal`, that serves the request pages and talks to the daemon only through the portal API. It SHALL NOT be linked with the database client library, SHALL have no setting for a database, a media path, an indexer, a download client or a details provider, and SHALL refuse a configuration key it does not know, naming it; the variables that Kubernetes adds for a Service called `axis-portal` SHALL be left aside and named in the log, not refused. It SHALL take its token from a file or the environment, never from the command line. It SHALL verify the daemon's certificate by default and SHALL refuse to send its token over unencrypted HTTP to an address that is not loopback unless explicitly configured to. It SHALL write no file: it SHALL run with a read-only root filesystem, no volume and no writable directory.
@@ -322,7 +334,7 @@ The project SHALL provide a program, `axis-portal`, that serves the request page
 - **THEN** no request to the daemon carries any of them, and the daemon's address is the configured one
 
 ### Requirement: The portal's sessions, cookies and forms
-After a login the portal SHALL set a session cookie that holds the session proof and a seal of it (a keyed hash under a key derived from the portal's token, never the token itself), with `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/` and the `__Host-` prefix, and SHALL never put the proof, or any secret, in an address. A session cookie whose seal is not right SHALL be treated as no session, before the daemon is asked anything. It SHALL reject any request other than GET and HEAD that does not carry the CSRF token derived from that cookie, or that the browser reports as cross-site; the login form SHALL carry a token bound to a short-lived cookie set before login. A `next` value that is not a path of the portal SHALL be ignored. The portal SHALL serve the login form and accept a login only over HTTPS, as its own listener or a listed trusted proxy reports it, unless explicitly configured otherwise for a test.
+After a login the portal SHALL set a session cookie that holds the session proof and a seal of it (a keyed hash under a key derived from the portal's token, never the token itself), with `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/` and the `__Host-` prefix, and SHALL never put the proof, or any secret, in an address. A session cookie whose seal is not right SHALL be treated as no session, before the daemon is asked anything. It SHALL reject any request other than GET and HEAD that does not carry the CSRF token derived from that cookie, or that the browser reports as cross-site; the login form SHALL carry a token bound to a short-lived cookie set before login and to the time the form was given, inside the token's keyed hash, and a login whose token is older than 30 minutes SHALL be refused before the daemon is asked. A `next` value that is not a path of the portal SHALL be ignored. The portal SHALL serve the login form and accept a login only over HTTPS, as its own listener or a listed trusted proxy reports it, unless explicitly configured otherwise for a test.
 
 #### Scenario: The cookie
 - **WHEN** a login succeeds
@@ -335,6 +347,10 @@ After a login the portal SHALL set a session cookie that holds the session proof
 #### Scenario: A post without the token
 - **WHEN** a logged-in person's request post arrives without the CSRF token, with another session's token, or with an `Origin` of another site
 - **THEN** the response is 403 and the daemon is not asked to make a request
+
+#### Scenario: An old login form
+- **WHEN** a login is posted with the form's cookie and token 31 minutes after the form was given, or with the token's time changed
+- **THEN** the response is 403 and the daemon is not asked; the same form posted after 29 minutes logs in
 
 #### Scenario: Nothing secret in an address
 - **WHEN** the pages a person walks through after login are read
@@ -353,7 +369,7 @@ After a login the portal SHALL set a session cookie that holds the session proof
 - **THEN** both are ignored
 
 ### Requirement: The portal keeps nothing, and a change at the daemon takes effect at once
-`axis-portal` SHALL keep no session and no account of its own: every page that shows or changes something of a person SHALL present that person's proof to the daemon, and the daemon's answer SHALL decide. The portal MAY keep in memory, for at most 30 seconds, what `whoami` said, to draw a page's header, and SHALL drop it at a 401. A restart of the portal SHALL log nobody out; a new token for the portal logs everyone out of it. What the portal holds in memory SHALL be only: its token and the key derived from it, its throttle counts, the key of its pre-login forms, answers of `whoami` for at most 30 seconds, which sessions the daemon confirmed in the last 15 minutes, and posters up to a fixed size.
+`axis-portal` SHALL keep no session and no account of its own: every page that shows or changes something of a person SHALL present that person's proof to the daemon, and the daemon's answer SHALL decide. The portal MAY keep in memory, for at most 30 seconds, what `whoami` said, to draw a page's header, and SHALL drop it at a 401. A restart of the portal SHALL log nobody out; a new token for the portal logs everyone out of it. What the portal holds in memory SHALL be only: its token and the key derived from it, its throttle counts and budgets, the key of its pre-login forms, answers of `whoami` for at most 30 seconds, which sessions the daemon confirmed in the last 15 minutes, and posters up to a fixed size.
 
 #### Scenario: A restart
 - **WHEN** a person is logged in and the portal restarts
@@ -372,7 +388,7 @@ After a login the portal SHALL set a session cookie that holds the session proof
 - **THEN** it is treated as no session, by the portal and by the daemon
 
 ### Requirement: The portal refuses cheaply before it asks the daemon
-`axis-portal` SHALL keep limits of its own, in memory, so that a flood is refused without a request to the daemon: failed logins, and session cookies the daemon did not know, for each client address (an IPv6 address by its `/64`) with the delays of the engine's throttle, a full table dropping no address that has failures; at most 10 searches a minute and 10 request posts a minute for each session; at most 120 calls a minute, from every address together, for logins and for sessions the daemon has not confirmed in the last 15 minutes; and the engine interface's limits on connections, request heads and bodies, with a body of at most 64 KiB. A session the daemon confirmed in the last 15 minutes SHALL NOT be held to its address's count of unknown cookies. A refusal SHALL be 429 with the time to wait. These limits SHALL add to the daemon's and SHALL NOT replace them.
+`axis-portal` SHALL keep limits of its own, in memory, so that a flood is refused without a request to the daemon: failed logins, and session cookies the daemon did not know, for each client address (an IPv6 address by its `/64`) with the delays of the engine's throttle, a full table dropping no address that has failures; at most 10 searches a minute and 10 request posts a minute for each session; at most 240 calls to the daemon a minute for each session, a poster the portal holds for a person the daemon knew within 30 seconds counting none, and none at all, for the time the daemon said, after the daemon refused the session's person by their budget; at most 120 calls a minute, from every address together, for logins without a remembered browser's device cookie, and of those at most 10 a minute from one client address, every call counting whatever the daemon answers it with; at most 60 calls a minute for logins of remembered browsers, and of those at most 5 a minute for one username; at most 60 calls a minute, from every address together, for sessions the daemon has not confirmed in the last 15 minutes, which logins SHALL NOT spend; and the engine interface's limits on connections, request heads and bodies, with a body of at most 64 KiB. A session the daemon confirmed in the last 15 minutes SHALL NOT be held to its address's count of unknown cookies. A login form that cannot be a username and a password (a field missing, empty or too long) SHALL be answered 400 and counted for no address. A refusal by a limit SHALL be 429 with the time to wait. These limits SHALL add to the daemon's and SHALL NOT replace them.
 
 #### Scenario: A flood of logins from one address
 - **WHEN** a hundred wrong logins arrive from one address
@@ -387,19 +403,39 @@ After a login the portal SHALL set a session cookie that holds the session proof
 - **THEN** it is answered 413 and not read
 
 #### Scenario: Strangers at many addresses
-- **WHEN** sealed session cookies that the daemon does not know arrive from 180 addresses within a minute
-- **THEN** the daemon is asked at most 120 times, a session the daemon confirmed is still served, and a login is refused with the time to wait before the daemon is asked
+- **WHEN** a stranger posts logins from one address, the daemon answering each at once with 429 (the username is delayed) or 503 (logins wait), and then from address after address until the calls for logins are spent
+- **THEN** the daemon is asked at most 10 times a minute for the one address and at most 120 times a minute in all; a login from another address is served while there are calls, and is refused with the time to wait before the daemon is asked once there are none; and a remembered browser, a session the daemon confirmed and a session it has not confirmed lately are served
+
+#### Scenario: Sealed cookies the daemon does not know
+- **WHEN** sealed session cookies that the daemon does not know (sessions that were logged out, say) arrive from 120 addresses within a minute
+- **THEN** the daemon is asked at most 60 times, a session the daemon confirmed is still served, and a login is served
+
+#### Scenario: A form that is no login
+- **WHEN** login forms with the form's token and no username or password, or an empty or too long one, arrive from one address, more of them than its free failures
+- **THEN** each is answered 400 with the form, the daemon is not asked, and the address's next login is asked about
+
+#### Scenario: A session's own calls
+- **WHEN** one session loads 300 pages within a minute
+- **THEN** the daemon is asked at most 240 times for it, a poster the portal holds is still served to it, and another session is served
+
+#### Scenario: Held off by the person's budget
+- **WHEN** the daemon refuses a session's call with 429 by the person's budget and a time to wait
+- **THEN** that session's pages are refused with 429 for that time without asking the daemon, and another session is served
 
 #### Scenario: One device behind an address
 - **WHEN** one device at an address has its cookies delayed because the daemon did not know them
 - **THEN** a session the daemon confirmed at that address is served
 
 ### Requirement: A remembered browser is not locked out by a stranger
-A successful `login` SHALL answer with a device value, signed by the daemon as the engine interface's device cookie is, that the portal sets as a cookie (`HttpOnly`, `Secure`, `SameSite=Strict`) and sends back with that browser's later logins. A login that presents a valid device value of the account SHALL be throttled on that device's own count and on the count shared by the account's devices, as at the engine's own login, and not on the username's count. The portal SHALL treat the value as opaque.
+A successful `login` SHALL answer with a device value, signed by the daemon as the engine interface's device cookie is, that the portal sets as a cookie (`HttpOnly`, `Secure`, `SameSite=Strict`), sealed with a key derived from the portal's token for the username of that login, and sends back with that browser's later logins. A login that presents a valid device value of the account SHALL be throttled on that device's own count and on the count shared by the account's devices, as at the engine's own login, and not on the username's count. The portal SHALL send the device value only with a login whose username is the one its seal was made for, and SHALL count such a login as a remembered browser's: it SHALL NOT be held to any of the portal's counts for its client address (its failed logins, its share of the logins' calls, the shared count of a full table) and SHALL spend the calls of remembered browsers instead. The portal SHALL treat the value as opaque.
 
 #### Scenario: The owner still gets in
-- **WHEN** `robin` logged in from a browser once, and a stranger then fails for `robin` until the username is delayed
+- **WHEN** `robin` logged in from a browser once, and a stranger then fails for `robin` until the username is delayed, and goes on from address after address until the portal's calls for logins are spent or its table of addresses is full
 - **THEN** the stranger is refused with a time to wait even with the right password, and `robin` logs in from the remembered browser at once
+
+#### Scenario: A device cookie the portal did not seal for the name
+- **WHEN** a login carries a device cookie that this portal did not seal, or sealed under another token, or sealed for another username
+- **THEN** the daemon is sent no device value, and the login is held to the counts of its address
 
 #### Scenario: An altered device value
 - **WHEN** the username is delayed and a login presents a device value that was changed, or that belongs to another account

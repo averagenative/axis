@@ -413,8 +413,9 @@ it, withdrawn ones included, so that one person cannot use up the day for
 everyone.
 
 Axis also limits how often a portal can call it: 600 calls a minute for a
-token and 120 for each person. Axis tells a portal that calls more often to
-wait.
+token and 240 for each person. A call that a person's limit refuses does not
+count against the token's, so one person cannot use up the portal for
+everyone. Axis tells a portal that calls more often to wait.
 
 Axis counts the logins that fail through the portal. After 30 failures in an
 hour, over all usernames, Axis admits one login a minute from a browser that
