@@ -441,7 +441,9 @@ decision_from(const gchar *name)
 	" (SELECT count(*) FROM request d WHERE d.title_id = r.title_id AND d.kind = r.kind" \
 	"  AND d.decision IN ('declined', 'replaced') AND d.id < r.id)," \
 	" coalesce(r.root_id, 0), coalesce(r.quality_profile_id, 0), coalesce(r.movie_id, 0), coalesce(r.series_id, 0)," \
-	" " AXIS_REQUESTS_US("r.added_at") ", r.add_error" \
+	" " AXIS_REQUESTS_US("r.added_at") ", r.add_error," \
+	" " AXIS_REQUESTS_US("(SELECT f.followed_at FROM request_follower f WHERE f.request_id = r.id" \
+	"  AND f.user_id = $1::bigint)") \
 	" FROM request r JOIN meta_title t ON t.id = r.title_id"
 
 static AxisRequestInfo *
@@ -485,6 +487,7 @@ info_from_row(
 	axis_db_result_get_int64(result, row, 22, &info->series_id);
 	axis_db_result_get_int64(result, row, 23, &info->added_us);
 	info->add_error = g_strdup(axis_db_result_get_text(result, row, 24));
+	axis_db_result_get_int64(result, row, 25, &info->followed_us);
 	return info;
 }
 

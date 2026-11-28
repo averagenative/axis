@@ -2737,7 +2737,12 @@ test_kind_off(Fixture *fx, gconstpointer data)
  * AXIS_PORTAL_PERSON_OPS_A_MINUTE operations a minute, whatever they ask, and
  * a token AXIS_PORTAL_TOKEN_OPS_A_MINUTE; beyond either the answer is 429 with
  * the time to wait, the operation is not done, and the others are not held to
- * it.  The clock is stopped, so that the counts are exact.
+ * it.  Found by the security review (F2): a call that the person's budget
+ * refused still spent the token's, so one person sending fast spent the
+ * token's for everyone.  Now it costs the token nothing: robin sends twice
+ * the token's budget beyond their own, and sam is still answered, as is
+ * every operation the token has left.  The clock is stopped, so that the
+ * counts are exact.
  */
 #define MINUTE_US (G_GINT64_CONSTANT(60) * G_USEC_PER_SEC)
 
@@ -2755,6 +2760,8 @@ test_operation_budgets(Fixture *fx, gconstpointer data)
 	/* What the token's budget gets back while robin's gets one. */
 	gint64 refilled = (MINUTE_US / AXIS_PORTAL_PERSON_OPS_A_MINUTE) / (MINUTE_US / AXIS_PORTAL_TOKEN_OPS_A_MINUTE);
 	AxisTestReply reply;
+	/* What the token's budget has spent: every operation but those the
+	 * person's budget refused. */
 	gint64 used = 0;
 	gint64 i;
 
@@ -2784,27 +2791,34 @@ test_operation_budgets(Fixture *fx, gconstpointer data)
 	assert_holds(reply.body, "\"wait\":");
 	g_assert_nonnull(axis_test_reply_header(&reply, "Retry-After"));
 	axis_test_reply_clear(&reply);
-	used++;
 	{
 		g_autofree gchar *list = expect(fx, "requests", robin_body, 429);
 
 		assert_holds(list, "person-limit");
-		used++;
+	}
+	/* robin goes on, far beyond their own budget: twice the token's in the
+	 * same moment, every one refused by robin's, none taken from the
+	 * token's. */
+	for (i = 0; i < 2 * AXIS_PORTAL_TOKEN_OPS_A_MINUTE; i++) {
+		g_autofree gchar *refused = expect(fx, i % 2 == 0 ? "whoami" : "requests", robin_body, 429);
+
+		assert_holds(refused, "\"error\":\"person-limit\"");
 	}
 	g_assert_cmpuint(axis_test_log_count(G_LOG_LEVEL_MESSAGE, "*robin used the budget of*"), ==, 1);
-	/* sam is not held to robin's, and robin's comes back a little at a
-	 * time: one each minute / the budget. */
+	g_assert_cmpuint(axis_test_log_count(G_LOG_LEVEL_MESSAGE, "*portal token used its budget*"), ==, 0);
+	/* sam is not held to robin's, nor is the token, and robin's comes back
+	 * a little at a time: one each minute / the budget. */
 	g_free(expect(fx, "whoami", sam_body, 200));
 	used++;
 	axis_portal_api_freeze_clock(fx->api, now + MINUTE_US / AXIS_PORTAL_PERSON_OPS_A_MINUTE);
 	g_free(expect(fx, "whoami", robin_body, 200));
 	g_free(expect(fx, "whoami", robin_body, 429));
-	used += 2;
+	used++;
 
 	/* A token's: what is left of its minute (and of what came back in the
 	 * moment above), then 429 for anything it asks, hello and login too;
 	 * another token is not held to it. */
-	g_assert_cmpint(refilled, ==, 5);
+	g_assert_cmpint(refilled, >=, 1);
 	for (i = used; i < AXIS_PORTAL_TOKEN_OPS_A_MINUTE + refilled; i++)
 		g_free(expect(fx, "hello", "{}", 200));
 	{
@@ -2830,6 +2844,86 @@ test_operation_budgets(Fixture *fx, gconstpointer data)
 	g_free(expect(fx, "hello", "{}", 200));
 	g_free(expect(fx, "whoami", robin_body, 200));
 	axis_portal_api_freeze_clock(fx->api, 0);
+}
+
+/*
+ * Found by the security review (F5): 120 operations a minute for a person
+ * refused the posters of the sixth home page in a minute whose posters the
+ * portal did not hold.  Such a page is hello, browse and 20 art (22
+ * operations), with whoami at most every 30 seconds: ten of them in one
+ * stopped minute, 222 operations, are all answered.
+ */
+static void
+test_home_page_budget(Fixture *fx, gconstpointer data)
+{
+	g_autofree gchar *robin = NULL;
+	g_autofree gchar *who = NULL;
+	g_autofree gchar *browse = NULL;
+	gint64 orchard = film(fx, AXIS_TEST_REQUESTS_ORCHARD);
+	gint64 now = axis_portal_api_now(fx->api);
+	guint page;
+	guint k;
+
+	axis_portal_api_freeze_clock(fx->api, now);
+	robin = login(fx, "robin", ROBIN_PASSWORD);
+	who = proof_body(robin);
+	browse = g_strdup_printf("{\"proof\":\"%s\",\"list\":\"popular\",\"kind\":\"movie\"}", robin);
+	for (page = 0; page < 10; page++) {
+		if (page % 5 == 0)
+			g_free(expect(fx, "whoami", who, 200));
+		g_free(expect(fx, "hello", "{}", 200));
+		g_free(expect(fx, "browse", browse, 200));
+		for (k = 0; k < 20; k++) {
+			g_autofree gchar *art = g_strdup_printf("{\"proof\":\"%s\",\"id\":%" G_GINT64_FORMAT "}", robin, orchard);
+			AxisTestReply reply = call(fx, "art", art);
+
+			/* (The fixture holds no picture for it: 404, an operation
+			 * all the same.) */
+			if (reply.status == 429)
+				g_error("poster %u of page %u was refused:\n%s", k, page, reply.body);
+			axis_test_reply_clear(&reply);
+		}
+	}
+	g_assert_cmpuint(axis_test_log_count(G_LOG_LEVEL_MESSAGE, "*used the budget of*"), ==, 0);
+	axis_portal_api_freeze_clock(fx->api, 0);
+}
+
+/*
+ * Found by the security review (F4): a follower was told when the person who
+ * made the request asked for it.  Following shows a request, and a follower
+ * is now told when they asked (began to follow); the person who made it is
+ * told when they did.
+ */
+static void
+test_follower_asked_at(Fixture *fx, gconstpointer data)
+{
+	g_autofree gchar *robin = login(fx, "robin", ROBIN_PASSWORD);
+	g_autofree gchar *sam = login(fx, "sam", SAM_PASSWORD);
+	g_autofree gchar *robin_list = proof_body(robin);
+	g_autofree gchar *sam_list = proof_body(sam);
+	g_autofree gchar *made = NULL;
+	g_autofree gchar *followed = NULL;
+	g_autofree gchar *of_sam = NULL;
+	g_autofree gchar *of_robin = NULL;
+	g_autofree gchar *made_at = g_strdup_printf("\"asked_at\":%" G_GINT64_FORMAT ",",
+		AXIS_TEST_REQUESTS_NOW_US / G_USEC_PER_SEC);
+	g_autofree gchar *followed_at = g_strdup_printf("\"asked_at\":%" G_GINT64_FORMAT ",",
+		(AXIS_TEST_REQUESTS_NOW_US + 2 * G_TIME_SPAN_HOUR) / G_USEC_PER_SEC);
+	gint64 orchard = film(fx, AXIS_TEST_REQUESTS_ORCHARD);
+
+	made = ask_movie(fx, sam, orchard, 200);
+	assert_holds(made, "\"outcome\":\"made\"");
+	axis_requests_set_clock(fx->r->requests, AXIS_TEST_REQUESTS_NOW_US + 2 * G_TIME_SPAN_HOUR);
+	followed = ask_movie(fx, robin, orchard, 200);
+	assert_holds(followed, "\"outcome\":\"followed\"");
+	of_robin = expect(fx, "requests", robin_list, 200);
+	assert_holds(of_robin, "\"mine\":\"followed\"");
+	assert_holds(of_robin, followed_at);
+	assert_lacks(of_robin, made_at);
+	of_sam = expect(fx, "requests", sam_list, 200);
+	assert_holds(of_sam, "\"mine\":\"made\"");
+	assert_holds(of_sam, made_at);
+	axis_requests_set_clock(fx->r->requests, AXIS_TEST_REQUESTS_NOW_US);
 }
 
 /* The engine's own password work, held until the test lets it go. */
@@ -3650,6 +3744,8 @@ main(int argc, char **argv)
 	AXIS_TEST_ADD_DB_CASE("/portal/api/limits/daily-ceiling", Fixture, NULL, test_request_limits);
 	AXIS_TEST_ADD_DB_CASE("/portal/api/limits/one-persons-share", Fixture, NULL, test_portal_share);
 	AXIS_TEST_ADD_DB_CASE("/portal/api/limits/operation-budgets", Fixture, NULL, test_operation_budgets);
+	AXIS_TEST_ADD_DB_CASE("/portal/api/limits/home-page", Fixture, NULL, test_home_page_budget);
+	AXIS_TEST_ADD_DB_CASE("/portal/api/fields/follower-asked-at", Fixture, NULL, test_follower_asked_at);
 	AXIS_TEST_ADD_DB_CASE("/portal/api/fields/mark-not-known", Fixture, NULL, test_mark_not_known);
 	AXIS_TEST_ADD_DB_CASE("/portal/api/fields/kind-off", Fixture, NULL, test_kind_off);
 	AXIS_TEST_ADD_DB_CASE("/portal/api/login/engine-queue-full", Fixture, NULL, test_engine_queue_full);

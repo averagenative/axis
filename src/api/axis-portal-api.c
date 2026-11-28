@@ -135,6 +135,21 @@ budget_take(
 	return 0;
 }
 
+/* Gives back the one operation that budget_take() took from @key in this
+ * same turn of the main loop: @key has then spent nothing on it.  (After the
+ * security review, F2: a call that a person's own budget refuses costs the
+ * token's budget nothing.) */
+static void
+budget_give_back(
+	Budget *budget,
+	gint64  key
+){
+	gint64 *whole = g_hash_table_lookup(budget->keys, &key);
+
+	if (whole != NULL)
+		*whole -= MINUTE_US / budget->limit;
+}
+
 static gint64
 wait_seconds(gint64 wait_us)
 {
@@ -385,7 +400,9 @@ portal_gate(
 		return;
 	}
 	/* The token's budget: every request that presents it, whatever it asks,
-	 * so that a portal in the wrong hands cannot keep the daemon busy. */
+	 * so that a portal in the wrong hands cannot keep the daemon busy; but a
+	 * call that the person's own budget then refuses gives its share back
+	 * (handle_operation()). */
 	wait = budget_take(&self->by_token, id, now);
 	if (wait > 0) {
 		/* Written down once a minute at most: a flood is not a flood of
@@ -678,7 +695,10 @@ fill_view(
 	if (info->state == AXIS_REQUEST_STATE_DECLINED)
 		view->reason = info->decline_reason;
 	view->mine = info->requested_by == viewer ? "made" : "followed";
-	view->asked_at = info->created_us / G_USEC_PER_SEC;
+	/* A follower is told when they asked (began to follow), not when the
+	 * person who made it did (after the security review, F4). */
+	view->asked_at = (info->requested_by != viewer && info->followed_us != 0 ? info->followed_us : info->created_us) /
+		G_USEC_PER_SEC;
 	view->changed_at = (info->decided_us != 0 ? info->decided_us : info->created_us) / G_USEC_PER_SEC;
 }
 
@@ -1728,7 +1748,13 @@ handle_operation(
 
 	/* The person, from the proof and from nothing else, before anything
 	 * else of the body is judged; and the person's budget, which every
-	 * operation of theirs takes from, whatever it asks. */
+	 * operation of theirs takes from, whatever it asks.  A call the person's
+	 * budget refuses gives back what the gate took from the token's (after
+	 * the security review, F2): one person beyond their budget, however
+	 * fast, cannot spend the token's for everyone, and the token's then
+	 * bounds what the people's budgets let through.  (Both are in memory, on
+	 * the main loop, in this one turn: the same as taking the person's
+	 * first.) */
 	if (axis_portal_op_needs_proof(op)) {
 		gint64 now = now_monotonic(self);
 		gint64 wait;
@@ -1737,6 +1763,7 @@ handle_operation(
 			return no_proof();
 		wait = budget_take(&self->by_person, user_id, now);
 		if (wait > 0) {
+			budget_give_back(&self->by_token, gate->token);
 			if (self->person_noted_us == 0 || now - self->person_noted_us >= MINUTE_US) {
 				self->person_noted_us = now;
 				g_message("portal API: %s used the budget of %d operations a minute; their requests are refused "

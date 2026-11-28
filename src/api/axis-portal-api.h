@@ -24,7 +24,9 @@
  *    without a valid one, the client's address is not throttled for wrong
  *    tokens (429) and the request is refused (401, a wrong token counted
  *    against the address), while a valid token is never held to its
- *    address's count; the token's budget of operations (429); nothing a
+ *    address's count; the token's budget of operations (429; a call that
+ *    the person's own budget then refuses gives its share back, so that one
+ *    person cannot spend it for everyone); nothing a
  *    browser sends (Origin, Sec-Fetch-Site, Sec-Fetch-Mode or Cookie: 403);
  *    POST (405); a JSON body (415) of at most AXIS_PORTAL_MAX_REQUEST_BYTES
  *    (413); an operation that exists (404).  Every refusal is JSON; none
@@ -88,7 +90,11 @@ G_BEGIN_DECLS
 #define AXIS_PORTAL_API_MAX_PENDING    32
 #define AXIS_PORTAL_API_THREADS        4
 #define AXIS_PORTAL_TOKEN_OPS_A_MINUTE  600
-#define AXIS_PORTAL_PERSON_OPS_A_MINUTE 120
+/* (After the security review, F5: 120 refused the posters of a sixth home
+ * page in a minute.  A home page whose 20 posters the portal does not hold
+ * is hello, browse and 20 art, 22 operations, and whoami is asked at most
+ * every 30 seconds: ten such pages in a minute are 222.) */
+#define AXIS_PORTAL_PERSON_OPS_A_MINUTE 240
 #define AXIS_PORTAL_BUDGET_MAX_KEYS    4096
 #define AXIS_PORTAL_SEARCHES_A_MINUTE  10
 #define AXIS_PORTAL_SEARCHES_IN_ALL    30
