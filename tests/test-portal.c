@@ -3391,6 +3391,16 @@ test_login_form_expires(Fixture *fx, gconstpointer data)
 	}
 }
 
+/* Drops a debug line (GIO's, of each of the 10,000 connections below). */
+static void
+quiet(
+	const gchar    *domain,
+	GLogLevelFlags  level,
+	const gchar    *message,
+	gpointer        user_data
+){
+}
+
 /* Found by the security review (F3, with F1): once the portal's table of
  * failed logins holds 10,000 addresses, every address it has no room for
  * counts on one shared count, which a stranger can keep in its delay; the
@@ -3408,6 +3418,7 @@ test_full_table(Fixture *fx, gconstpointer data)
 	gint64 offset = 0;
 	guint statuses[2] = { 0, 0 };
 	AxisTestReply reply;
+	guint quieted;
 	guint before;
 	guint i;
 
@@ -3416,6 +3427,7 @@ test_full_table(Fixture *fx, gconstpointer data)
 	axis_test_reply_clear(&reply);
 	device = robin_device(fx);
 	before = asked(fx, "login");
+	quieted = g_log_set_handler("GLib-GIO", G_LOG_LEVEL_DEBUG, quiet, NULL);
 	for (i = 0; i < AXIS_PORTAL_THROTTLE_MAX_KEYS; i++) {
 		g_autofree gchar *from = g_strdup_printf("2001:db8:%x:%x::1", (i >> 16) & 0xffff, i & 0xffff);
 		g_autofree gchar *form = NULL;
@@ -3439,6 +3451,7 @@ test_full_table(Fixture *fx, gconstpointer data)
 		assert_status(&reply, 401);
 		axis_test_reply_clear(&reply);
 	}
+	g_log_remove_handler("GLib-GIO", quieted);
 	g_assert_cmpuint(asked(fx, "login") - before, ==, AXIS_PORTAL_THROTTLE_MAX_KEYS);
 	/* From /64s the table has no room for: one shared count, which the
 	 * stranger's failures put in its delay. */
@@ -3460,6 +3473,18 @@ test_full_table(Fixture *fx, gconstpointer data)
 	assert_has(reply.body, "There were too many failed logins.");
 	axis_test_reply_clear(&reply);
 	g_assert_cmpuint(asked(fx, "login"), ==, before);
+	/* So is a browser whose device cookie this portal sealed for another
+	 * name: it is not robin's remembered browser. */
+	{
+		g_autofree gchar *for_sam = axis_portal_device_cookie(fx->token, "sam", "zzdev1.robin-device-value");
+		g_autofree gchar *sams = g_strdup_printf("%s=%s", AXIS_PORTAL_DEVICE_COOKIE, for_sam);
+
+		reply = login_with_device(fx, "robin", ROBIN_PASSWORD, "198.51.100.78", sams, NULL);
+		assert_status(&reply, 429);
+		assert_has(reply.body, "There were too many failed logins.");
+		axis_test_reply_clear(&reply);
+		g_assert_cmpuint(asked(fx, "login"), ==, before);
+	}
 	/* robin's remembered browser, from another address never seen: asked
 	 * about, with the device value, and served. */
 	reply = login_with_device(fx, "robin", ROBIN_PASSWORD, "2001:db8:aaaa:1::5", device, NULL);
